@@ -749,9 +749,12 @@ async def get_shared_audit(token: str):
         return shared_audits[token]
     return JSONResponse(status_code=404, content={"detail": "Report link expired or not found"})
 
-@app.get("/api/latest")
-async def get_latest_live_data():
-    return latest_live_result
+@app.post("/api/v1/ai-enhance")
+async def ai_enhance(request: dict):
+    import anthropic
+    client = anthropic.Anthropic()
+    msg = client.messages.create(**request)
+    return {"content": [{"text": msg.content[0].text}]}
 
 # ==========================================
 # 8. Serve Frontend  (UNCHANGED CORE)
