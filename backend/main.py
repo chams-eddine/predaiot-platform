@@ -3,18 +3,24 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 import pulp
-from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime
+from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 
 # ==========================================
-# 1. إعداد قاعدة البيانات (متوافق مع السحابة)
+# 1. إعداد قاعدة البيانات (سحابية Aiven أو محلية للتجربة)
 # ==========================================
-basedir = os.path.abspath(os.path.dirname(__file__))
-SQLALCHEMY_DATABASE_URL = "sqlite:///" + os.path.join(basedir, "predaiot_audit.db")
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+# في السحابة (Render)، سيقرأ الرابط من متغيرات البيئة. محلياً يستخدم SQLite.
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./predaiot_audit.db")
+
+if "sqlite" in DATABASE_URL:
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+else:
+    # إعدادات خاصة لـ PostgreSQL/TimescaleDB في السحابة
+    engine = create_engine(DATABASE_URL)
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -22,12 +28,13 @@ class DecisionAuditLog(Base):
     __tablename__ = "audit_logs"
     id = Column(Integer, primary_key=True, index=True)
     asset_id = Column(String, index=True)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=datetime.utcnow) # حاسم للتاريخ
     market_price = Column(Float)
     optimal_action = Column(Float)
     actual_action = Column(Float)
     economic_gap = Column(Float)
 
+# إنشاء الجداول
 Base.metadata.create_all(bind=engine)
 
 # ==========================================
@@ -51,13 +58,15 @@ class AuditRequest(BaseModel):
     time_series: List[TimeStepData]
 
 class DecisionRecord(BaseModel):
-    hour: int
-    price: float
-    optimal_action: float
-    actual_action: float
-    edv_optimal_step: float
-    edv_actual_step: float
-    gap_step: float
+    hour: Optional[str] = None
+    day: Optional[str] = None # مخصص لبيانات التاريخ
+    price: Optional[float] = None
+    optimal_action: Optional[float] = None
+    actual_action: Optional[float] = None
+    edv_optimal_step: Optional[float] = None
+    edv_actual_step: Optional[float] = None
+    gap_step: Optional[float] = None
+    daily_gap: Optional[float] = None # إجمالي الفجوة اليومية
 
 class AuditResponse(BaseModel):
     edv_optimal_total: float
@@ -66,8 +75,11 @@ class AuditResponse(BaseModel):
     total_gap_usd: float
     decision_log: List[DecisionRecord]
 
+class HistoricalResponse(BaseModel):
+    history_log: List[DecisionRecord]
+
 # ==========================================
-# 3. إعداد FastAPI وفتح باب التواصل (CORS)
+# 3. إعداد FastAPI
 # ==========================================
 app = FastAPI(title="PREDAIOT Engine")
 
@@ -79,7 +91,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ذاكرة لتخزين آخر نتيجة حية لعرضها على الشاشة
+# ذاكرة مؤقتة للبيانات الحية
 latest_live_result = {
     "edv_optimal_total": 0, 
     "edv_actual_total": 0, 
@@ -120,7 +132,7 @@ def run_optimizer(asset: AssetSpecs, prices: List[float]) -> dict:
     return {t: p_dis[t].varValue for t in hours}
 
 # ==========================================
-# 5. نقطة النهاية الأساسية (التدقيق اليدوي/المجدول)
+# 5. نقطة نهاية التدقيق (تخزين كل نقطة بيانات في التاريخ)
 # ==========================================
 @app.post("/api/v1/audit", response_model=AuditResponse)
 async def calculate_gap(request: AuditRequest):
@@ -133,7 +145,6 @@ async def calculate_gap(request: AuditRequest):
     total_edv_opt = 0
     total_edv_act = 0
     decision_log = []
-    
     db = SessionLocal()
     
     for i, ts in enumerate(request.time_series):
@@ -147,8 +158,10 @@ async def calculate_gap(request: AuditRequest):
         total_edv_opt += edv_opt_step
         total_edv_act += edv_act_step
         
+        # حفظ كل نقطة في قاعدة البيانات بختم زمني حقيقي لتشكيل التاريخ
         log_entry = DecisionAuditLog(
             asset_id="BESS_01",
+            timestamp=datetime.utcnow(), 
             market_price=ts.price,
             optimal_action=opt_dis,
             actual_action=act_dis,
@@ -167,7 +180,7 @@ async def calculate_gap(request: AuditRequest):
     
     dq_score = (total_edv_act / total_edv_opt) if total_edv_opt > 0 else 0
     
-    # تحديث الذاكرة المؤقتة بالبيانات الجديدة
+    # تحديث الذاكرة المؤقتة
     latest_live_result = AuditResponse(
         edv_optimal_total=round(total_edv_opt,2), 
         edv_actual_total=round(total_edv_act,2),
@@ -179,14 +192,50 @@ async def calculate_gap(request: AuditRequest):
     return latest_live_result
 
 # ==========================================
-# 6. نقطة نهاية البيانات الحية (لجسر الـ SCADA)
+# 6. نقطة نهاية التاريخ (جلب 30 يوم من قاعدة البيانات السحابية)
+# ==========================================
+@app.get("/api/historical", response_model=HistoricalResponse)
+async def get_historical_data():
+    db = SessionLocal()
+    try:
+        # إذا كنا نعمل محلياً بـ SQLite، لا نرجع بيانات تاريخية لتجنب الأخطاء
+        if "sqlite" in DATABASE_URL:
+            return HistoricalResponse(history_log=[])
+            
+        # استعلام PostgreSQL القياسي (يعمل بسرعة فائقة بدون إضافات)
+        query = text("""
+            SELECT 
+                DATE(timestamp) AS day, 
+                SUM(economic_gap) as daily_gap
+            FROM audit_logs 
+            WHERE timestamp > NOW() - INTERVAL '30 days'
+            GROUP BY DATE(timestamp) 
+            ORDER BY day DESC
+        """)
+        
+        result = db.execute(query)
+        
+        history_log = []
+        for row in result:
+            if row.daily_gap:
+                history_log.append(DecisionRecord(
+                    day=row.day.strftime("%Y-%m-%d"),
+                    daily_gap=round(row.daily_gap, 2)
+                ))
+                
+        return HistoricalResponse(history_log=history_log)
+    finally:
+        db.close()
+
+# ==========================================
+# 7. نقطة نهاية البيانات الحية (لجسر الـ SCADA)
 # ==========================================
 @app.get("/api/latest")
 async def get_latest_live_data():
     return latest_live_result
 
 # ==========================================
-# 7. دمج الواجهة الأمامية (آمن ضد الأخطاء)
+# 8. دمج الواجهة الأمامية
 # ==========================================
 try:
     frontend_path = os.path.abspath("../frontend/dist")
