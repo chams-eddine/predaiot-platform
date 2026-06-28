@@ -1,6 +1,7 @@
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List
 import pulp
@@ -30,7 +31,7 @@ class DecisionAuditLog(Base):
 Base.metadata.create_all(bind=engine)
 
 # ==========================================
-# 2. هياكل البيانات
+# 2. هياكل البيانات (Models)
 # ==========================================
 class AssetSpecs(BaseModel):
     p_max: float = 50.0
@@ -66,7 +67,7 @@ class AuditResponse(BaseModel):
     decision_log: List[DecisionRecord]
 
 # ==========================================
-# 3. إعداد FastAPI
+# 3. إعداد FastAPI وفتح باب التواصل (CORS)
 # ==========================================
 app = FastAPI(title="PREDAIOT Engine")
 
@@ -78,8 +79,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ذاكرة لتخزين آخر نتيجة حية لعرضها على الشاشة
+latest_live_result = {
+    "edv_optimal_total": 0, 
+    "edv_actual_total": 0, 
+    "dq_score": 0, 
+    "total_gap_usd": 0, 
+    "decision_log": []
+}
+
 # ==========================================
-# 4. محرك التحسين
+# 4. محرك التحسين (MILP)
 # ==========================================
 def run_optimizer(asset: AssetSpecs, prices: List[float]) -> dict:
     hours = range(len(prices))
@@ -101,6 +111,7 @@ def run_optimizer(asset: AssetSpecs, prices: List[float]) -> dict:
         else:
             prob += soc[t] == soc[t-1] + (p_ch[t] * asset.eta_ch - p_dis[t] / asset.eta_dis) / asset.e_max
         
+        # قيد إلزامي: يجب أن تعود البطارية لنفس حالة الشحن في نهاية الـ 24 ساعة
         if t == max(hours):
             prob += soc[t] == asset.soc_init
 
@@ -109,10 +120,12 @@ def run_optimizer(asset: AssetSpecs, prices: List[float]) -> dict:
     return {t: p_dis[t].varValue for t in hours}
 
 # ==========================================
-# 5. نقطة النهاية
+# 5. نقطة النهاية الأساسية (التدقيق اليدوي/المجدول)
 # ==========================================
 @app.post("/api/v1/audit", response_model=AuditResponse)
 async def calculate_gap(request: AuditRequest):
+    global latest_live_result
+    
     asset = request.asset
     prices = [ts.price for ts in request.time_series]
     optimal_actions = run_optimizer(asset, prices)
@@ -153,19 +166,31 @@ async def calculate_gap(request: AuditRequest):
     db.close()
     
     dq_score = (total_edv_act / total_edv_opt) if total_edv_opt > 0 else 0
-    return AuditResponse(
-        edv_optimal_total=round(total_edv_opt,2), edv_actual_total=round(total_edv_act,2),
-        dq_score=round(dq_score,4), total_gap_usd=round(total_edv_opt - total_edv_act, 2),
+    
+    # تحديث الذاكرة المؤقتة بالبيانات الجديدة
+    latest_live_result = AuditResponse(
+        edv_optimal_total=round(total_edv_opt,2), 
+        edv_actual_total=round(total_edv_act,2),
+        dq_score=round(dq_score,4), 
+        total_gap_usd=round(total_edv_opt - total_edv_act, 2),
         decision_log=decision_log
     )
+    
+    return latest_live_result
 
 # ==========================================
-# 6. دمج الواجهة الأمامية (آمن ضد الأخطاء)
+# 6. نقطة نهاية البيانات الحية (لجسر الـ SCADA)
+# ==========================================
+@app.get("/api/latest")
+async def get_latest_live_data():
+    return latest_live_result
+
+# ==========================================
+# 7. دمج الواجهة الأمامية (آمن ضد الأخطاء)
 # ==========================================
 try:
     frontend_path = os.path.abspath("../frontend/dist")
     if os.path.exists(frontend_path):
-        from fastapi.staticfiles import StaticFiles
         app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
 except Exception:
     pass
