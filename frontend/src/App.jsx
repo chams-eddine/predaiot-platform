@@ -170,7 +170,7 @@ function App() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '15px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
           <img
-          src="/logo.jpeg"
+            src="/logo.jpeg"
             alt="PREDAIOT Logo"
             style={{ height: '45px', objectFit: 'contain' }}
           />
