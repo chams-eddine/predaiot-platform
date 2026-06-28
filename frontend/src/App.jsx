@@ -1,10 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import './App.css';
 
 function App() {
-  // الحالة الابتدائية للبيانات (أصفار)
   const [data, setData] = useState({
     edv_optimal_total: 0, 
     edv_actual_total: 0, 
@@ -14,166 +13,177 @@ function App() {
   });
   const [loading, setLoading] = useState(false);
 
-  // دالة الاتصال بالخادم وتوليد محاكاة 24 ساعة حقيقية
+  // جلب البيانات الحية تلقائياً من جسر الـ SCADA
+  useEffect(() => {
+    const fetchLiveSCADA = async () => {
+      try {
+        const response = await axios.get('/api/latest');
+        if (response.data && response.data.dq_score > 0) {
+          setData(response.data);
+        }
+      } catch (error) {
+        // تجاهل الأخطاء في الخلفية لمنع توقف التطبيق
+      }
+    };
+    
+    fetchLiveSCADA();
+    const interval = setInterval(fetchLiveSCADA, 60000); // تحديث كل 60 ثانية
+    return () => clearInterval(interval);
+  }, []);
+
   const fetchAuditData = async () => {
     setLoading(true);
     try {
-      // 1. توليد بيانات 24 ساعة (288 نقطة، كل نقطة تمثل 5 دقائق)
       const time_series = [];
-      let actual_soc = 0.2; // تتبع حالة شحن المشغل الفعلية لضمان الواقعية
+      let actual_soc = 0.2; 
       const e_max = 100;
       
       for (let i = 0; i < 288; i++) {
-        // معادلة توليد سعر واقعي (يقلب ليلاً ويرتفع مساءً)
         const basePrice = 30 + 70 * Math.sin((i - 36) * (Math.PI / 180));
-        const noise = (Math.random() - 0.5) * 10; // ضوضى سوقية عشوائية
+        const noise = (Math.random() - 0.5) * 10;
         const price = Math.max(0, parseFloat((basePrice + noise).toFixed(2)));
-
-        let actual_discharge = 0;
-        let actual_charge = 0;
-
-        // قرارات "مشغل بشري" يرتكب خطأ توقيت كلاسيكي:
-        // 1. يشحن في الصباح الباكر عندما يكون السعر منخفضاً
+        
+        let actual_discharge = 0; 
+        
+        // محاكاة فيزيائية واقعية دون متغيرات غير مستخدمة
         if (price < 20 && actual_soc < 0.9) {
-            actual_charge = 40;
+          actual_soc += (40 * 0.95 / e_max); // شحن
         }
-        // 2. الخطأ القاتل: يبدأ بالتفريغ عندما يكون السعر "مقبولاً" (40-60$) بدلاً من انتظار الذروة
+        
         if (price > 40 && price < 80 && actual_soc > 0.2) {
-            actual_discharge = 40;
+          const max_possible_discharge = (actual_soc - 0.2) * e_max;
+          actual_discharge = Math.min(40, max_possible_discharge); // تفريغ خاطئ
+          actual_soc -= (actual_discharge / 0.95 / e_max);
         }
         
-        // حساب الحد الأقصى المسموح به فيزيائياً لعدم سرقة طاقة من المستقبل
-        let max_possible_discharge = (actual_soc - 0.2) * e_max;
-        if (actual_discharge > max_possible_discharge) {
-            actual_discharge = max_possible_discharge;
-        }
-
-        // تحديث حالة الشحن الفعلية للمشغل للحظة التالية
-        actual_soc = actual_soc + (actual_charge * 0.95 / e_max) - (actual_discharge / 0.95 / e_max);
-        
-        // نرسل التفريغ فقط لأن محرك PREDAIOT يعوض التكاليف بناءً عليه
         time_series.push({ hour: i, price: price, actual_discharge: actual_discharge });
       }
-
-      const payload = {
-        asset: { p_max: 50, e_max: 100, soc_init: 0.2, eta_ch: 0.95, eta_dis: 0.95, deg_cost: 5.0 },
-        time_series: time_series
+      
+      const payload = { 
+        asset: { p_max: 50, e_max: 100, soc_init: 0.2, eta_ch: 0.95, eta_dis: 0.95, deg_cost: 5.0 }, 
+        time_series 
       };
       
-      // 2. إرسال البيانات إلى خادم PREDAIOT
       const response = await axios.post('/api/v1/audit', payload);
       setData(response.data);
     } catch (error) {
-      alert("خطأ في الاتصال بالخادم، تأكد أن خادم البايثون يعمل في الخلفية");
+      console.error("Audit failed:", error);
     }
     setLoading(false);
   };
 
-  // دالة تحديد لون معامل الجودة بناءً على الأداء
-  const getDQColor = (score) => {
-    if (score >= 0.8) return '#00ff00'; // أخضر (ممتاز)
-    if (score >= 0.6) return '#ffaa00'; // برتقالي (ضعيف)
-    return '#ff3333'; // أحمر (كارثي)
+  // استخراج أسوأ 3 قرارات بشكل آمن (تجنب انهيار التطبيق إذا كان المصفوفة فارغة)
+  const logData = Array.isArray(data.decision_log) ? data.decision_log : [];
+  const worstDecisions = [...logData]
+    .sort((a, b) => (b.gap_step || 0) - (a.gap_step || 0))
+    .slice(0, 3);
+
+  const formatTime = (hourIndex) => {
+    const hours = Math.floor(hourIndex / 12);
+    const mins = (hourIndex % 12) * 5;
+    return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
+  };
+
+  const styles = {
+    container: { padding: '20px', backgroundColor: '#050505', color: '#fff', minHeight: '100vh', fontFamily: "'Inter', 'Segoe UI', sans-serif" },
+    card: { backgroundColor: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '16px', padding: '24px' },
+    neonText: { textShadow: '0 0 10px rgba(0, 229, 255, 0.7)' },
+    redGlow: { textShadow: '0 0 15px rgba(255, 0, 85, 0.8)' }
   };
 
   return (
-    <div style={{ padding: '20px', backgroundColor: '#0a0a0a', color: 'white', minHeight: '100vh', fontFamily: 'Arial' }}>
-      
-      <h1 style={{ borderBottom: '2px solid #333', paddingBottom: '10px' }}>
-        PREDAIOT: Economic War Room (24-Hour Simulation)
-      </h1>
-
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '30px' }}>
-        
-        {/* بطاقة معامل جودة القرار DQ */}
-        <div style={{ backgroundColor: '#1a1a1a', padding: '20px', borderRadius: '10px', width: '30%' }}>
-          <h3 style={{ color: '#888', margin: 0 }}>Decision Quality (DQ)</h3>
-          <div style={{ fontSize: '48px', fontWeight: 'bold', color: getDQColor(data.dq_score) }}>
-            {(data.dq_score * 100).toFixed(1)}%
-          </div>
+    <div style={styles.container}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '15px' }}>
+        <h1 style={{ margin: 0, fontSize: '24px', fontWeight: '300', letterSpacing: '2px' }}>
+          PREDAIOT <span style={{ color: '#00E5FF', ...styles.neonText }}>INTELLIGENCE</span>
+        </h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ width: '10px', height: '10px', backgroundColor: '#00FF00', borderRadius: '50%', boxShadow: '0 0 8px #00FF00' }}></div>
+          <span style={{ color: '#888', fontSize: '14px' }}>LIVE ASSET MONITORING</span>
         </div>
-
-        {/* بطاقة الفجوة الاقتصادية (عداد التسريب) */}
-        <div style={{ backgroundColor: '#1a1a1a', padding: '20px', borderRadius: '10px', width: '30%', border: '1px solid #ff3333' }}>
-          <h3 style={{ color: '#ff3333', margin: 0 }}>Economic Gap (Lost $)</h3>
-          <div style={{ fontSize: '48px', fontWeight: 'bold', color: '#ff3333' }}>
-            -${data.total_gap_usd.toLocaleString()}
-          </div>
-        </div>
-
-        {/* بطاقة القيمة المثلى */}
-        <div style={{ backgroundColor: '#1a1a1a', padding: '20px', borderRadius: '10px', width: '30%' }}>
-          <h3 style={{ color: '#ffd700', margin: 0 }}>Optimal Potential</h3>
-          <div style={{ fontSize: '48px', fontWeight: 'bold', color: '#ffd700' }}>
-            ${data.edv_optimal_total.toLocaleString()}
-          </div>
-        </div>
-
       </div>
 
-      {/* زر إعادة الحساب */}
+      {/* الكروت الرئيسية */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '20px', marginBottom: '30px' }}>
+        <div style={styles.card}>
+          <div style={{ color: '#888', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '1px' }}>Optimal Potential</div>
+          <div style={{ fontSize: '32px', fontWeight: '700', color: '#FFD700', marginTop: '10px' }}>${data.edv_optimal_total.toLocaleString()}</div>
+        </div>
+        <div style={styles.card}>
+          <div style={{ color: '#888', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '1px' }}>Actual Captured</div>
+          <div style={{ fontSize: '32px', fontWeight: '700', color: '#00E5FF', marginTop: '10px' }}>${data.edv_actual_total.toLocaleString()}</div>
+        </div>
+        <div style={{ ...styles.card, borderColor: 'rgba(255, 0, 85, 0.3)' }}>
+          <div style={{ color: '#FF0055', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '1px' }}>Value Destroyed (Gap)</div>
+          <div style={{ fontSize: '32px', fontWeight: '700', color: '#FF0055', marginTop: '10px', ...styles.redGlow }}>-${data.total_gap_usd.toLocaleString()}</div>
+        </div>
+        <div style={styles.card}>
+          <div style={{ color: '#888', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '1px' }}>Decision Quality (DQ)</div>
+          <div style={{ fontSize: '42px', fontWeight: '800', color: data.dq_score >= 0.8 ? '#00FF00' : data.dq_score >= 0.6 ? '#FFAA00' : '#FF0055', marginTop: '10px' }}>
+            {(data.dq_score * 100).toFixed(1)}<span style={{ fontSize: '20px' }}>%</span>
+          </div>
+        </div>
+      </div>
+
       <button 
         onClick={fetchAuditData} 
         disabled={loading}
-        style={{ padding: '10px 20px', backgroundColor: '#0056b3', color: 'white', border: 'none', borderRadius: '5px', cursor: loading ? 'not-allowed' : 'pointer', marginBottom: '20px', fontSize: '16px' }}
+        style={{ padding: '12px 24px', backgroundColor: 'transparent', color: '#00E5FF', border: '1px solid #00E5FF', borderRadius: '8px', cursor: loading ? 'not-allowed' : 'pointer', marginBottom: '30px', fontSize: '14px', letterSpacing: '1px', fontWeight: '600' }}
       >
-        {loading ? 'Calculating 24-Hour MILP (288 Nodes)...' : 'Run PREDAIOT 24-Hour Engine'}
+        {loading ? 'OPTIMIZING 288 NODES...' : 'RUN 24-HR FORENSIC AUDIT'}
       </button>
 
-      {/* التوأم الرقمي الاقتصادي (المنحنى الذهبي مقابل الأزرق) */}
-      <div style={{ backgroundColor: '#1a1a1a', padding: '20px', borderRadius: '10px' }}>
-        <h3 style={{ marginBottom: '20px' }}>Economic Digital Twin (Actual vs Optimal over 24 Hours)</h3>
-        <ResponsiveContainer width="100%" height={400}>
-          <AreaChart data={data.decision_log} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
-            <defs>
-              {/* تدرج لوني ذهبي للقرار الأمثل */}
-              <linearGradient id="colorOpt" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#ffd700" stopOpacity={0.3}/>
-                <stop offset="95%" stopColor="#ffd700" stopOpacity={0}/>
-              </linearGradient>
-              {/* تدرج لوني أزرق للقرار الفعلي */}
-              <linearGradient id="colorAct" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#007bff" stopOpacity={0.3}/>
-                <stop offset="95%" stopColor="#007bff" stopOpacity={0}/>
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-            <XAxis 
-              dataKey="hour" 
-              stroke="#888" 
-              tickFormatter={(hourIndex) => {
-                // تحويل المؤشر (0-288) إلى ساعات زمنية حقيقية لتبدو احترافية
-                const hours = Math.floor(hourIndex / 12);
-                const mins = (hourIndex % 12) * 5;
-                return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
-              }}
-            />
-            <YAxis stroke="#888" label={{ value: 'Value ($)', angle: -90, position: 'insideLeft' }} />
-            <Tooltip 
-              contentStyle={{ backgroundColor: '#222', border: '1px solid #555' }}
-              labelFormatter={(hourIndex) => {
-                const hours = Math.floor(hourIndex / 12);
-                const mins = (hourIndex % 12) * 5;
-                return `Time: ${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
-              }}
-              formatter={(value, name) => [`$${value}`, name === 'edv_optimal_step' ? 'Optimal Value (d*)' : 'Actual Value (d_actual)']}
-            />
-            
-            {/* المنحنى الذهبي (الغائب/المفقود) */}
-            <Area type="monotone" dataKey="edv_optimal_step" stroke="#ffd700" fillOpacity={1} fill="url(#colorOpt)" strokeWidth={2} dot={false} />
-            
-            {/* المنحنى الأزرق (الواقع/المحقق) */}
-            <Area type="monotone" dataKey="edv_actual_step" stroke="#007bff" fillOpacity={1} fill="url(#colorAct)" strokeWidth={2} dot={false} />
-            
-          </AreaChart>
-        </ResponsiveContainer>
-        <div style={{ marginTop: '10px', fontSize: '12px', color: '#888' }}>
-          * The shaded gap between the Gold (Optimal) and Blue (Actual) areas represents permanently lost revenue due to sub-optimal decisions.
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '20px' }}>
+        
+        {/* الرسم البياني المتقدم (كتلة الفجوة الحمراء) */}
+        <div style={styles.card}>
+          <h3 style={{ margin: '0 0 20px 0', fontWeight: '400', fontSize: '16px', color: '#CCC' }}>ECONOMIC VALUE FUNNEL (24-HR)</h3>
+          <ResponsiveContainer width="100%" height={350}>
+            <ComposedChart data={logData} margin={{ top: 10, right: 0, left: 0, bottom: 0 }}>
+              <defs>
+                <linearGradient id="gapFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#FF0055" stopOpacity={0.4}/>
+                  <stop offset="100%" stopColor="#FF0055" stopOpacity={0.05}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#222" />
+              <XAxis dataKey="hour" stroke="#555" tickFormatter={formatTime} interval={23} />
+              <YAxis stroke="#555" tickFormatter={(v) => `$${v}`} />
+              <Tooltip 
+                contentStyle={{ backgroundColor: '#111', border: '1px solid #333', borderRadius: '8px' }} 
+                labelFormatter={formatTime}
+                formatter={(value, name) => {
+                  const colors = { 'Optimal Path': '#FFD700', 'Actual Path': '#00E5FF', 'Economic Gap': '#FF0055' };
+                  return [`$${value}`, <span key={name} style={{ color: colors[name] }}>{name}</span>];
+                }} 
+              />
+              <Bar dataKey="gap_step" fill="url(#gapFill)" name="Economic Gap" barSize={4} />
+              <Line type="monotone" dataKey="edv_optimal_step" stroke="#FFD700" dot={false} strokeWidth={2} name="Optimal Path" />
+              <Line type="monotone" dataKey="edv_actual_step" stroke="#00E5FF" dot={false} strokeWidth={2} name="Actual Path" />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* مصفوفة الفضيحة */}
+        <div style={styles.card}>
+          <h3 style={{ margin: '0 0 20px 0', fontWeight: '400', fontSize: '16px', color: '#CCC' }}>TOP 3 DECISION FAILURES</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+            {worstDecisions.length > 0 && worstDecisions[0].gap_step > 0 ? worstDecisions.map((dec, index) => (
+              <div key={`failure-${index}`} style={{ backgroundColor: 'rgba(255, 0, 85, 0.05)', border: '1px solid rgba(255, 0, 85, 0.2)', borderRadius: '8px', padding: '15px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <span style={{ color: '#888', fontSize: '13px' }}>TIME: {formatTime(dec.hour)}</span>
+                  <span style={{ color: '#FF0055', fontWeight: 'bold' }}>-${dec.gap_step.toLocaleString()}</span>
+                </div>
+                <div style={{ fontSize: '12px', color: '#AAA', lineHeight: '1.5' }}>
+                  <span style={{ color: '#FFD700' }}>Should have:</span> Discharge {dec.optimal_action} MW @ ${dec.price}<br/>
+                  <span style={{ color: '#00E5FF' }}>Actually did:</span> Discharge {dec.actual_action} MW @ ${dec.price}
+                </div>
+              </div>
+            )) : <div style={{ color: '#444', fontStyle: 'italic' }}>Waiting for data...</div>}
+          </div>
         </div>
       </div>
-
     </div>
   );
 }
-
 export default App;
