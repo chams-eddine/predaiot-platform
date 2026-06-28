@@ -2,7 +2,7 @@ fastapi
 uvicorn
 pulp
 sqlalchemy
-psycopg2
+pg8000
 python-multipart
 pandas
 openpyxl
