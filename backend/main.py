@@ -58,15 +58,15 @@ class AuditRequest(BaseModel):
     time_series: List[TimeStepData]
 
 class DecisionRecord(BaseModel):
-    hour: Optional[str] = None
-    day: Optional[str] = None # مخصص لبيانات التاريخ
+    hour: Optional[int] = None       # للرسوم البيانية اللحظية (أرقام)
+    day: Optional[str] = None        # للرسوم التاريخية (نصوص)
     price: Optional[float] = None
     optimal_action: Optional[float] = None
     actual_action: Optional[float] = None
     edv_optimal_step: Optional[float] = None
     edv_actual_step: Optional[float] = None
     gap_step: Optional[float] = None
-    daily_gap: Optional[float] = None # إجمالي الفجوة اليومية
+    daily_gap: Optional[float] = None 
 
 class AuditResponse(BaseModel):
     edv_optimal_total: float
