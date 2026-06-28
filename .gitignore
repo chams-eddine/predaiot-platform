@@ -1,0 +1,9 @@
+# تجاهل ملفات بايثون الثقيلة
+backend/venv/
+backend/__pycache__/
+*.pyc
+*.db
+
+# تجاهل ملفات 노ود الثقيلة
+frontend/node_modules/
+frontend/dist/
