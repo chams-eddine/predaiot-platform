@@ -170,7 +170,7 @@ function App() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '15px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
           <img
-            src="https://z-cdn-media.chatglm.cn/files/e91cc7ec-3d96-4f6b-af32-5e6c17fcdc08.jpeg?auth_key=1882677563-0c4833d5cc91462eb530131d86b2611c-0-c1a1de09ef06dd4038b06d64e3e0af56"
+          src="/logo.jpeg"
             alt="PREDAIOT Logo"
             style={{ height: '45px', objectFit: 'contain' }}
           />
