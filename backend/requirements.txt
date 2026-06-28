@@ -2,3 +2,7 @@ fastapi
 uvicorn
 pulp
 sqlalchemy
+psycopg2
+python-multipart
+pandas
+openpyxl
