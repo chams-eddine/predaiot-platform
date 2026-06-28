@@ -514,61 +514,178 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
 async def calculate_gap(request: AuditRequest):
     return process_calculation(request.asset, [ts.dict() for ts in request.time_series])
 
+# ==========================================
+# COLUMN ALIAS MAP — fuzzy resolver
+# Maps any real-world column name variant → internal name
+# ==========================================
+COLUMN_ALIASES = {
+    # price — the market/spot price column
+    "price": [
+        "price", "spot_price", "market_price", "energy_price", "lmp",
+        "price_usd", "price_$/mwh", "price_($/mwh)", "price_mwh",
+        "clearing_price", "settlement_price", "pool_price", "da_price",
+        "rt_price", "wholesale_price", "electricity_price", "tariff",
+        "rate", "cost_per_mwh", "mwh_price", "$/mwh", "usd/mwh",
+        "omr/mwh", "omr_mwh", "price_omr",
+    ],
+    # actual_discharge — actual generation / discharge / output
+    "actual_discharge": [
+        "actual_discharge", "discharge", "actual_power", "power_output",
+        "generation", "actual_generation", "gen_mw", "output_mw",
+        "dispatch_mw", "actual_dispatch", "p_actual", "p_out",
+        "power_mw", "energy_out", "production", "actual_production",
+        "mw_out", "discharge_mw", "bess_discharge", "solar_output",
+        "wind_output", "p_gen", "pgen", "p_dis", "pdis",
+        "net_generation", "real_power", "active_power",
+        "gross_generation", "net_output",
+    ],
+    # hour — timestep / interval index
+    "hour": [
+        "hour", "interval", "timestep", "time_step", "step",
+        "period", "slot", "index", "idx", "t", "timestamp",
+        "datetime", "time", "date_time", "hour_index",
+    ],
+    # optional enrichment columns
+    "actual_charge": [
+        "actual_charge", "charge", "charge_mw", "p_charge", "pcharge",
+        "charging_power", "bess_charge", "charge_power", "p_ch",
+    ],
+    "soc": [
+        "soc", "state_of_charge", "battery_soc", "soc_pct",
+        "soc_%", "energy_level", "stored_energy_pct",
+    ],
+    "curtailment_mw": [
+        "curtailment_mw", "curtailment", "curtailed_mw", "curtailed",
+        "clipped_mw", "clipping", "spilled_mw", "spillage",
+    ],
+    "operator_override": [
+        "operator_override", "override", "manual_override",
+        "human_override", "manual_dispatch",
+    ],
+    "forecast_price": [
+        "forecast_price", "predicted_price", "price_forecast",
+        "da_forecast", "price_prediction", "forecast", "f_price",
+    ],
+    "grid_demand": [
+        "grid_demand", "demand", "load", "system_load",
+        "grid_load", "net_load", "demand_level",
+    ],
+}
+
+# Asset spec meta-columns that can optionally appear as file columns
+ASSET_META_ALIASES = {
+    "asset_type": ["asset_type", "type", "asset_class"],
+    "asset_name": ["asset_name", "name", "asset", "plant_name", "site_name"],
+    "p_max": ["p_max", "max_power", "capacity_mw", "rated_power", "nameplate_mw"],
+    "e_max": ["e_max", "energy_capacity", "battery_capacity_mwh", "storage_mwh"],
+    "soc_init": ["soc_init", "initial_soc", "soc_initial"],
+    "eta_ch": ["eta_ch", "charge_efficiency", "charging_efficiency"],
+    "eta_dis": ["eta_dis", "discharge_efficiency", "discharging_efficiency"],
+    "deg_cost": ["deg_cost", "degradation_cost", "wear_cost"],
+}
+
+def _resolve_columns(df_cols: list) -> dict:
+    """
+    Returns a mapping {internal_name: actual_col_name} for every alias match found.
+    Normalises column names before matching.
+    """
+    normalised = {c: c.lower().strip().replace(" ", "_").replace("-", "_").replace("(", "").replace(")", "").replace("/", "_") for c in df_cols}
+    resolved = {}
+    for internal, aliases in {**COLUMN_ALIASES, **ASSET_META_ALIASES}.items():
+        for original, norm in normalised.items():
+            if norm in aliases and internal not in resolved:
+                resolved[internal] = original
+                break
+    return resolved
+
+
+def _parse_file_bytes(contents: bytes, filename: str) -> pd.DataFrame:
+    """Parse CSV or Excel, try multiple encodings for CSV."""
+    if filename.endswith(('.xlsx', '.xls')):
+        return pd.read_excel(BytesIO(contents))
+    for enc in ('utf-8', 'utf-8-sig', 'latin-1', 'cp1252'):
+        try:
+            return pd.read_csv(BytesIO(contents), encoding=enc)
+        except Exception:
+            continue
+    raise ValueError("Could not decode CSV file. Try saving as UTF-8.")
+
+
 @app.post("/api/v1/audit/file", response_model=AuditResponse)
 async def audit_from_file(file: UploadFile = File(...)):
     """
-    Universal file ingestion — accepts CSV or Excel with any energy asset data.
-    Required:  price, actual_discharge
-    Optional:  hour, actual_charge, soc, grid_demand, curtailment_mw,
-               operator_override, forecast_price,
-               asset_type, asset_name, p_max, e_max, soc_init, eta_ch, eta_dis, deg_cost
+    Universal file ingestion — accepts CSV or Excel with ANY column naming convention.
+
+    The engine auto-resolves column names via an alias map covering 80+ variants.
+
+    The only hard requirement is ONE column that looks like a price and ONE that
+    looks like a power output / discharge. Everything else is optional.
+
+    Accepted file formats: .csv  .xlsx  .xls
     """
     try:
         contents = await file.read()
-        if file.filename.endswith(('.xlsx', '.xls')):
-            df = pd.read_excel(BytesIO(contents))
-        else:
-            df = pd.read_csv(BytesIO(contents.decode('utf-8')))
+        df = _parse_file_bytes(contents, file.filename or "")
 
-        df.columns = df.columns.str.lower().str.strip().str.replace(' ', '_')
+        # Resolve column aliases
+        col_map = _resolve_columns(list(df.columns))
 
-        # Validate required columns
-        required = {'price', 'actual_discharge'}
-        missing = required - set(df.columns)
-        if missing:
+        # Check required fields resolved
+        missing_internal = []
+        for req in ("price", "actual_discharge"):
+            if req not in col_map:
+                missing_internal.append(req)
+
+        if missing_internal:
+            # Build a helpful error listing what the file actually has
             return JSONResponse(status_code=400, content={
-                "detail": f"Missing required columns: {missing}. "
-                          f"File has: {list(df.columns)}"
+                "detail": (
+                    f"Could not find required column(s): {missing_internal}. "
+                    f"Your file has columns: {list(df.columns)}. "
+                    f"Use /api/v1/audit/inspect to see the full mapping attempt. "
+                    f"Accepted price aliases include: spot_price, lmp, market_price, energy_price, omr_mwh … "
+                    f"Accepted discharge aliases include: generation, actual_power, output_mw, p_actual, gen_mw …"
+                )
             })
 
-        # Add optional columns with defaults
-        for col, default in [
-            ('hour', None), ('actual_charge', 0.0), ('soc', None),
-            ('grid_demand', None), ('curtailment_mw', 0.0),
-            ('operator_override', False), ('forecast_price', None)
-        ]:
+        # Rename resolved columns to internal names
+        rename_map = {v: k for k, v in col_map.items() if v in df.columns}
+        df = df.rename(columns=rename_map)
+
+        # Add missing optional columns with defaults
+        defaults = {
+            'hour': None, 'actual_charge': 0.0, 'soc': None,
+            'grid_demand': None, 'curtailment_mw': 0.0,
+            'operator_override': False, 'forecast_price': None,
+        }
+        for col, default in defaults.items():
             if col not in df.columns:
                 df[col] = default
 
+        # Fill hour index if missing or all-null
         if df['hour'].isnull().all():
             df['hour'] = range(len(df))
 
-        df = df.fillna({'actual_discharge': 0, 'actual_charge': 0, 'curtailment_mw': 0})
+        df = df.fillna({'actual_discharge': 0.0, 'actual_charge': 0.0, 'curtailment_mw': 0.0})
 
-        # Asset specs: pull from first row meta-columns if present, else defaults
-        asset_kwargs = {}
-        meta_map = {
-            'asset_type': 'asset_type', 'asset_name': 'asset_name',
-            'p_max': 'p_max', 'e_max': 'e_max', 'soc_init': 'soc_init',
-            'eta_ch': 'eta_ch', 'eta_dis': 'eta_dis', 'deg_cost': 'deg_cost'
-        }
-        for key, col in meta_map.items():
+        # Coerce numeric columns — tolerates strings like "12.5 MW" by stripping non-numeric chars
+        for col in ('price', 'actual_discharge', 'actual_charge', 'curtailment_mw'):
             if col in df.columns:
-                val = df[col].iloc[0]
+                df[col] = pd.to_numeric(
+                    df[col].astype(str).str.replace(r'[^\d.\-]', '', regex=True),
+                    errors='coerce'
+                ).fillna(0.0)
+
+        # Asset specs from meta-columns (first row), fallback to defaults
+        asset_kwargs = {}
+        for key in ASSET_META_ALIASES:
+            if key in df.columns:
+                val = df[key].iloc[0]
                 if pd.notna(val):
                     asset_kwargs[key] = val
 
         asset = AssetSpecs(**asset_kwargs)
+
         time_series = df[[
             'hour', 'price', 'actual_discharge', 'actual_charge',
             'soc', 'grid_demand', 'curtailment_mw', 'operator_override', 'forecast_price'
@@ -578,6 +695,29 @@ async def audit_from_file(file: UploadFile = File(...)):
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"detail": f"Error parsing file: {str(e)}"})
+
+
+@app.post("/api/v1/audit/inspect")
+async def inspect_file(file: UploadFile = File(...)):
+    """
+    Debug endpoint — returns the column mapping the engine would apply to your file,
+    without running the full audit. Use this to diagnose upload failures.
+    """
+    try:
+        contents = await file.read()
+        df = _parse_file_bytes(contents, file.filename or "")
+        col_map = _resolve_columns(list(df.columns))
+        unresolved = [c for c in df.columns if c not in col_map.values()]
+        return {
+            "file_columns": list(df.columns),
+            "rows": len(df),
+            "resolved_mapping": col_map,          # internal_name → your_col_name
+            "unresolved_columns": unresolved,      # columns we couldn't map
+            "will_succeed": "price" in col_map and "actual_discharge" in col_map,
+            "sample_row": df.iloc[0].to_dict() if len(df) > 0 else {},
+        }
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"detail": str(e)})
 
 @app.get("/api/historical", response_model=HistoricalResponse)
 async def get_historical_data():
