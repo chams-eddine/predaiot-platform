@@ -1,13 +1,15 @@
 import os
 import uuid
+import json
+import asyncio
 import pandas as pd
-from io import BytesIO
-from fastapi import FastAPI, UploadFile, File
+from io import BytesIO, StringIO
+from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import pulp
 from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime, text
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -41,16 +43,20 @@ Base.metadata.create_all(bind=engine)
 # 2. Data Models  (UNCHANGED CORE + NEW FIELDS)
 # ==========================================
 class AssetSpecs(BaseModel):
-    # Universal fields — works for Solar, Wind, BESS, Gas, Hydro, etc.
-    asset_type: Optional[str] = "BESS"          # BESS | Solar | Wind | Gas | Hydro | Generic
+    # Universal fields — works for all energy assets
+    asset_type: Optional[str] = "Generic"
+    # Supported: BESS | Solar | Wind | Gas | Hydro | Hydrogen | Desalination
+    #            Nuclear | OilGas | CHP | Geothermal | Tidal | Generic
     asset_name: Optional[str] = "Energy Asset"
-    asset_id: Optional[str] = "ASSET_01"
-    p_max: float = 50.0
-    e_max: float = 100.0
-    soc_init: float = 0.2
-    eta_ch: float = 0.95
-    eta_dis: float = 0.95
-    deg_cost: float = 5.0
+    asset_id:   Optional[str] = "ASSET_01"
+    location:   Optional[str] = None
+    market:     Optional[str] = None
+    p_max:      float = 50.0
+    e_max:      float = 100.0
+    soc_init:   float = 0.2
+    eta_ch:     float = 0.95
+    eta_dis:    float = 0.95
+    deg_cost:   float = 5.0
 
 class TimeStepData(BaseModel):
     hour: int
@@ -519,17 +525,34 @@ async def calculate_gap(request: AuditRequest):
 # Maps any real-world column name variant → internal name
 # ==========================================
 COLUMN_ALIASES = {
-    # price — the market/spot price column
+    # ── price — market / spot price ─────────────────────────────────────────────
     "price": [
+        # English — common
         "price", "spot_price", "market_price", "energy_price", "lmp",
         "price_usd", "price_$/mwh", "price_($/mwh)", "price_mwh",
         "clearing_price", "settlement_price", "pool_price", "da_price",
         "rt_price", "wholesale_price", "electricity_price", "tariff",
         "rate", "cost_per_mwh", "mwh_price", "$/mwh", "usd/mwh",
-        "omr/mwh", "omr_mwh", "price_omr",
+        "omr/mwh", "omr_mwh", "price_omr", "aed/mwh", "sar/mwh",
+        # Extended market aliases
+        "half_hourly_price", "hhp", "imbalance_price", "balancing_price",
+        "nodal_price", "zonal_price", "hub_price", "index_price",
+        "pjm_lmp", "ercot_spp", "caiso_lmp", "miso_lmp",
+        "epex_price", "n2ex_price", "elspot_price", "belpex_price",
+        "omel_price", "gme_price", "aps_price", "negative_price",
+        # Oil & Gas
+        "gas_price", "gas_price_mmbtu", "fuel_cost", "henry_hub",
+        "nbp_price", "ttf_price", "co2_price", "carbon_price",
+        # Hydrogen
+        "h2_price", "hydrogen_price", "green_h2_price",
+        # Arabic aliases (أسماء عربية)
+        "السعر", "سعر_الكهرباء", "السعر_الفوري", "سعر_السوق",
+        "التعريفة", "سعر_المقاصة", "تكلفة_الطاقة",
     ],
-    # actual_discharge — actual generation / discharge / output
+
+    # ── actual_discharge — actual generation / output / production ──────────────
     "actual_discharge": [
+        # English — common
         "actual_discharge", "discharge", "actual_power", "power_output",
         "generation", "actual_generation", "gen_mw", "output_mw",
         "dispatch_mw", "actual_dispatch", "p_actual", "p_out",
@@ -538,37 +561,109 @@ COLUMN_ALIASES = {
         "wind_output", "p_gen", "pgen", "p_dis", "pdis",
         "net_generation", "real_power", "active_power",
         "gross_generation", "net_output",
+        # Solar
+        "solar_generation", "pv_output", "solar_power", "irradiance_mw",
+        "dc_power", "ac_power", "inverter_output",
+        # Wind
+        "wind_generation", "turbine_output", "wind_power",
+        "rotor_power", "nacelle_power", "hub_power",
+        # Hydro / Pumped hydro
+        "hydro_generation", "turbine_generation", "hydro_output",
+        "penstock_flow_mw", "dam_output",
+        # Gas / thermal
+        "gas_generation", "thermal_output", "combined_cycle_output",
+        "gt_output", "st_output", "peaker_output", "ocgt_output",
+        # Nuclear
+        "nuclear_output", "reactor_power", "reactor_output",
+        # Hydrogen electrolyzer
+        "electrolyzer_power", "electrolyzer_output", "h2_production_power",
+        "electrolyzer_mw",
+        # Desalination
+        "desalination_power", "desal_mw", "ro_power", "msf_power",
+        "med_power",
+        # Oil & Gas compression / injection
+        "compressor_power", "injection_power", "pump_power",
+        # Arabic aliases
+        "التوليد", "الإنتاج", "القدرة_الفعلية", "الطاقة_المنتجة",
+        "الصرف_الفعلي", "الخرج", "الطاقة_الكهربائية",
+        "توليد_الطاقة", "إنتاج_الطاقة",
     ],
-    # hour — timestep / interval index
+
+    # ── hour — timestep / interval index ────────────────────────────────────────
     "hour": [
         "hour", "interval", "timestep", "time_step", "step",
         "period", "slot", "index", "idx", "t", "timestamp",
         "datetime", "time", "date_time", "hour_index",
+        "half_hour", "quarter_hour", "five_min", "minute",
+        "الوقت", "الساعة", "الفترة", "الفاصل_الزمني",
     ],
-    # optional enrichment columns
+
+    # ── actual_charge — charging power (BESS / pumped hydro / electrolyzer) ─────
     "actual_charge": [
         "actual_charge", "charge", "charge_mw", "p_charge", "pcharge",
         "charging_power", "bess_charge", "charge_power", "p_ch",
+        "pumping_power", "pump_power_mw", "h2_load", "electrolyzer_load",
+        "الشحن", "طاقة_الشحن",
     ],
+
+    # ── soc — state of charge / reservoir level ──────────────────────────────────
     "soc": [
         "soc", "state_of_charge", "battery_soc", "soc_pct",
         "soc_%", "energy_level", "stored_energy_pct",
+        # Hydro reservoir
+        "reservoir_level", "water_level_m", "water_level_pct",
+        "reservoir_pct", "head_m",
+        # Hydrogen tank
+        "tank_pressure", "h2_level", "h2_storage_pct",
+        # Arabic
+        "حالة_الشحن", "مستوى_الطاقة", "مستوى_الخزان",
     ],
+
+    # ── curtailment ───────────────────────────────────────────────────────────────
     "curtailment_mw": [
         "curtailment_mw", "curtailment", "curtailed_mw", "curtailed",
         "clipped_mw", "clipping", "spilled_mw", "spillage",
+        "wind_curtailment", "solar_curtailment", "forced_outage_mw",
+        "التقليص", "التخفيض_القسري",
     ],
+
+    # ── operator override ────────────────────────────────────────────────────────
     "operator_override": [
         "operator_override", "override", "manual_override",
-        "human_override", "manual_dispatch",
+        "human_override", "manual_dispatch", "operator_intervention",
+        "تدخل_المشغل", "التجاوز_اليدوي",
     ],
+
+    # ── forecast price ───────────────────────────────────────────────────────────
     "forecast_price": [
         "forecast_price", "predicted_price", "price_forecast",
         "da_forecast", "price_prediction", "forecast", "f_price",
+        "price_forecast_da", "day_ahead_forecast",
+        "السعر_المتوقع", "توقع_السعر",
     ],
+
+    # ── grid demand ───────────────────────────────────────────────────────────────
     "grid_demand": [
         "grid_demand", "demand", "load", "system_load",
         "grid_load", "net_load", "demand_level",
+        "الطلب", "حمل_الشبكة", "حمل_النظام",
+    ],
+
+    # ── asset-specific extras ─────────────────────────────────────────────────────
+    # Gas / thermal efficiency
+    "fuel_consumption": [
+        "fuel_consumption", "fuel_rate", "heat_rate", "gas_consumption",
+        "fuel_flow_mmbtu", "gas_flow_mcf",
+    ],
+    # Hydrogen production volume
+    "h2_production_kg": [
+        "h2_production_kg", "hydrogen_production", "h2_flow_rate",
+        "h2_volume_nm3", "electrolyzer_kg_h",
+    ],
+    # Desalination
+    "water_production_m3": [
+        "water_production_m3", "permeate_flow", "product_water",
+        "desal_output_m3h", "water_m3",
     ],
 }
 
@@ -600,15 +695,101 @@ def _resolve_columns(df_cols: list) -> dict:
 
 
 def _parse_file_bytes(contents: bytes, filename: str) -> pd.DataFrame:
-    """Parse CSV or Excel, try multiple encodings for CSV."""
-    if filename.endswith(('.xlsx', '.xls')):
+    """
+    Universal file parser — handles CSV/TSV/Excel with automatic encoding detection.
+
+    Encoding resolution order:
+      1. BOM bytes  →  UTF-16 / UTF-8-BOM
+      2. charset_normalizer (pip install charset-normalizer) auto-detect
+      3. chardet fallback
+      4. Exhaustive encoding list (Western, Arabic, Cyrillic, CJK …)
+      5. Force-decode with replacement characters (never raises)
+    """
+    fname = (filename or "").lower()
+
+    # ── Excel ──────────────────────────────────────────────────────────────────
+    if fname.endswith((".xlsx", ".xls")):
         return pd.read_excel(BytesIO(contents))
-    for enc in ('utf-8', 'utf-8-sig', 'latin-1', 'cp1252'):
+
+    # Separator heuristic
+    sep = "\t" if fname.endswith(".tsv") else ","
+
+    # ── BOM detection ──────────────────────────────────────────────────────────
+    if contents[:2] in (b"\xff\xfe", b"\xfe\xff"):
         try:
-            return pd.read_csv(BytesIO(contents), encoding=enc)
+            return pd.read_csv(BytesIO(contents), encoding="utf-16", sep=sep)
+        except Exception:
+            pass
+    if contents[:3] == b"\xef\xbb\xbf":
+        try:
+            return pd.read_csv(BytesIO(contents), encoding="utf-8-sig", sep=sep)
+        except Exception:
+            pass
+
+    # ── charset_normalizer auto-detect ─────────────────────────────────────────
+    try:
+        from charset_normalizer import from_bytes
+        result = from_bytes(contents[:20000]).best()
+        if result and result.encoding:
+            try:
+                return pd.read_csv(BytesIO(contents), encoding=str(result.encoding), sep=sep)
+            except Exception:
+                pass
+    except ImportError:
+        pass
+
+    # ── chardet fallback ───────────────────────────────────────────────────────
+    try:
+        import chardet
+        detected = chardet.detect(contents[:20000])
+        enc_detected = detected.get("encoding") or ""
+        if enc_detected:
+            try:
+                return pd.read_csv(BytesIO(contents), encoding=enc_detected, sep=sep)
+            except Exception:
+                pass
+    except ImportError:
+        pass
+
+    # ── Exhaustive encoding list ───────────────────────────────────────────────
+    ENCODINGS = [
+        # Unicode
+        "utf-8", "utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "utf-32",
+        # Western European
+        "latin-1", "cp1252", "iso-8859-15",
+        # Arabic (كل ملفات Excel المحلية تستخدم هذا)
+        "cp1256", "iso-8859-6", "windows-1256",
+        # Central / Eastern European
+        "cp1250", "iso-8859-2",
+        # Cyrillic
+        "cp1251", "iso-8859-5", "koi8-r",
+        # CJK
+        "gbk", "gb2312", "gb18030", "big5", "shift_jis", "euc-jp", "euc-kr",
+        # Misc
+        "ascii", "cp437",
+    ]
+    for enc in ENCODINGS:
+        try:
+            return pd.read_csv(BytesIO(contents), encoding=enc, sep=sep)
         except Exception:
             continue
-    raise ValueError("Could not decode CSV file. Try saving as UTF-8.")
+
+    # ── Nuclear fallback: force-decode with Unicode replacement chars ───────────
+    try:
+        text_content = contents.decode("utf-8", errors="replace")
+        df = pd.read_csv(StringIO(text_content), sep=sep)
+        # Strip replacement chars from column names
+        df.columns = [str(c).replace("\ufffd", "").strip() for c in df.columns]
+        return df
+    except Exception:
+        pass
+
+    raise ValueError(
+        "Could not parse this file. "
+        "Please try: (1) save as CSV UTF-8 in Excel → Save As → CSV UTF-8 (comma delimited), "
+        "or (2) export as .xlsx. "
+        "Your file's encoding was not recognizable after 20+ attempts."
+    )
 
 
 @app.post("/api/v1/audit/file", response_model=AuditResponse)
@@ -749,12 +930,233 @@ async def get_shared_audit(token: str):
         return shared_audits[token]
     return JSONResponse(status_code=404, content={"detail": "Report link expired or not found"})
 
+@app.get("/api/latest")
+async def get_latest_live_data():
+    return latest_live_result
+
+# ==========================================
+# NEW: EDA Credit Rating
+# ==========================================
+def _eda_rating(dq_score: float) -> tuple:
+    """Returns (rating, label, color_code) — like credit rating for energy assets."""
+    s = dq_score * 100
+    if s >= 90: return "AAA", "Excellent",    "#00E676"
+    if s >= 80: return "AA",  "Very Good",    "#69F0AE"
+    if s >= 70: return "A",   "Good",         "#B9F6CA"
+    if s >= 60: return "BBB", "Acceptable",   "#FFD600"
+    if s >= 50: return "BB",  "Below Average","#FF9800"
+    if s >= 40: return "B",   "Poor",         "#FF5722"
+    return              "CCC","Critical",     "#FF1744"
+
+
+# ==========================================
+# NEW: Real-Time WebSocket Stream
+# ==========================================
+@app.websocket("/ws/live")
+async def websocket_live_stream(websocket: WebSocket):
+    """
+    Real-time SCADA data stream.
+
+    Client sends JSON each step:
+      { "price": 85.5, "actual_discharge": 20.0, "p_max": 50,
+        "deg_cost": 5.0, "soc": 0.7, "asset_id": "..." }
+
+    Server responds each step:
+      { "step": N, "gap_step": $, "cumulative_gap": $, "dq_score_live": %, 
+        "decision_type": "...", "alert": bool, "recommendation": "..." }
+    """
+    await websocket.accept()
+    cumulative_opt = 0.0
+    cumulative_act = 0.0
+    step_count = 0
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+            price    = float(data.get("price", 0))
+            actual   = float(data.get("actual_discharge", 0))
+            p_max    = float(data.get("p_max", 50))
+            deg_cost = float(data.get("deg_cost", 5))
+            soc      = float(data.get("soc", 0.5))
+
+            # Rolling heuristic optimal (real-time, no MILP latency)
+            can_dis  = soc > 0.2
+            threshold = deg_cost * 2.0
+            optimal  = p_max if (price > threshold and can_dis) else 0.0
+
+            edv_opt = max(0.0, (price - deg_cost) * optimal)
+            edv_act = max(0.0, (price - deg_cost) * actual)
+            gap     = edv_opt - edv_act
+
+            cumulative_opt  += edv_opt
+            cumulative_act  += edv_act
+            step_count      += 1
+
+            dec_type, conf = _classify_decision(optimal, actual, price)
+            dq_live = (cumulative_act / cumulative_opt * 100) if cumulative_opt > 0 else 0.0
+            rating, rating_label, _ = _eda_rating(dq_live / 100)
+
+            await websocket.send_json({
+                "step":             step_count,
+                "price":            price,
+                "optimal_action":   round(optimal, 2),
+                "actual_action":    round(actual, 2),
+                "gap_step":         round(gap, 2),
+                "cumulative_gap":   round(cumulative_opt - cumulative_act, 2),
+                "cumulative_opt":   round(cumulative_opt, 2),
+                "cumulative_act":   round(cumulative_act, 2),
+                "dq_score_live":    round(dq_live, 1),
+                "rating":           rating,
+                "rating_label":     rating_label,
+                "decision_type":    dec_type,
+                "confidence":       round(conf, 2),
+                "alert":            gap > 100,
+                "recommendation": (
+                    f"⚠ Dispatch {optimal:.0f} MW — price ${price:.2f} exceeds economic threshold"
+                    if gap > 10 else "✓ Near-optimal dispatch"
+                ),
+            })
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        try:
+            await websocket.close(code=1011, reason=str(e))
+        except Exception:
+            pass
+
+
+# ==========================================
+# NEW: Single-Step Live Calculation (polling fallback)
+# ==========================================
+@app.post("/api/v1/live/step")
+async def live_step(data: Dict[str, Any] = Body(...)):
+    """
+    Single real-time step calculation — polling alternative to WebSocket.
+    Useful for SCADA systems that push one data point at a time.
+    """
+    price    = float(data.get("price", 0))
+    actual   = float(data.get("actual_discharge", 0))
+    p_max    = float(data.get("p_max", 50))
+    deg_cost = float(data.get("deg_cost", 5))
+    soc      = float(data.get("soc", 0.5))
+
+    can_dis  = soc > 0.2
+    optimal  = p_max if (price > deg_cost * 2 and can_dis) else 0.0
+
+    edv_opt = max(0.0, (price - deg_cost) * optimal)
+    edv_act = max(0.0, (price - deg_cost) * actual)
+    gap     = edv_opt - edv_act
+    dec_type, conf = _classify_decision(optimal, actual, price)
+
+    return {
+        "price":          price,
+        "optimal_action": round(optimal, 2),
+        "actual_action":  round(actual, 2),
+        "gap_step":       round(gap, 2),
+        "decision_type":  dec_type,
+        "confidence":     round(conf, 2),
+        "alert":          gap > 100,
+        "recommendation": (
+            f"Dispatch {optimal:.0f} MW — ${price:.2f}/MWh exceeds economic threshold"
+            if gap > 10 else "Current dispatch near-optimal"
+        ),
+    }
+
+
+# ==========================================
+# NEW: Economic Decision Certificate
+# ==========================================
+def _build_certificate(data: dict) -> dict:
+    dq         = data.get("dq_score", 0)
+    total_gap  = data.get("total_gap_usd", 0)
+    opt        = data.get("edv_optimal_total", 0)
+    act        = data.get("edv_actual_total", 0)
+    rating, rating_label, rating_color = _eda_rating(dq)
+    eis        = 0
+    if data.get("eda_metrics"):
+        m   = data["eda_metrics"]
+        eis = m.get("economic_intelligence_score", 0) if isinstance(m, dict) else getattr(m, "economic_intelligence_score", 0)
+
+    cert_id = f"PREDAIOT-EDA-{datetime.utcnow().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+
+    return {
+        "certificate_id":       cert_id,
+        "issued_at":            datetime.utcnow().isoformat() + "Z",
+        "asset_name":           data.get("asset_name", "Energy Asset"),
+        "asset_type":           data.get("asset_type", "Generic"),
+        "audit_period":         data.get("audit_period_label", "24h"),
+        "economic_potential":   round(opt, 2),
+        "captured_value":       round(act, 2),
+        "destroyed_value":      round(total_gap, 2),
+        "dq_score":             round(dq * 100, 1),
+        "eis_score":            round(eis, 1),
+        "rating":               rating,
+        "rating_label":         rating_label,
+        "rating_color":         rating_color,
+        "economic_efficiency":  round(dq * 100, 1),
+        "annual_leakage":       round(total_gap * 365, 2),
+        "risk_level":           data.get("risk_level", "Moderate"),
+        "key_finding": (
+            f"During the audit period, {data.get('asset_name','the asset')} captured "
+            f"{round(dq*100,1)}% of its achievable economic value. "
+            f"Estimated annual value destruction: ${total_gap*365:,.0f}."
+        ),
+        "certified_by":         "PREDAIOT Economic Decision Audit Engine",
+        "methodology":          "MILP Counterfactual Optimization (patent-pending)",
+        "standard":             "PREDAIOT EDA Standard v1.0",
+        "version":              "1.0.0",
+    }
+
+
+@app.get("/api/v1/certificate")
+async def get_certificate_for_latest():
+    """Returns an Economic Decision Certificate for the most recent audit."""
+    global latest_live_result
+    data = latest_live_result
+    if isinstance(data, dict):
+        if data.get("dq_score", 0) == 0:
+            return JSONResponse(status_code=404, content={"detail": "No audit has been run yet."})
+        return _build_certificate(data)
+    # AuditResponse pydantic object
+    return _build_certificate(data.dict())
+
+
+@app.post("/api/v1/certificate")
+async def generate_certificate_for_audit(data: AuditResponse):
+    """Generate a certificate for a provided audit result."""
+    return _build_certificate(data.dict())
+
+
+# ==========================================
+# NEW: Claude AI Enhancement Proxy
+# ==========================================
 @app.post("/api/v1/ai-enhance")
-async def ai_enhance(request: dict):
-    import anthropic
-    client = anthropic.Anthropic()
-    msg = client.messages.create(**request)
-    return {"content": [{"text": msg.content[0].text}]}
+async def ai_enhance(request: Dict[str, Any] = Body(...)):
+    """
+    Proxy endpoint for Claude AI enhanced commentary.
+    Requires ANTHROPIC_API_KEY environment variable.
+
+    Add to your Render / Railway env vars:
+      ANTHROPIC_API_KEY = sk-ant-...
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return JSONResponse(status_code=503, content={
+            "detail": "ANTHROPIC_API_KEY not configured. Add it to your deployment environment variables."
+        })
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        msg = client.messages.create(
+            model=request.get("model", "claude-sonnet-4-6"),
+            max_tokens=request.get("max_tokens", 1000),
+            messages=request.get("messages", []),
+        )
+        return {"content": [{"type": "text", "text": msg.content[0].text}]}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"detail": f"Claude API error: {str(e)}"})
+
+
 
 # ==========================================
 # 8. Serve Frontend  (UNCHANGED CORE)

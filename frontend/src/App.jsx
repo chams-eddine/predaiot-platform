@@ -269,6 +269,11 @@ export default function App() {
   const [aiText, setAiText]               = useState('');
   const [histData, setHistData]           = useState([]);
   const [histLoading, setHistLoading]     = useState(false);
+  const [liveMode, setLiveMode]           = useState(false);
+  const [liveData, setLiveData]           = useState([]);
+  const [wsRef]                           = useState({ current: null });
+  const [certificate, setCertificate]     = useState(null);
+  const [certLoading, setCertLoading]     = useState(false);
 
   // Live SCADA poll
   useEffect(() => {
@@ -425,6 +430,8 @@ Use formal financial audit language. Reference exact figures. Maximum 380 words.
     { id: 'ai',        label: 'AI Commentary',        tag: '10' },
     { id: 'govern',    label: 'Governance',           tag: '11' },
     { id: 'appendix',  label: 'Math Appendix',        tag: '12' },
+    { id: 'live',      label: 'Live Monitor',         tag: '⚡' },
+    { id: 'cert',      label: 'EDA Certificate',      tag: '🏆' },
   ];
 
   // ══════════════════════════════════════════════════════════════════
@@ -1079,6 +1086,246 @@ Use formal financial audit language. Reference exact figures. Maximum 380 words.
                   ))}
                 </div>
               </Card>
+            </div>
+          )}
+
+          {/* ══ S13: Live Monitor ══════════════════════════════ */}
+          {activeSection === 'live' && (
+            <div>
+              <SectionHeader tag="⚡" title="Real-Time Live Monitor" />
+
+              <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+                <BtnOutline
+                  color={liveMode ? DS.loss : DS.optimal}
+                  onClick={() => {
+                    if (liveMode) {
+                      if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+                      setLiveMode(false);
+                    } else {
+                      try {
+                        const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+                        const ws = new WebSocket(`${proto}://${window.location.host}/ws/live`);
+                        ws.onopen = () => setLiveMode(true);
+                        ws.onmessage = (e) => {
+                          try {
+                            const d = JSON.parse(e.data);
+                            setLiveData(prev => [...prev.slice(-287), d]);
+                          } catch (_) {}
+                        };
+                        ws.onclose = () => setLiveMode(false);
+                        ws.onerror = () => { setLiveMode(false); alert('WebSocket connection failed. Make sure the backend is running.'); };
+                        wsRef.current = ws;
+                      } catch (err) { alert('Could not open WebSocket: ' + err.message); }
+                    }
+                  }}
+                >
+                  {liveMode ? '⏹ STOP LIVE STREAM' : '▶ START LIVE STREAM'}
+                </BtnOutline>
+                {liveData.length > 0 && (
+                  <BtnOutline color={DS.dim} onClick={() => setLiveData([])}>CLEAR</BtnOutline>
+                )}
+              </div>
+
+              {/* Live status strip */}
+              {liveMode && (
+                <div style={{ display: 'flex', gap: 20, padding: '12px 20px', background: `${DS.optimal}08`, border: `1px solid ${DS.optimal}30`, borderRadius: DS.r12, marginBottom: 20 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: DS.optimal, boxShadow: `0 0 10px ${DS.optimal}`, animation: 'pulse 1s infinite' }} />
+                    <span style={{ color: DS.optimal, fontSize: 12, fontWeight: 700, letterSpacing: '0.1em' }}>STREAMING LIVE</span>
+                  </div>
+                  <span style={{ color: DS.sub, fontSize: 12 }}>{liveData.length} steps received</span>
+                  {liveData.length > 0 && (
+                    <>
+                      <span style={{ color: DS.warning, fontFamily: DS.mono, fontSize: 12 }}>
+                        Live Gap: −{fmtUSD(liveData[liveData.length-1]?.cumulative_gap || 0)}
+                      </span>
+                      <span style={{ color: qualColor(liveData[liveData.length-1]?.dq_score_live || 0), fontFamily: DS.mono, fontSize: 12, fontWeight: 700 }}>
+                        DQ Live: {(liveData[liveData.length-1]?.dq_score_live || 0).toFixed(1)}%
+                      </span>
+                      {liveData[liveData.length-1]?.alert && (
+                        <Pill label="⚠ ECONOMIC ALERT" color={DS.loss} />
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Live chart */}
+              {liveData.length > 1 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  <Card>
+                    <Label style={{ marginBottom: 12 }}>Live Gap Accumulation</Label>
+                    <ResponsiveContainer width="100%" height={220}>
+                      <AreaChart data={liveData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="gGap" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor={DS.loss} stopOpacity={0.3} />
+                            <stop offset="95%" stopColor={DS.loss} stopOpacity={0} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke={DS.border} />
+                        <XAxis dataKey="step" stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} />
+                        <YAxis stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} tickFormatter={(v) => `$${v}`} />
+                        <Tooltip contentStyle={{ background: '#0f1318', border: `1px solid ${DS.border}`, fontSize: 11 }} formatter={(v) => [`$${v}`, 'Cumulative Gap']} />
+                        <Area type="monotone" dataKey="cumulative_gap" stroke={DS.loss} fill="url(#gGap)" strokeWidth={2} dot={false} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </Card>
+                  <Card>
+                    <Label style={{ marginBottom: 12 }}>Live Decision Quality Score</Label>
+                    <ResponsiveContainer width="100%" height={160}>
+                      <AreaChart data={liveData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={DS.border} />
+                        <XAxis dataKey="step" stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} />
+                        <YAxis domain={[0, 100]} stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} tickFormatter={(v) => `${v}%`} />
+                        <Tooltip contentStyle={{ background: '#0f1318', border: `1px solid ${DS.border}`, fontSize: 11 }} formatter={(v) => [`${v}%`, 'DQ Score']} />
+                        <Area type="monotone" dataKey="dq_score_live" stroke={DS.cyan} fill={`${DS.cyan}18`} strokeWidth={2} dot={false} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </Card>
+                </div>
+              ) : (
+                <EmptyMsg>
+                  {liveMode
+                    ? 'Waiting for data… Connect your SCADA/EMS to ws://your-server/ws/live'
+                    : 'Click START LIVE STREAM to connect to the real-time WebSocket feed.'}
+                </EmptyMsg>
+              )}
+
+              <div style={{ marginTop: 16, padding: '12px 16px', background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: DS.r8, fontSize: 11, color: DS.dim, lineHeight: 1.8 }}>
+                <strong style={{ color: DS.sub }}>Integration:</strong> Your SCADA/EMS sends one JSON object per interval to <code style={{ color: DS.cyan }}>ws://your-server/ws/live</code><br />
+                Payload: <code style={{ color: DS.cyan }}>{'{"price": 85.5, "actual_discharge": 20, "p_max": 50, "deg_cost": 5, "soc": 0.7}'}</code><br />
+                For polling-based systems: <code style={{ color: DS.cyan }}>POST /api/v1/live/step</code> (same payload, no WebSocket needed)
+              </div>
+            </div>
+          )}
+
+          {/* ══ S14: EDA Certificate ══════════════════════════════ */}
+          {activeSection === 'cert' && (
+            <div>
+              <SectionHeader tag="🏆" title="Economic Decision Certificate" />
+
+              <div style={{ display: 'flex', gap: 10, marginBottom: 24 }}>
+                <BtnOutline
+                  color={DS.warning}
+                  onClick={async () => {
+                    setCertLoading(true);
+                    try {
+                      const r = await axios.get('/api/v1/certificate');
+                      setCertificate(r.data);
+                    } catch (e) {
+                      alert('Generate an audit first, then request the certificate.');
+                    }
+                    setCertLoading(false);
+                  }}
+                  disabled={!hasData || certLoading}
+                >
+                  {certLoading ? 'GENERATING…' : '🏆 GENERATE CERTIFICATE'}
+                </BtnOutline>
+                {certificate && (
+                  <BtnOutline color={DS.cyan} onClick={() => window.print()}>PRINT / DOWNLOAD PDF</BtnOutline>
+                )}
+              </div>
+
+              {certificate ? (
+                <div style={{
+                  background: `linear-gradient(135deg, #0a0e15 0%, #040810 100%)`,
+                  border: `2px solid ${certificate.rating_color || DS.warning}`,
+                  borderRadius: DS.r16, padding: 40,
+                  boxShadow: `0 0 60px ${certificate.rating_color || DS.warning}18`,
+                  maxWidth: 720, margin: '0 auto',
+                }}>
+                  {/* Header */}
+                  <div style={{ textAlign: 'center', marginBottom: 32 }}>
+                    <div style={{ color: DS.dim, fontSize: 9, letterSpacing: '0.35em', marginBottom: 8 }}>ECONOMIC DECISION AUDIT CERTIFICATE</div>
+                    <div style={{ color: DS.text, fontSize: 22, fontWeight: 800, letterSpacing: '0.08em', marginBottom: 4 }}>PREDAIOT EDA™</div>
+                    <div style={{ color: DS.dim, fontSize: 10, letterSpacing: '0.2em' }}>{certificate.standard}</div>
+                  </div>
+
+                  {/* Rating badge - center */}
+                  <div style={{ textAlign: 'center', marginBottom: 32 }}>
+                    <div style={{
+                      display: 'inline-flex', flexDirection: 'column', alignItems: 'center',
+                      width: 120, height: 120, borderRadius: '50%',
+                      border: `4px solid ${certificate.rating_color}`,
+                      justifyContent: 'center',
+                      boxShadow: `0 0 40px ${certificate.rating_color}30`,
+                      background: `${certificate.rating_color}08`,
+                    }}>
+                      <div style={{ color: certificate.rating_color, fontSize: 36, fontWeight: 900, fontFamily: DS.mono, lineHeight: 1 }}>{certificate.rating}</div>
+                      <div style={{ color: DS.sub, fontSize: 9, marginTop: 4, letterSpacing: '0.12em' }}>{certificate.rating_label.toUpperCase()}</div>
+                    </div>
+                  </div>
+
+                  {/* Asset details */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24 }}>
+                    {[
+                      { label: 'Asset Name', value: certificate.asset_name, color: DS.text },
+                      { label: 'Asset Type', value: certificate.asset_type, color: DS.cyan },
+                      { label: 'Audit Period', value: certificate.audit_period, color: DS.sub },
+                      { label: 'Issued', value: new Date(certificate.issued_at).toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' }), color: DS.sub },
+                    ].map(f => (
+                      <div key={f.label} style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.025)', borderRadius: DS.r8 }}>
+                        <Label style={{ marginBottom: 4 }}>{f.label}</Label>
+                        <div style={{ color: f.color, fontWeight: 700, fontSize: 13 }}>{f.value}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Financial metrics */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12, marginBottom: 24 }}>
+                    {[
+                      { label: 'Economic Potential', value: fmtUSD(certificate.economic_potential), color: DS.warning },
+                      { label: 'Captured Value', value: fmtUSD(certificate.captured_value), color: DS.optimal },
+                      { label: 'Destroyed Value', value: fmtUSD(certificate.destroyed_value), color: DS.loss },
+                      { label: 'DQ Score', value: `${certificate.dq_score} / 100`, color: qualColor(certificate.dq_score) },
+                      { label: 'EIS Score', value: `${certificate.eis_score} / 100`, color: qualColor(certificate.eis_score) },
+                      { label: 'Annual Leakage', value: fmtUSD(certificate.annual_leakage), color: DS.orange },
+                    ].map(f => (
+                      <div key={f.label} style={{ textAlign: 'center', padding: '12px 8px', background: 'rgba(255,255,255,0.02)', border: `1px solid rgba(255,255,255,0.06)`, borderRadius: DS.r8 }}>
+                        <Label style={{ marginBottom: 4, fontSize: 9 }}>{f.label}</Label>
+                        <div style={{ color: f.color, fontFamily: DS.mono, fontWeight: 700, fontSize: 16 }}>{f.value}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Key finding */}
+                  <div style={{ padding: '14px 18px', background: `${certificate.rating_color}08`, border: `1px solid ${certificate.rating_color}25`, borderRadius: DS.r12, marginBottom: 24 }}>
+                    <Label style={{ marginBottom: 6 }}>Key Finding</Label>
+                    <div style={{ color: DS.sub, fontSize: 12, lineHeight: 1.8, fontStyle: 'italic' }}>"{certificate.key_finding}"</div>
+                  </div>
+
+                  {/* Footer */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', borderTop: `1px solid rgba(255,255,255,0.06)`, paddingTop: 20 }}>
+                    <div>
+                      <div style={{ color: DS.dim, fontSize: 9, letterSpacing: '0.15em', marginBottom: 3 }}>CERTIFIED BY</div>
+                      <div style={{ color: DS.text, fontWeight: 700, fontSize: 11 }}>PREDAIOT</div>
+                      <div style={{ color: DS.dim, fontSize: 9, marginTop: 2 }}>{certificate.methodology}</div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <div style={{ color: DS.dim, fontSize: 9, letterSpacing: '0.15em', marginBottom: 3 }}>CERTIFICATE ID</div>
+                      <div style={{ color: DS.cyan, fontFamily: DS.mono, fontSize: 10 }}>{certificate.certificate_id}</div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ textAlign: 'center', padding: '60px 40px' }}>
+                  <div style={{ fontSize: 48, marginBottom: 16 }}>🏆</div>
+                  <div style={{ color: DS.text, fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Economic Decision Certificate</div>
+                  <div style={{ color: DS.sub, fontSize: 12, maxWidth: 440, margin: '0 auto 24px' }}>
+                    Run an audit and click "Generate Certificate" to produce a formal PREDAIOT EDA certificate with your asset's economic performance rating (AAA–CCC).
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, maxWidth: 500, margin: '0 auto' }}>
+                    {[['AAA', '#00E676', 'Excellent'], ['AA', '#69F0AE', 'Very Good'], ['A', '#FFD600', 'Good'], ['BBB', '#FF9800', 'Acceptable'],
+                      ['BB', '#FF5722', 'Below Avg'], ['B', '#FF1744', 'Poor'], ['CCC', '#C62828', 'Critical'], ['?', DS.dim, 'Your Rating']].map(([r, c, l]) => (
+                      <div key={r} style={{ textAlign: 'center', padding: '12px 8px', background: DS.surface, border: `1px solid ${c}30`, borderRadius: DS.r8 }}>
+                        <div style={{ color: c, fontSize: 18, fontWeight: 900, fontFamily: DS.mono }}>{r}</div>
+                        <div style={{ color: DS.dim, fontSize: 9, marginTop: 3 }}>{l}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
