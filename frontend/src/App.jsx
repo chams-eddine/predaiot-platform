@@ -358,7 +358,7 @@ export default function App() {
       // Attempt to call Claude via a backend proxy at /api/v1/ai-enhance
       // Falls back to the pre-computed commentary if the endpoint is unavailable.
       const payload = {
-        model: 'claude-sonnet-4-6',
+        model: 'predait',
         max_tokens: 900,
         messages: [{
           role: 'user',
@@ -1358,6 +1358,193 @@ Use formal financial audit language. Reference exact figures. Maximum 380 words.
           </div>
         </div>
       )}
+    </div>
+  );
+}
+// ============================================
+// في أعلى App.jsx — أضف الاستيرادات
+// ============================================
+import { useState, useEffect, useRef, useCallback } from 'react';
+import AdvisorySidebar from './components/AdvisorySidebar';
+import { useLiveStream } from './hooks/useLiveStream';
+
+// ============================================
+// داخل مكون App — أضف الـ hook
+// ============================================
+export default function App() {
+  // ... (State الحالي: auditData, file, etc.) ...
+
+  // ─── PREDAIOT Live Stream ───
+  const [wsUrl, setWsUrl] = useState(null);
+  const {
+    connected,
+    step: liveStep,
+    history: liveHistory,
+    connect: connectWS,
+    disconnect: disconnectWS,
+    reset: resetLive,
+    processStep,
+  } = useLiveStream(wsUrl);
+
+  // ─── WebSocket Events from Sidebar ───
+  useEffect(() => {
+    const onConnect = (e) => {
+      setWsUrl(e.detail);
+      connectWS(e.detail);
+    };
+    const onDisconnect = () => {
+      setWsUrl(null);
+      disconnectWS();
+    };
+    window.addEventListener('predaiot:ws-connect', onConnect);
+    window.addEventListener('predaiot:ws-disconnect', onDisconnect);
+    return () => {
+      window.removeEventListener('predaiot:ws-connect', onConnect);
+      window.removeEventListener('predaiot:ws-disconnect', onDisconnect);
+    };
+  }, [connectWS, disconnectWS]);
+
+  // ─── Demo Simulation ───
+  const demoRef = useRef(null);
+  const [isDemoRunning, setIsDemoRunning] = useState(false);
+
+  const generateDemoPrices = useCallback(() => {
+    const p = [];
+    for (let i = 0; i < 288; i++) {
+      const h = i / 12;
+      let v;
+      if (h < 5) v = 15 + Math.random() * 8;
+      else if (h < 8) v = 30 + (h - 5) * 12 + Math.random() * 5;
+      else if (h < 12) v = 58 - (h - 8) * 3 + Math.random() * 8;
+      else if (h < 16) v = 38 + Math.random() * 12;
+      else if (h < 20) v = 50 + (h - 16) * 14 + Math.random() * 8;
+      else v = 90 - (h - 20) * 18 + Math.random() * 5;
+      p.push(Math.max(5, Math.round(v * 100) / 100));
+    }
+    return p;
+  }, []);
+
+  const startDemo = useCallback(() => {
+    if (demoRef.current) return;
+    const prices = generateDemoPrices();
+    let demoStep = 0;
+    resetLive();
+    setIsDemoRunning(true);
+
+    demoRef.current = setInterval(() => {
+      if (demoStep >= 288) {
+        clearInterval(demoRef.current);
+        demoRef.current = null;
+        setIsDemoRunning(false);
+        return;
+      }
+
+      const price = prices[demoStep];
+      const threshold = 48;
+      const optimal = price > threshold ? 50 : 0;
+      const deg = 5;
+      const r = Math.random();
+
+      let actual = 0;
+      if (price > 70) actual = 30 + Math.random() * 15;
+      else if (price > 55) actual = r > 0.35 ? 15 + Math.random() * 20 : 0;
+      else if (price > threshold) actual = r > 0.55 ? 10 + Math.random() * 15 : 0;
+
+      const gap = Math.max(0, (price - deg) * optimal) - Math.max(0, (price - deg) * actual);
+      let dt = 'Correct Idle';
+      if (Math.abs(optimal - actual) < 1 && optimal > 0) dt = 'Correct Dispatch';
+      else if (optimal > 5 && actual < 1) dt = 'Missed Arbitrage';
+      else if (optimal > 5 && actual > 0 && actual < optimal) dt = 'Partial Capture';
+
+      const conf = dt.includes('Correct') ? 96 : 78 + Math.random() * 15;
+      const rec = gap > 10 ? 'DISCHARGE' : actual > 0 && gap > 5 ? 'ADJUST' : 'HOLD';
+      const sev = gap > 200 ? 'CRITICAL' : gap > 80 ? 'HIGH' : gap > 20 ? 'MEDIUM' : 'LOW';
+
+      processStep({
+        step: demoStep,
+        price,
+        optimal_action: optimal,
+        actual_action: Math.round(actual * 100) / 100,
+        gap_step: Math.round(gap * 100) / 100,
+        recommendation: rec,
+        recommended_power: optimal,
+        expected_gain: Math.round(gap * 100) / 100,
+        confidence: Math.round(conf * 10) / 10,
+        severity: sev,
+        decision_type: dt,
+        message:
+          gap > 10
+            ? `Dispatch ${optimal} MW — price $${price.toFixed(2)} exceeds economic threshold`
+            : 'Near-optimal dispatch',
+      });
+
+      demoStep++;
+    }, 200);
+  }, [generateDemoPrices, resetLive, processStep]);
+
+  const stopDemo = useCallback(() => {
+    if (demoRef.current) {
+      clearInterval(demoRef.current);
+      demoRef.current = null;
+    }
+    setIsDemoRunning(false);
+  }, []);
+
+  // ... (باقي كود App.jsx — file upload, audit, etc.) ...
+
+  // ============================================
+  // في return() — غيّر الـ layout
+  // ============================================
+  return (
+    <div className="h-screen flex flex-col bg-[#060a13] text-slate-200" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+      {/* ─── HEADER ─── */}
+      <header className="h-14 flex items-center justify-between px-5 border-b border-[#1a2435] flex-shrink-0 bg-[#060a13]/80 backdrop-blur-md z-50">
+        <div className="flex items-center gap-3">
+          {/* Logo هنا حسب مشروعك */}
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-400 to-cyan-600 flex items-center justify-center">
+            <i className="fas fa-bolt text-white text-sm" />
+          </div>
+          <span className="font-bold text-sm tracking-wide text-white">PREDAIOT</span>
+          <span className="text-[10px] text-slate-600 ml-2 tracking-[2px]">
+            ECONOMIC DECISION INTELLIGENCE
+          </span>
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 text-xs font-mono">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                connected
+                  ? 'bg-emerald-500 animate-pulse'
+                  : isDemoRunning
+                  ? 'bg-cyan-500 animate-pulse'
+                  : 'bg-slate-600'
+              }`}
+            />
+            <span className="text-slate-500">
+              {connected ? 'LIVE' : isDemoRunning ? 'DEMO' : 'OFFLINE'}
+            </span>
+          </div>
+        </div>
+      </header>
+
+      {/* ─── MAIN: SIDEBAR + CONTENT ─── */}
+      <div className="flex flex-1 overflow-hidden">
+
+        {/* ═══ الشريط الجانبي الاستشاري ═══ */}
+        <AdvisorySidebar
+          step={liveStep}
+          connected={connected}
+          isDemoRunning={isDemoRunning}
+          onStartDemo={startDemo}
+          onStopDemo={stopDemo}
+        />
+
+        {/* ═══ المحتوى الرئيسي (محتواك الحالي) ═══ */}
+        <main className="flex-1 overflow-y-auto p-6">
+          {/* ... كل محتوى App.jsx الحالي يبقى هنا ... */}
+          {/* Upload section, results, charts, etc. */}
+        </main>
+      </div>
     </div>
   );
 }
