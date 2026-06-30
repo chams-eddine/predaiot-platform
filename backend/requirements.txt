@@ -6,3 +6,5 @@ pg8000
 python-multipart
 pandas
 openpyxl
+pypdf
+reportlab

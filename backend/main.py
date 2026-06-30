@@ -1,19 +1,23 @@
 import os
+import re
 import uuid
 import json
 import asyncio
+import secrets
+import urllib.request
+import urllib.error
 import pandas as pd
 from io import BytesIO, StringIO
-from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Body
+from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Body, Header, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import pulp
-from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime, text
+from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime, Boolean, text
 from sqlalchemy.orm import declarative_base, sessionmaker
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ==========================================
 # 1. Database Setup  (CORE LOGIC UNCHANGED — connection made fault-tolerant)
@@ -50,6 +54,27 @@ class DecisionAuditLog(Base):
     optimal_action = Column(Float)
     actual_action = Column(Float)
     economic_gap = Column(Float)
+
+
+class TrialLead(Base):
+    """
+    7-day free-diagnostic trial token. Each token gates access to the audit
+    endpoints and ties anonymous demo runs to a captured lead (email + asset).
+    Real auth (Clerk + per-user workspaces) is deferred — this is the minimum
+    needed to turn anonymous visitors into CRM leads.
+    """
+    __tablename__ = "trial_leads"
+    id = Column(Integer, primary_key=True, index=True)
+    token = Column(String, unique=True, index=True, nullable=False)
+    email = Column(String, index=True, nullable=False)
+    asset_name = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    audit_run_count = Column(Integer, default=0, nullable=False)
+    crm_synced = Column(Boolean, default=False, nullable=False)
+
+
+TRIAL_DURATION_DAYS = 7
 
 # NOTE: Base.metadata.create_all() is intentionally NOT called here at import time.
 # It is registered as a FastAPI startup event below (after `app` is created), so that
@@ -184,6 +209,184 @@ class AuditResponse(BaseModel):
 class HistoricalResponse(BaseModel):
     history_log: List[DecisionRecord]
 
+
+# ==========================================
+# 2.5  Trial Gate & Lead Capture
+# ==========================================
+# Commercial model (per PREDAIOT v2 brief): Free 7-day diagnostic → paid audit.
+# This block turns anonymous /api/v1/audit usage into captured leads. A real
+# multi-tenant auth layer (Clerk + Stripe) is deferred until first paying customer.
+
+class TrialStartRequest(BaseModel):
+    email: str
+    asset_name: Optional[str] = None
+    source: Optional[str] = None  # e.g. "landing", "demo-link", "outreach"
+
+
+class TrialStartResponse(BaseModel):
+    token: str
+    expires_at: str
+    booking_url: str  # surfaced upfront so the frontend can build the expiry CTA without a second request
+
+
+class TrialStatusResponse(BaseModel):
+    email: str
+    asset_name: Optional[str] = None
+    expires_at: str
+    audit_run_count: int
+    is_expired: bool
+
+
+# Set via env. mailto fallback so the CTA always resolves to *something*.
+CONSULTATION_BOOKING_URL = os.environ.get(
+    "CONSULTATION_BOOKING_URL",
+    "mailto:chams@preda-iot.com?subject=PREDAIOT%20Audit%20Consultation"
+)
+
+_EMAIL_SHAPE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _push_lead_to_airtable(token: str) -> bool:
+    """
+    Fire-and-forget CRM sync, designed to run inside FastAPI BackgroundTasks.
+    Re-fetches the lead by token (so we get fresh field values + can mark
+    crm_synced on success without sharing a session with the request handler).
+
+    Env: AIRTABLE_API_KEY required; AIRTABLE_BASE_ID defaults to the brief's
+    base (appeUbnHpGamghy8q); AIRTABLE_LEADS_TABLE defaults to "Leads".
+    Expected table fields: Email, Asset Name, Token, Trial Started, Source.
+
+    CRM down must never block trial creation — this returns False rather than
+    raising on any failure.
+    """
+    api_key = os.environ.get("AIRTABLE_API_KEY")
+    if not api_key:
+        return False
+
+    db = SessionLocal()
+    try:
+        lead = db.query(TrialLead).filter(TrialLead.token == token).first()
+        if lead is None:
+            return False
+
+        base_id = os.environ.get("AIRTABLE_BASE_ID", "appeUbnHpGamghy8q")
+        table   = os.environ.get("AIRTABLE_LEADS_TABLE", "Leads")
+        payload = json.dumps({
+            "fields": {
+                "Email":         lead.email,
+                "Asset Name":    lead.asset_name or "",
+                "Token":         lead.token,
+                "Trial Started": lead.created_at.isoformat() + "Z",
+                "Source":        "PREDAIOT diagnostic trial",
+            }
+        }).encode("utf-8")
+
+        url = f"https://api.airtable.com/v0/{base_id}/{urllib.request.quote(table)}"
+        req = urllib.request.Request(
+            url, data=payload, method="POST",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type":  "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                ok = 200 <= resp.status < 300
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
+            print(f"[trial] Airtable sync failed (non-fatal): {type(e).__name__}: {e}")
+            return False
+
+        if ok:
+            lead.crm_synced = True
+            db.commit()
+        return ok
+    finally:
+        db.close()
+
+
+def _create_trial_lead(email: str, asset_name: Optional[str]) -> TrialLead:
+    """Persist a new trial token (does not push to Airtable — caller decides)."""
+    db = SessionLocal()
+    try:
+        now = datetime.utcnow()
+        lead = TrialLead(
+            token=secrets.token_urlsafe(24),
+            email=email.strip().lower(),
+            asset_name=(asset_name or "").strip() or None,
+            created_at=now,
+            expires_at=now + timedelta(days=TRIAL_DURATION_DAYS),
+            audit_run_count=0,
+            crm_synced=False,
+        )
+        db.add(lead)
+        db.commit()
+        db.refresh(lead)
+        return lead
+    finally:
+        db.close()
+
+
+def require_trial_token(
+    x_trial_token: Optional[str] = Header(default=None, alias="X-Trial-Token"),
+) -> TrialLead:
+    """
+    FastAPI dependency. Validates X-Trial-Token header against TrialLead.
+      - missing → 401  (no token)
+      - unknown → 401  (bad token)
+      - expired → 402  (trial ended — frontend renders booking CTA)
+      - valid   → returns the TrialLead (detached). Audit endpoints schedule
+                  _bump_audit_count separately so status pings don't count.
+    """
+    if not x_trial_token:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "trial_token_missing",
+                "message": "Start your free 7-day diagnostic to run an audit.",
+                "booking_url": CONSULTATION_BOOKING_URL,
+            },
+        )
+    db = SessionLocal()
+    try:
+        lead = db.query(TrialLead).filter(TrialLead.token == x_trial_token).first()
+        if lead is None:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "code": "trial_token_invalid",
+                    "message": "Trial token not recognised. Start a fresh diagnostic.",
+                    "booking_url": CONSULTATION_BOOKING_URL,
+                },
+            )
+        if lead.expires_at < datetime.utcnow():
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "code": "trial_expired",
+                    "message": "Your 7-day free diagnostic has ended. Book a paid audit consultation to continue.",
+                    "booking_url": CONSULTATION_BOOKING_URL,
+                    "expired_at": lead.expires_at.isoformat() + "Z",
+                },
+            )
+        # Detach by expunging — caller can read fields, can't lazy-load.
+        db.expunge(lead)
+        return lead
+    finally:
+        db.close()
+
+
+def _bump_audit_count(token: str) -> None:
+    """Background-task helper. Increments audit_run_count after a successful audit."""
+    db = SessionLocal()
+    try:
+        lead = db.query(TrialLead).filter(TrialLead.token == token).first()
+        if lead is not None:
+            lead.audit_run_count = (lead.audit_run_count or 0) + 1
+            db.commit()
+    finally:
+        db.close()
+
+
 # ==========================================
 # 3. FastAPI Setup  (UNCHANGED CORE)
 # ==========================================
@@ -218,9 +421,40 @@ latest_live_result = {
 shared_audits = {}
 
 # ==========================================
-# 4. Optimizer  (UNCHANGED CORE)
+# 4. Optimizer  (multi-asset router)
 # ==========================================
-def run_optimizer(asset: AssetSpecs, prices: List[float]) -> dict:
+# PREDAIOT operates across the energy sector, not just BESS. Each asset class
+# has a different optimal-dispatch shape:
+#
+#   storage      — BESS / Pumped Hydro / H₂ with storage. MILP over time
+#                  (charge, discharge, SOC). Time-coupled.
+#   intermittent — Solar / Wind / Tidal. Generation is exogenous; the only
+#                  decision is whether to export or curtail. Per-step.
+#   dispatchable — Gas / Thermal / Hydro-no-storage / Nuclear / Geothermal.
+#                  Generator runs at p_max when price > marginal cost; idle
+#                  otherwise. Per-step (no time coupling without UC).
+#   load         — Electrolyzer / Desalination. When-to-run problem. Not yet
+#                  in v1; falls through to storage with safe defaults.
+#
+# The reduced-form EDV (price − marginal_cost) · dispatch is the same across
+# all three modes; `deg_cost` is interpreted as the per-MWh marginal cost.
+
+_STORAGE_TYPES      = {"bess", "battery", "storage", "pumped hydro", "pumpedhydro", "phs"}
+_INTERMITTENT_TYPES = {"solar", "pv", "wind", "tidal", "wave"}
+_DISPATCHABLE_TYPES = {"gas", "oilgas", "coal", "thermal", "chp", "nuclear", "geothermal", "hydro"}
+_LOAD_TYPES         = {"hydrogen", "electrolyzer", "desalination", "desal"}
+
+
+def _dispatch_mode(asset_type: Optional[str]) -> str:
+    t = (asset_type or "").strip().lower()
+    if t in _INTERMITTENT_TYPES: return "intermittent"
+    if t in _DISPATCHABLE_TYPES: return "dispatchable"
+    if t in _LOAD_TYPES:         return "load"
+    return "storage"  # default + explicit storage types
+
+
+def _run_optimizer_storage(asset: AssetSpecs, prices: List[float]) -> dict:
+    """Original BESS MILP. Unchanged from v1 — preserves the reference audit."""
     hours = range(len(prices))
     prob = pulp.LpProblem("PREDAIOT_MILP", pulp.LpMaximize)
     p_dis = pulp.LpVariable.dicts("Discharge", hours, lowBound=0, upBound=asset.p_max)
@@ -243,6 +477,54 @@ def run_optimizer(asset: AssetSpecs, prices: List[float]) -> dict:
             prob += soc[t] == asset.soc_init
     prob.solve(pulp.PULP_CBC_CMD(msg=0))
     return {t: (p_dis[t].varValue or 0.0) for t in hours}
+
+
+def _run_optimizer_intermittent(asset: AssetSpecs, time_series_list: list) -> dict:
+    """
+    Solar / Wind / Tidal: generation is exogenous (driven by irradiance, wind,
+    tide). The only economic decision is curtailment. Available capacity at
+    step t = actual_discharge + curtailment_mw (capped by p_max). The optimal
+    policy exports all of it when price > 0 and curtails when price ≤ 0.
+
+    Note: this gives a non-trivial audit ONLY when curtailment is logged. If
+    `curtailment_mw` is always 0 in the input, the optimal collapses to the
+    actual and DQ → 1.0 — which is the correct answer in that case.
+    """
+    out = {}
+    for i, ts in enumerate(time_series_list):
+        price = float(ts.get("price", 0))
+        actual = float(ts.get("actual_discharge", 0))
+        curt = float(ts.get("curtailment_mw", 0))
+        available = min(asset.p_max, max(0.0, actual + curt))
+        out[i] = available if price > asset.deg_cost else 0.0
+    return out
+
+
+def _run_optimizer_dispatchable(asset: AssetSpecs, prices: List[float]) -> dict:
+    """
+    Gas / Thermal / Nuclear / Geothermal / non-storage Hydro: the merit-order
+    rule. Run at p_max when price exceeds marginal generation cost (`deg_cost`
+    is interpreted as $/MWh marginal cost, including fuel/efficiency for gas).
+    Idle otherwise. Per-step, no time coupling. (Unit-commitment ramp / min-up
+    constraints are deliberately out of scope for v1; the optimal here is an
+    economic upper bound, which is the correct ceiling for an audit.)
+    """
+    return {i: (asset.p_max if p > asset.deg_cost else 0.0) for i, p in enumerate(prices)}
+
+
+def run_optimizer(asset: AssetSpecs, time_series_list: list) -> dict:
+    """
+    Dispatch router. Picks the right optimizer for the asset class and returns
+    `{step_index: optimal_dispatch_mw}`. Defaults to the storage MILP so legacy
+    audits (BESS, asset_type unset / 'Generic') produce identical numbers.
+    """
+    mode = _dispatch_mode(asset.asset_type)
+    if mode == "intermittent":
+        return _run_optimizer_intermittent(asset, time_series_list)
+    prices = [float(ts.get("price", 0)) for ts in time_series_list]
+    if mode == "dispatchable":
+        return _run_optimizer_dispatchable(asset, prices)
+    return _run_optimizer_storage(asset, prices)
 
 # ==========================================
 # 5. NEW: EDA Intelligence Engine
@@ -474,7 +756,15 @@ def _build_eda_metrics(
     curtailed_mw = sum(d.curtailment_mw or 0 for d in decision_log)
     overrides = sum(1 for d in decision_log if d.operator_override)
 
-    ede = (total_act / total_opt) if total_opt > 0 else 0
+    # Same Ch. 4.2 rule as dq_score: no opportunity + nothing captured = full
+    # efficiency (no leakage), not the literal 0/0 → 0 fallback.
+    _EDV_EPS = 1e-9
+    if total_opt > _EDV_EPS:
+        ede = total_act / total_opt
+    elif abs(total_act) <= _EDV_EPS:
+        ede = 1.0
+    else:
+        ede = 0.0
     elr = 1 - ede
     dispatch_acc = (correct / total) if total > 0 else 0
     fui = (with_forecast / total) if total > 0 else 0
@@ -613,8 +903,7 @@ def _risk_level(dq: float) -> str:
 # ==========================================
 def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: bool = True):
     global latest_live_result
-    prices = [ts["price"] for ts in time_series_list]
-    optimal_actions = run_optimizer(asset, prices)
+    optimal_actions = run_optimizer(asset, time_series_list)
     total_edv_opt, total_edv_act = 0.0, 0.0
     decision_log = []
     db = SessionLocal() if save_to_db else None
@@ -671,7 +960,17 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
         if db:
             db.close()
 
-    dq_score = (total_edv_act / total_edv_opt) if total_edv_opt > 0 else 0
+    # DQ Score per Reference Manual Ch. 4.2: when no arbitrage opportunity
+    # existed (EDV_opt ≈ 0) and the operator correctly captured none
+    # (EDV_act ≈ 0), nothing was missed — DQ is 1.0, not 0. Falling through
+    # to 0 here was scoring flat-price periods as "Severe risk".
+    _EDV_EPS = 1e-9
+    if total_edv_opt > _EDV_EPS:
+        dq_score = total_edv_act / total_edv_opt
+    elif abs(total_edv_act) <= _EDV_EPS:
+        dq_score = 1.0
+    else:
+        dq_score = 0.0
     total_gap = total_edv_opt - total_edv_act
 
     # Build EDA intelligence layers
@@ -723,11 +1022,52 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
     return result
 
 # ==========================================
-# 7. API Endpoints  (UNCHANGED CORE + universal file parser)
+# 7. API Endpoints  (UNCHANGED CORE + universal file parser + trial gate)
 # ==========================================
+
+# ---- Trial Gate endpoints --------------------------------------------------
+from fastapi import BackgroundTasks  # local import keeps the imports block tidy
+
+@app.post("/api/v1/trial/start", response_model=TrialStartResponse)
+async def start_trial(req: TrialStartRequest, background: BackgroundTasks):
+    """
+    Start a 7-day free diagnostic. Returns a trial_token that the frontend
+    sends as X-Trial-Token on subsequent /api/v1/audit calls.
+    Lead is pushed to Airtable in the background (best-effort).
+    """
+    email = (req.email or "").strip().lower()
+    if not _EMAIL_SHAPE.match(email):
+        raise HTTPException(status_code=400, detail="Please provide a valid work email.")
+    lead = _create_trial_lead(email, req.asset_name)
+    background.add_task(_push_lead_to_airtable, lead.token)
+    return TrialStartResponse(
+        token=lead.token,
+        expires_at=lead.expires_at.isoformat() + "Z",
+        booking_url=CONSULTATION_BOOKING_URL,
+    )
+
+
+@app.get("/api/v1/trial/status", response_model=TrialStatusResponse)
+async def trial_status(lead: TrialLead = Depends(require_trial_token)):
+    """Lightweight token-validity check for the frontend on page load."""
+    return TrialStatusResponse(
+        email=lead.email,
+        asset_name=lead.asset_name,
+        expires_at=lead.expires_at.isoformat() + "Z",
+        audit_run_count=lead.audit_run_count,
+        is_expired=lead.expires_at < datetime.utcnow(),
+    )
+
+# ---- Audit endpoints (gated by trial token) --------------------------------
 @app.post("/api/v1/audit", response_model=AuditResponse)
-async def calculate_gap(request: AuditRequest):
-    return process_calculation(request.asset, [ts.dict() for ts in request.time_series])
+async def calculate_gap(
+    request: AuditRequest,
+    background: BackgroundTasks,
+    lead: TrialLead = Depends(require_trial_token),
+):
+    result = process_calculation(request.asset, [ts.dict() for ts in request.time_series])
+    background.add_task(_bump_audit_count, lead.token)
+    return result
 
 # ==========================================
 # COLUMN ALIAS MAP — fuzzy resolver
@@ -1002,7 +1342,11 @@ def _parse_file_bytes(contents: bytes, filename: str) -> pd.DataFrame:
 
 
 @app.post("/api/v1/audit/file", response_model=AuditResponse)
-async def audit_from_file(file: UploadFile = File(...)):
+async def audit_from_file(
+    background: BackgroundTasks,
+    file: UploadFile = File(...),
+    lead: TrialLead = Depends(require_trial_token),
+):
     """
     Universal file ingestion — accepts CSV or Excel with ANY column naming convention.
 
@@ -1081,7 +1425,9 @@ async def audit_from_file(file: UploadFile = File(...)):
             'soc', 'grid_demand', 'curtailment_mw', 'operator_override', 'forecast_price'
         ]].to_dict('records')
 
-        return process_calculation(asset, time_series)
+        result = process_calculation(asset, time_series)
+        background.add_task(_bump_audit_count, lead.token)
+        return result
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"detail": f"Error parsing file: {str(e)}"})
@@ -1477,6 +1823,253 @@ async def generate_certificate_for_audit(data: AuditResponse):
 
 
 # ==========================================
+# Audit-report PDF (letterhead overlay)
+# ==========================================
+_LETTERHEAD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "letterhead.pdf")
+_LEGACY_EMAIL = b"al.shams.invest@gmail.com"
+_REPLACEMENT_EMAIL = "chams@preda-iot.com"
+
+
+def _load_patched_letterhead():
+    """
+    Open the letterhead and erase the legacy email from the page content stream.
+    The replacement email is NOT substituted in place — the footer font is a
+    glyph subset of the original characters, so chars like 'p', 'r', 'd', '-'
+    have no glyph and render blank. The new email is drawn in the reportlab
+    overlay instead, using a standard Helvetica that has every glyph.
+
+    This is real redaction (text removed from content stream), not a visual
+    cover-up — copy-paste from the rendered PDF can't leak the old address.
+    """
+    from pypdf import PdfReader
+    from pypdf.generic import DecodedStreamObject, NameObject
+
+    reader = PdfReader(_LETTERHEAD_PATH)
+    page = reader.pages[0]
+
+    contents = page.get_contents()
+    if hasattr(contents, "get_data"):
+        raw = contents.get_data()
+    else:
+        raw = b"".join(s.get_data() for s in contents)
+
+    # Replace the email text-show operator with an empty one. Keeps the
+    # surrounding font/transform state push valid for the PDF parser.
+    legacy_tj = b"(" + _LEGACY_EMAIL + b")Tj"
+    if legacy_tj not in raw:
+        return reader, page  # letterhead changed shape; leave it alone
+    patched = raw.replace(legacy_tj, b"()Tj")
+
+    new_stream = DecodedStreamObject()
+    new_stream.set_data(patched)
+    page[NameObject("/Contents")] = new_stream
+    return reader, page
+
+
+def _build_audit_pdf(audit: dict) -> bytes:
+    """
+    Render an Economic Decision Audit one-pager over the corporate letterhead.
+
+    Strategy:
+      1. Load letterhead with the legacy email replaced in its content stream.
+      2. Build a reportlab overlay (A4) containing only the audit content
+         in the safe band (y ≈ 120–680), and merge it onto the letterhead.
+    """
+    from io import BytesIO
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    from pypdf import PdfReader, PdfWriter
+
+    W, H = A4
+
+    overlay_buf = BytesIO()
+    c = canvas.Canvas(overlay_buf, pagesize=A4)
+
+    # ── Footer email (drawn here because the letterhead's font is a
+    # glyph subset; see _load_patched_letterhead). Position matches the
+    # original Tm matrix: 9pt Helvetica, baseline y=18.8, centred. ───────
+    c.setFillColorRGB(0.18, 0.18, 0.2)
+    c.setFont("Helvetica", 9)
+    c.drawCentredString(W / 2, 18.8, _REPLACEMENT_EMAIL)
+
+    # ── Title strip ────────────────────────────────────────────────────
+    c.setFillColorRGB(0.04, 0.14, 0.22)
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(60, 670, "ECONOMIC DECISION AUDIT")
+    c.setFont("Helvetica", 8)
+    c.setFillColorRGB(0.4, 0.4, 0.4)
+    c.drawString(60, 655, "Economic Decision Performance Certificate (EDPC) — PREDAIOT")
+
+    # ── Asset header ───────────────────────────────────────────────────
+    asset_name = audit.get("asset_name", "Energy Asset")
+    asset_type = audit.get("asset_type", "Generic")
+    period     = audit.get("audit_period_label", "—")
+    issued_at  = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+
+    c.setFillColorRGB(0.18, 0.18, 0.2)
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(60, 628, asset_name)
+    c.setFont("Helvetica", 10)
+    c.setFillColorRGB(0.35, 0.35, 0.4)
+    c.drawString(60, 613, f"{asset_type}   ·   {period}   ·   Issued {issued_at}")
+
+    # ── Executive Summary block ────────────────────────────────────────
+    edv_opt = float(audit.get("edv_optimal_total", 0) or 0)
+    edv_act = float(audit.get("edv_actual_total", 0) or 0)
+    gap     = float(audit.get("total_gap_usd", 0) or 0)
+    dq_pct  = float(audit.get("dq_score", 0) or 0) * 100.0
+    risk    = (audit.get("risk_level") or "Moderate")
+
+    y = 575
+    c.setFillColorRGB(0.04, 0.14, 0.22)
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(60, y, "EXECUTIVE SUMMARY")
+    c.setStrokeColorRGB(0.04, 0.14, 0.22)
+    c.setLineWidth(0.6)
+    c.line(60, y - 4, 535, y - 4)
+
+    rows = [
+        ("Economic Potential",      f"${edv_opt:,.2f}"),
+        ("Captured Value",          f"${edv_act:,.2f}"),
+        ("Destroyed Value (Gap)",   f"${gap:,.2f}"),
+        ("Decision Quality (DQ)",   f"{dq_pct:.1f} / 100"),
+        ("Risk Level",              risk.upper()),
+    ]
+    y -= 22
+    c.setFillColorRGB(0.18, 0.18, 0.2)
+    c.setFont("Helvetica", 11)
+    for label, value in rows:
+        c.drawString(72, y, label)
+        c.drawRightString(535, y, value)
+        y -= 18
+
+    # ── Top Root Causes ────────────────────────────────────────────────
+    y -= 12
+    c.setFillColorRGB(0.04, 0.14, 0.22)
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(60, y, "TOP ROOT CAUSES")
+    c.line(60, y - 4, 535, y - 4)
+    y -= 20
+
+    root_causes = audit.get("root_causes") or []
+    c.setFillColorRGB(0.18, 0.18, 0.2)
+    c.setFont("Helvetica", 10)
+    if root_causes:
+        for i, rc in enumerate(root_causes[:3], 1):
+            cat = rc.get("category") if isinstance(rc, dict) else getattr(rc, "category", "")
+            pct = rc.get("contribution_pct") if isinstance(rc, dict) else getattr(rc, "contribution_pct", 0)
+            usd = rc.get("loss_usd") if isinstance(rc, dict) else getattr(rc, "loss_usd", 0)
+            c.drawString(72, y, f"{i}. {cat}")
+            c.drawRightString(535, y, f"{float(pct or 0):.1f}%   (${float(usd or 0):,.0f})")
+            y -= 16
+    else:
+        c.setFillColorRGB(0.5, 0.5, 0.55)
+        c.drawString(72, y, "No material root causes identified in this audit period.")
+        y -= 16
+
+    # ── Top Opportunities ──────────────────────────────────────────────
+    y -= 12
+    c.setFillColorRGB(0.04, 0.14, 0.22)
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(60, y, "TOP OPPORTUNITIES   (annualised)")
+    c.line(60, y - 4, 535, y - 4)
+    y -= 20
+
+    opps = audit.get("opportunities") or []
+    c.setFillColorRGB(0.18, 0.18, 0.2)
+    c.setFont("Helvetica", 10)
+    for i, op in enumerate(opps[:3], 1):
+        name = op.get("name") if isinstance(op, dict) else getattr(op, "name", "")
+        gain = op.get("annual_gain_usd") if isinstance(op, dict) else getattr(op, "annual_gain_usd", 0)
+        diff = op.get("difficulty") if isinstance(op, dict) else getattr(op, "difficulty", "")
+        c.drawString(72, y, f"{i}. {name}")
+        c.setFillColorRGB(0.55, 0.55, 0.6)
+        c.setFont("Helvetica-Oblique", 9)
+        c.drawString(80, y - 12, str(diff))
+        c.setFillColorRGB(0.18, 0.18, 0.2)
+        c.setFont("Helvetica", 10)
+        c.drawRightString(535, y, f"${float(gain or 0):,.0f}")
+        y -= 28
+
+    # ── Certification block ───────────────────────────────────────────
+    cert = _build_certificate(audit)
+    y -= 8
+    c.setFillColorRGB(0.04, 0.14, 0.22)
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(60, y, "CERTIFICATION")
+    c.line(60, y - 4, 535, y - 4)
+    y -= 18
+    c.setFillColorRGB(0.18, 0.18, 0.2)
+    c.setFont("Helvetica", 9)
+    cert_lines = [
+        f"Certificate ID:  {cert.get('certificate_id', '—')}",
+        f"Issued:          {cert.get('issued_at', '—')}",
+        f"Rating:          {cert.get('rating', '—')}  ({cert.get('rating_label', '')})    Composite {cert.get('composite_score', 0)}/100",
+        f"Methodology:     {cert.get('methodology', '—')}",
+        f"Standard:        {cert.get('standard', '—')}",
+    ]
+    for line in cert_lines:
+        c.drawString(72, y, line)
+        y -= 13
+
+    # Auditor signature strip (handoff line — no pricing, per Sec. 2.2)
+    y -= 6
+    c.setFillColorRGB(0.4, 0.4, 0.45)
+    c.setFont("Helvetica-Oblique", 8)
+    c.drawString(60, y, "For an Economic Audit consultation, contact " + _REPLACEMENT_EMAIL + ".")
+
+    c.save()
+    overlay_buf.seek(0)
+
+    # ── Merge overlay onto the patched letterhead ──────────────────────
+    _letterhead_reader, page = _load_patched_letterhead()
+    overlay = PdfReader(overlay_buf)
+    page.merge_page(overlay.pages[0])
+    writer = PdfWriter()
+    writer.add_page(page)
+
+    out = BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+@app.post("/api/v1/audit/pdf")
+async def generate_audit_pdf(
+    data: AuditResponse,
+    lead: TrialLead = Depends(require_trial_token),
+):
+    """
+    Produce a branded PDF of the supplied audit result, rendered over the
+    corporate letterhead. Gated by trial token like the audit endpoints.
+    """
+    pdf_bytes = _build_audit_pdf(data.dict())
+    safe_asset = "".join(ch for ch in (data.asset_name or "audit") if ch.isalnum() or ch in "-_") or "audit"
+    filename = f"PREDAIOT_Audit_{safe_asset}_{datetime.utcnow().strftime('%Y%m%d')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/v1/audit/pdf/latest")
+async def get_latest_audit_pdf(lead: TrialLead = Depends(require_trial_token)):
+    """Convenience: PDF for the most recent audit on the server."""
+    global latest_live_result
+    data = latest_live_result if isinstance(latest_live_result, dict) else latest_live_result.dict()
+    if not data or not data.get("dq_score"):
+        return JSONResponse(status_code=404, content={"detail": "No audit has been run yet."})
+    pdf_bytes = _build_audit_pdf(data)
+    safe_asset = "".join(ch for ch in (data.get("asset_name") or "audit") if ch.isalnum() or ch in "-_") or "audit"
+    filename = f"PREDAIOT_Audit_{safe_asset}_{datetime.utcnow().strftime('%Y%m%d')}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ==========================================
 # NEW: Claude AI Enhancement Proxy
 # ==========================================
 @app.post("/api/v1/ai-enhance")
@@ -1521,17 +2114,8 @@ try:
         print("[startup] Fix: ensure your Render Build Command runs 'npm run build' inside frontend/ before starting uvicorn.")
 except Exception as e:
     print(f"[startup] ERROR mounting frontend: {e}")
-    from fastapi.staticfiles import StaticFiles
-import os
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FRONTEND_DIST = os.path.join(BASE_DIR, "../frontend/dist")
 
-app.mount(
-    "/",
-    StaticFiles(directory=FRONTEND_DIST, html=True),
-    name="frontend"
-)
 @app.get("/health")
 def health():
     return {"ok": True}
