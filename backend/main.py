@@ -21,18 +21,21 @@ from datetime import datetime
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./predaiot_audit.db")
 
 # Render's managed Postgres sometimes gives "postgres://" — SQLAlchemy 2.x needs "postgresql://"
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+if DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://")
 
 if "sqlite" in DATABASE_URL:
-    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False}
+    )
 else:
-    # connect_timeout: fail fast instead of hanging forever during deploy boot
-    # pool_pre_ping: avoid stale-connection errors on Render's free-tier DBs
     engine = create_engine(
         DATABASE_URL,
         pool_pre_ping=True,
-        connect_args={"connect_timeout": 5},
+        pool_recycle=300,
+        pool_size=5,
+        max_overflow=10
     )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
