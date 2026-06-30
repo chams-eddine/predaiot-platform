@@ -1,8 +1,0 @@
-fastapi
-uvicorn
-pulp
-sqlalchemy
-pg8000
-python-multipart
-pandas
-openpyxl

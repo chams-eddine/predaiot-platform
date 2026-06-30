@@ -8,7 +8,11 @@
   },
   "scripts": {
     "dev": "vite",
+<<<<<<< Updated upstream
     "build": "vite build",
+=======
+    "build": "node node_modules/vite/bin/vite.js build",
+>>>>>>> Stashed changes
     "preview": "vite preview"
   },
   "dependencies": {
@@ -21,4 +25,8 @@
     "@vitejs/plugin-react": "^4.3.4",
     "vite": "^7.3.0"
   }
+<<<<<<< Updated upstream
 }
+=======
+}
+>>>>>>> Stashed changes

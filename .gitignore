@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 # Backend (Python)
 backend/venv/
 backend/__pycache__/
@@ -12,6 +13,9 @@ frontend/dist/
 dist-ssr/
 *.local
 
+=======
+<<<<<<< HEAD
+>>>>>>> Stashed changes
 # Logs
 logs
 *.log
@@ -31,4 +35,18 @@ lerna-debug.log*
 *.njsproj
 *.sln
 *.sw?
+<<<<<<< Updated upstream
 frontend/dist/
+=======
+=======
+# تجاهل ملفات بايثون الثقيلة
+backend/venv/
+backend/__pycache__/
+*.pyc
+*.db
+
+# تجاهل ملفات 노ود الثقيلة
+frontend/node_modules/
+frontend/dist/
+>>>>>>> 180d70a33735ed0cd92507e5f3c70c973cf18fe2
+>>>>>>> Stashed changes
