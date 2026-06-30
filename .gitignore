@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # تجاهل ملفات بايثون الثقيلة
 backend/venv/
 backend/__pycache__/
@@ -7,3 +8,29 @@ backend/__pycache__/
 # تجاهل ملفات 노ود الثقيلة
 frontend/node_modules/
 frontend/dist/
+=======
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+>>>>>>> e4bc5674063719728b218cde9d89ad9d50337ff7
