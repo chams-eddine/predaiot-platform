@@ -16,13 +16,24 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 
 # ==========================================
-# 1. Database Setup  (UNCHANGED CORE)
+# 1. Database Setup  (CORE LOGIC UNCHANGED — connection made fault-tolerant)
 # ==========================================
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./predaiot_audit.db")
+
+# Render's managed Postgres sometimes gives "postgres://" — SQLAlchemy 2.x needs "postgresql://"
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
 if "sqlite" in DATABASE_URL:
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 else:
-    engine = create_engine(DATABASE_URL)
+    # connect_timeout: fail fast instead of hanging forever during deploy boot
+    # pool_pre_ping: avoid stale-connection errors on Render's free-tier DBs
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        connect_args={"connect_timeout": 5},
+    )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -37,7 +48,10 @@ class DecisionAuditLog(Base):
     actual_action = Column(Float)
     economic_gap = Column(Float)
 
-Base.metadata.create_all(bind=engine)
+# NOTE: Base.metadata.create_all() is intentionally NOT called here at import time.
+# It is registered as a FastAPI startup event below (after `app` is created), so that
+# uvicorn binds the port FIRST and Render's port scan succeeds, regardless of how long
+# the DB connection takes. See the @app.on_event("startup") handler near the FastAPI setup.
 
 # ==========================================
 # 2. Data Models  (UNCHANGED CORE + NEW FIELDS)
@@ -176,6 +190,23 @@ app.add_middleware(
     allow_origins=["*"], allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"]
 )
+
+@app.on_event("startup")
+async def init_database_tables():
+    """
+    Runs AFTER uvicorn has already bound to $PORT and started accepting connections.
+    This guarantees Render's port scan succeeds even if the DB is slow/unreachable —
+    the table creation no longer blocks process startup. Run in a thread so a slow/
+    hanging DB connection can never block the asyncio event loop either.
+    """
+    def _create_tables():
+        try:
+            Base.metadata.create_all(bind=engine)
+            print("[startup] Database tables ready.")
+        except Exception as e:
+            print(f"[startup] WARNING: could not initialize database tables: {e}")
+            print("[startup] App is live. DB-dependent endpoints may fail until DB is reachable.")
+    await asyncio.to_thread(_create_tables)
 
 latest_live_result = {
     "edv_optimal_total": 0, "edv_actual_total": 0,
@@ -1474,11 +1505,16 @@ async def ai_enhance(request: Dict[str, Any] = Body(...)):
 
 
 # ==========================================
-# 8. Serve Frontend  (UNCHANGED CORE)
+# 8. Serve Frontend  (logic unchanged — now logs clearly instead of failing silently)
 # ==========================================
 try:
     frontend_path = os.path.abspath("../frontend/dist")
     if os.path.exists(frontend_path):
         app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
-except Exception:
-    pass
+        print(f"[startup] Frontend mounted successfully from: {frontend_path}")
+    else:
+        print(f"[startup] WARNING: Frontend build not found at {frontend_path}.")
+        print("[startup] The React app was not built before backend startup — the API will work, but the website will show a blank page.")
+        print("[startup] Fix: ensure your Render Build Command runs 'npm run build' inside frontend/ before starting uvicorn.")
+except Exception as e:
+    print(f"[startup] ERROR mounting frontend: {e}")
