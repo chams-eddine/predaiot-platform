@@ -1521,3 +1521,17 @@ try:
         print("[startup] Fix: ensure your Render Build Command runs 'npm run build' inside frontend/ before starting uvicorn.")
 except Exception as e:
     print(f"[startup] ERROR mounting frontend: {e}")
+    from fastapi.staticfiles import StaticFiles
+import os
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FRONTEND_DIST = os.path.join(BASE_DIR, "../frontend/dist")
+
+app.mount(
+    "/",
+    StaticFiles(directory=FRONTEND_DIST, html=True),
+    name="frontend"
+)
+@app.get("/health")
+def health():
+    return {"ok": True}
