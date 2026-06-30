@@ -6,6 +6,44 @@ import {
 } from 'recharts';
 
 // ══════════════════════════════════════════════════════════════════════
+// TRIAL GATE — 7-day free diagnostic token (lead capture)
+// Real auth (Clerk + per-user workspaces) is deferred. This wires every
+// /api/v1/audit* call through an X-Trial-Token header and surfaces a
+// gate modal on 401 / "book consultation" CTA on 402.
+// ══════════════════════════════════════════════════════════════════════
+const TRIAL_STORAGE_KEY = 'predaiot.trial.v1';
+
+const trialStore = {
+  get: () => {
+    try { return JSON.parse(localStorage.getItem(TRIAL_STORAGE_KEY) || 'null'); }
+    catch { return null; }
+  },
+  set: (v) => { try { localStorage.setItem(TRIAL_STORAGE_KEY, JSON.stringify(v)); } catch {} },
+  clear: () => { try { localStorage.removeItem(TRIAL_STORAGE_KEY); } catch {} },
+};
+
+axios.interceptors.request.use((cfg) => {
+  const t = trialStore.get();
+  if (t?.token) cfg.headers['X-Trial-Token'] = t.token;
+  return cfg;
+});
+
+axios.interceptors.response.use(
+  (r) => r,
+  (err) => {
+    const status = err?.response?.status;
+    const detail = err?.response?.data?.detail;
+    if (status === 401 && detail?.code?.startsWith('trial_token')) {
+      window.dispatchEvent(new CustomEvent('predaiot:trial-required', { detail }));
+    } else if (status === 402 && detail?.code === 'trial_expired') {
+      trialStore.clear();
+      window.dispatchEvent(new CustomEvent('predaiot:trial-expired', { detail }));
+    }
+    return Promise.reject(err);
+  }
+);
+
+// ══════════════════════════════════════════════════════════════════════
 // DESIGN SYSTEM — PREDAIOT Economic Decision Audit™
 // ══════════════════════════════════════════════════════════════════════
 const DS = {
@@ -244,6 +282,117 @@ const FileUploadZone = ({ onFile, loading }) => {
 // ══════════════════════════════════════════════════════════════════════
 // EMPTY / INITIAL STATE
 // ══════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════
+// SIM PROFILES — per-sector synthetic SCADA payloads for /ws/live demos.
+// Each profile maps to a backend dispatch mode (see _dispatch_mode in main.py)
+// so the live decision core sees realistic data for the asset class.
+// ══════════════════════════════════════════════════════════════════════
+const SIM_PROFILES = {
+  bess: {
+    label: 'BESS · Battery storage',
+    asset_id: 'DEMO_BESS_50MW',
+    p_max: 50, deg_cost: 5,
+    init: (ref) => { ref.soc = 0.5; ref.step = 0; },
+    tick: (ref) => {
+      ref.step += 1;
+      const t = ref.step;
+      const price = Math.max(3, 45 + 55 * Math.sin((t - 18) * Math.PI / 36) + (Math.random() - 0.5) * 14);
+      const curtailment = (t % 23 === 0) ? Math.round(8 + Math.random() * 20) : 0;
+      const willDischarge = price > 70 && ref.soc > 0.25;
+      const willCharge = (price < 25 || curtailment > 0) && ref.soc < 0.85;
+      const actual_discharge = willDischarge ? Math.round(20 + Math.random() * 25) : 0;
+      const actual_charge = willCharge ? Math.round(10 + Math.random() * 15) : 0;
+      ref.soc = Math.max(0.1, Math.min(0.95, ref.soc + actual_charge * 0.004 - actual_discharge * 0.004));
+      return {
+        market_price: Math.round(price * 100) / 100,
+        actual_discharge, actual_charge,
+        soc: Math.round(ref.soc * 1000) / 1000,
+        p_max: 50, e_max: 100,
+        eta_charge: 0.95, eta_discharge: 0.95,
+        deg_cost: 5, curtailment,
+        forecast_price: Math.round(Math.max(3, price * (0.85 + Math.random() * 0.3)) * 100) / 100,
+        grid_limit: 50,
+      };
+    },
+  },
+  solar: {
+    label: 'Solar · 30 MW PV plant',
+    asset_id: 'DEMO_SOLAR_30MW',
+    p_max: 30, deg_cost: 0.5,
+    init: (ref) => { ref.step = 0; },
+    tick: (ref) => {
+      ref.step += 1;
+      const t = ref.step;
+      // Irradiance bell curve over a 36-step "day". Negative when sun is down.
+      const tod = ((t % 36) - 18) / 9; // -2..+2 across the daytime arc
+      const irradiance = Math.max(0, Math.cos((tod * Math.PI) / 4));
+      const available = Math.round(30 * irradiance * (0.9 + Math.random() * 0.2));
+      // Market price: morning peak, midday dip from oversupply, evening peak. Can go negative.
+      const price = 50 + 30 * Math.sin((t - 6) * Math.PI / 36) - 25 * Math.exp(-Math.pow((t % 36) - 18, 2) / 30) + (Math.random() - 0.5) * 10;
+      // Operator runs naive: always export everything. Curtail nothing — leaves money on the table at negative prices.
+      const curtailment = 0;
+      const actual_discharge = available;
+      return {
+        market_price: Math.round(price * 100) / 100,
+        actual_discharge, actual_charge: 0,
+        p_max: 30, e_max: 0,
+        deg_cost: 0.5, curtailment,
+        forecast_price: Math.round(Math.max(-20, price * (0.85 + Math.random() * 0.3)) * 100) / 100,
+        grid_limit: 30,
+      };
+    },
+  },
+  wind: {
+    label: 'Wind · 60 MW farm',
+    asset_id: 'DEMO_WIND_60MW',
+    p_max: 60, deg_cost: 1.0,
+    init: (ref) => { ref.step = 0; ref.windState = 0.6; },
+    tick: (ref) => {
+      ref.step += 1;
+      const t = ref.step;
+      // Wind speed random walk (AR(1)-ish) — gusts and lulls
+      ref.windState = Math.max(0, Math.min(1, ref.windState + (Math.random() - 0.5) * 0.18));
+      const available = Math.round(60 * ref.windState);
+      // Wind tends to blow at night — overnight glut depresses price
+      const price = 40 + 35 * Math.sin((t - 30) * Math.PI / 36) + (Math.random() - 0.5) * 18 - 30 * Math.max(0, ref.windState - 0.7);
+      // Operator curtails only during forced events (system operator instruction)
+      const curtailment = (t % 17 === 0 && ref.windState > 0.6) ? Math.round(available * 0.4) : 0;
+      const actual_discharge = Math.max(0, available - curtailment);
+      return {
+        market_price: Math.round(price * 100) / 100,
+        actual_discharge, actual_charge: 0,
+        p_max: 60, e_max: 0,
+        deg_cost: 1.0, curtailment,
+        forecast_price: Math.round(price * (0.8 + Math.random() * 0.4) * 100) / 100,
+        grid_limit: 60,
+      };
+    },
+  },
+  gas: {
+    label: 'Gas · 100 MW CCGT',
+    asset_id: 'DEMO_GAS_100MW',
+    p_max: 100, deg_cost: 28,
+    init: (ref) => { ref.step = 0; ref.lastRun = false; },
+    tick: (ref) => {
+      ref.step += 1;
+      const t = ref.step;
+      const price = Math.max(5, 50 + 60 * Math.sin((t - 18) * Math.PI / 36) + (Math.random() - 0.5) * 22);
+      // Operator follows a fixed schedule (runs 06:00–22:00 regardless of price) instead of merit-order.
+      const tod = t % 36;
+      const scheduleOn = tod >= 8 && tod <= 28;
+      const actual_discharge = scheduleOn ? 75 + Math.round((Math.random() - 0.5) * 20) : 0;
+      return {
+        market_price: Math.round(price * 100) / 100,
+        actual_discharge, actual_charge: 0,
+        p_max: 100, e_max: 0,
+        deg_cost: 28, curtailment: 0,
+        forecast_price: Math.round(price * (0.9 + Math.random() * 0.2) * 100) / 100,
+        grid_limit: 100,
+      };
+    },
+  },
+};
+
 const EMPTY = {
   edv_optimal_total: 0, edv_actual_total: 0, dq_score: 0,
   total_gap_usd: 0, decision_log: [],
@@ -253,6 +402,184 @@ const EMPTY = {
   heat_map: [], financial_leakage: null,
   ai_commentary: '', counterfactual_summary: '',
 };
+
+// ══════════════════════════════════════════════════════════════════════
+// TRIAL UI — gate modal + expired CTA
+// ══════════════════════════════════════════════════════════════════════
+const overlayStyle = {
+  position: 'fixed', inset: 0, zIndex: 1000,
+  background: 'rgba(3, 5, 8, 0.78)', backdropFilter: 'blur(6px)',
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  padding: 24,
+};
+const cardStyle = {
+  width: '100%', maxWidth: 460, background: DS.bgRaised,
+  border: `1px solid ${DS.borderHi}`, borderRadius: DS.r16,
+  padding: 28, fontFamily: DS.sans, color: DS.text,
+  boxShadow: '0 30px 80px rgba(0,0,0,0.55)',
+};
+const inputStyle = {
+  width: '100%', padding: '11px 13px', marginBottom: 12,
+  background: DS.surface, border: `1px solid ${DS.border}`,
+  borderRadius: DS.r8, color: DS.text, fontSize: 13,
+  fontFamily: DS.sans, outline: 'none',
+};
+const primaryBtn = {
+  width: '100%', padding: '12px 16px', border: 'none',
+  borderRadius: DS.r8, background: DS.optimal, color: '#001b08',
+  fontWeight: 700, letterSpacing: '0.04em', cursor: 'pointer',
+  fontSize: 13,
+};
+
+function TrialGate({ busy, error, onSubmit, onDismiss }) {
+  const [email, setEmail] = useState('');
+  const [assetName, setAssetName] = useState('');
+  const submit = (e) => {
+    e.preventDefault();
+    if (!email.trim()) return;
+    onSubmit(email.trim(), assetName.trim());
+  };
+  return (
+    <div style={overlayStyle} role="dialog" aria-modal="true">
+      <div style={cardStyle}>
+        <div style={{ fontSize: 10, letterSpacing: '0.2em', color: DS.cyan, marginBottom: 6 }}>
+          FREE 7-DAY DIAGNOSTIC
+        </div>
+        <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>
+          See what your asset is leaving on the table
+        </div>
+        <div style={{ fontSize: 12, color: DS.sub, marginBottom: 20, lineHeight: 1.5 }}>
+          Get a free Economic Decision Audit for one asset. No CAPEX. No connection to your SCADA required.
+          Upload a CSV of one day of prices &amp; dispatch — we&rsquo;ll quantify the gap between captured and optimal value.
+        </div>
+        <form onSubmit={submit}>
+          <input
+            style={inputStyle}
+            type="email"
+            placeholder="Work email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            autoFocus
+            disabled={busy}
+          />
+          <input
+            style={inputStyle}
+            type="text"
+            placeholder="Asset name (optional) — e.g. Ibri 2 BESS"
+            value={assetName}
+            onChange={(e) => setAssetName(e.target.value)}
+            disabled={busy}
+          />
+          {error && (
+            <div style={{ color: DS.loss, fontSize: 11, marginBottom: 12 }}>{String(error)}</div>
+          )}
+          <button type="submit" style={{ ...primaryBtn, opacity: busy ? 0.6 : 1 }} disabled={busy}>
+            {busy ? 'Starting…' : 'Start free diagnostic →'}
+          </button>
+        </form>
+        <button
+          onClick={onDismiss}
+          style={{
+            marginTop: 12, width: '100%', padding: '8px',
+            background: 'transparent', color: DS.sub,
+            border: 'none', cursor: 'pointer', fontSize: 11,
+          }}
+        >
+          Just looking around
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TrialExpired({ info, onStartNew, onClose }) {
+  const bookingUrl = info?.booking_url || 'mailto:chams@preda-iot.com';
+  return (
+    <div style={overlayStyle} role="dialog" aria-modal="true">
+      <div style={cardStyle}>
+        <div style={{ fontSize: 10, letterSpacing: '0.2em', color: DS.warning, marginBottom: 6 }}>
+          FREE DIAGNOSTIC ENDED
+        </div>
+        <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 10 }}>
+          Ready to quantify the full opportunity?
+        </div>
+        <div style={{ fontSize: 12, color: DS.sub, marginBottom: 20, lineHeight: 1.5 }}>
+          {info?.message || 'Your 7-day free diagnostic has ended.'}
+          {' '}The next step is a consultation — a board-ready Economic Audit for your full portfolio with an EDPC certificate.
+        </div>
+        <a
+          href={bookingUrl}
+          target="_blank" rel="noreferrer"
+          style={{
+            display: 'block', textAlign: 'center', textDecoration: 'none',
+            padding: '12px 16px', borderRadius: DS.r8,
+            background: DS.optimal, color: '#001b08', fontWeight: 700,
+            letterSpacing: '0.04em', fontSize: 13, marginBottom: 10,
+          }}
+        >
+          Book audit consultation →
+        </a>
+        <button
+          onClick={onStartNew}
+          style={{
+            width: '100%', padding: '10px', background: 'transparent',
+            color: DS.text, border: `1px solid ${DS.border}`,
+            borderRadius: DS.r8, cursor: 'pointer', fontSize: 12, marginBottom: 6,
+          }}
+        >
+          Start a new trial with a different email
+        </button>
+        <button
+          onClick={onClose}
+          style={{
+            width: '100%', padding: '8px', background: 'transparent',
+            color: DS.dim, border: 'none', cursor: 'pointer', fontSize: 11,
+          }}
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// SESSION BADGE — honest header indicator (no more static "LIVE")
+// ══════════════════════════════════════════════════════════════════════
+function SessionBadge({ liveMode, simRunning, dataSource }) {
+  // Order matters: real WebSocket trumps a stale audit view.
+  let label, color;
+  if (liveMode) {
+    label = simRunning ? 'SIMULATING' : 'LIVE';
+    color = DS.optimal;
+  } else if (dataSource === 'demo') {
+    label = 'DEMO DATA';
+    color = DS.warning;
+  } else if (dataSource === 'upload') {
+    label = 'AUDIT';
+    color = DS.cyan;
+  } else if (dataSource === 'historical') {
+    label = 'HISTORICAL';
+    color = DS.blue;
+  } else {
+    label = 'IDLE';
+    color = DS.dim;
+  }
+  return (
+    <div
+      style={{ display: 'flex', gap: 6, alignItems: 'center' }}
+      title={`Session source: ${label.toLowerCase()}`}
+    >
+      <div style={{
+        width: 7, height: 7, borderRadius: '50%',
+        backgroundColor: color,
+        boxShadow: color === DS.dim ? 'none' : `0 0 8px ${color}`,
+      }} />
+      <span style={{ color, fontSize: 10, letterSpacing: '0.12em', fontWeight: 700 }}>{label}</span>
+    </div>
+  );
+}
 
 // ══════════════════════════════════════════════════════════════════════
 // MAIN APP
@@ -276,13 +603,75 @@ export default function App() {
   const [simRef]                          = useState({ current: null, soc: 0.5, step: 0 });
   const [certificate, setCertificate]     = useState(null);
   const [certLoading, setCertLoading]     = useState(false);
+  // Tracks the provenance of the data currently on screen so the header
+  // badge can stop lying. 'idle' | 'demo' | 'upload' | 'historical'
+  const [dataSource, setDataSource]       = useState('idle');
+  // Live Monitor simulator profile — drives the synthetic SCADA feed so
+  // prospects see a feed that matches the asset class they care about.
+  const [simProfile, setSimProfile]       = useState('bess');
 
-  // Live SCADA poll
+  // ── Trial gate state ──────────────────────────────────────────────
+  const [trial, setTrial]                 = useState(() => trialStore.get());
+  const [gateOpen, setGateOpen]           = useState(() => !trialStore.get());
+  const [gateBusy, setGateBusy]           = useState(false);
+  const [gateError, setGateError]         = useState('');
+  const [expiredInfo, setExpiredInfo]     = useState(null); // { booking_url, message } when 402
+
+  const requireTrial = useCallback(() => {
+    if (!trialStore.get()?.token) { setGateOpen(true); return false; }
+    return true;
+  }, []);
+
+  // React to interceptor events fired anywhere in the app
+  useEffect(() => {
+    const onRequired = () => { setTrial(null); setGateOpen(true); };
+    const onExpired  = (e) => { setTrial(null); setExpiredInfo(e.detail || {}); };
+    window.addEventListener('predaiot:trial-required', onRequired);
+    window.addEventListener('predaiot:trial-expired', onExpired);
+    return () => {
+      window.removeEventListener('predaiot:trial-required', onRequired);
+      window.removeEventListener('predaiot:trial-expired', onExpired);
+    };
+  }, []);
+
+  // Validate any stored token on mount; clear if rejected
+  useEffect(() => {
+    if (!trial?.token) return;
+    axios.get('/api/v1/trial/status').catch(() => {
+      trialStore.clear();
+      setTrial(null);
+      setGateOpen(true);
+    });
+  }, []); // intentional one-shot on mount
+
+  const startTrial = async (email, assetName) => {
+    setGateBusy(true);
+    setGateError('');
+    try {
+      const r = await axios.post('/api/v1/trial/start', { email, asset_name: assetName });
+      const next = { token: r.data.token, expires_at: r.data.expires_at, email, asset_name: assetName, booking_url: r.data.booking_url };
+      trialStore.set(next);
+      setTrial(next);
+      setGateOpen(false);
+      setExpiredInfo(null);
+    } catch (err) {
+      setGateError(err?.response?.data?.detail || 'Could not start trial. Try again.');
+    }
+    setGateBusy(false);
+  };
+
+  // Poll for the latest server-side audit result (populates view on cold load)
   useEffect(() => {
     const poll = async () => {
       try {
         const r = await axios.get('/api/latest');
-        if (r.data?.dq_score > 0) { setData(r.data); setShowUpload(false); setAiText(''); }
+        if (r.data?.dq_score > 0) {
+          setData(r.data);
+          // Only set if we haven't tagged from a fresher local action.
+          setDataSource((cur) => (cur === 'idle' ? 'historical' : cur));
+          setShowUpload(false);
+          setAiText('');
+        }
       } catch (_) {}
     };
     poll();
@@ -300,6 +689,7 @@ export default function App() {
 
   // ── Demo audit ─────────────────────────────────────────────────────
   const runDemo = async () => {
+    if (!requireTrial()) return;
     setLoading(true);
     setShowUpload(false);
     try {
@@ -321,6 +711,7 @@ export default function App() {
         time_series: ts,
       });
       setData(r.data);
+      setDataSource('demo');
       setAiText('');
       setActiveSection('exec');
     } catch (e) { console.error(e); }
@@ -329,6 +720,7 @@ export default function App() {
 
   // ── File upload ────────────────────────────────────────────────────
   const handleFile = async (file) => {
+    if (!requireTrial()) return;
     setUploading(true);
     setShowUpload(false);
     const fd = new FormData();
@@ -336,6 +728,7 @@ export default function App() {
     try {
       const r = await axios.post('/api/v1/audit/file', fd);
       setData(r.data);
+      setDataSource('upload');
       setAiText('');
       setActiveSection('exec');
     } catch (err) {
@@ -358,6 +751,31 @@ export default function App() {
       navigator.clipboard?.writeText(url);
       alert('Link copied!\n' + url);
     } catch (_) {}
+  };
+
+  // ── Download branded PDF (letterhead overlay) ──────────────────────
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const downloadPdf = async () => {
+    if (!data.dq_score) return alert('Run an audit first.');
+    if (!requireTrial()) return;
+    setPdfLoading(true);
+    try {
+      const r = await axios.post('/api/v1/audit/pdf', data, { responseType: 'blob' });
+      const disposition = r.headers?.['content-disposition'] || '';
+      const m = /filename="([^"]+)"/.exec(disposition);
+      const filename = m ? m[1] : `PREDAIOT_Audit_${(data.asset_name || 'asset').replace(/\s+/g, '_')}.pdf`;
+      const blobUrl = URL.createObjectURL(new Blob([r.data], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = blobUrl; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    } catch (err) {
+      // 401/402 are surfaced via the global interceptor (gate / expired modal)
+      if (err?.response?.status !== 401 && err?.response?.status !== 402) {
+        alert('PDF generation failed. Try again or contact support.');
+      }
+    }
+    setPdfLoading(false);
   };
 
   // ── Claude AI enhanced commentary ─────────────────────────────────
@@ -481,6 +899,25 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
   return (
     <div style={{ backgroundColor: DS.bg, color: DS.text, minHeight: '100vh', fontFamily: DS.sans, fontSize: 13 }}>
 
+      {/* ── TRIAL GATE MODAL ─────────────────────────────────────── */}
+      {gateOpen && (
+        <TrialGate
+          busy={gateBusy}
+          error={gateError}
+          onSubmit={startTrial}
+          onDismiss={() => setGateOpen(false)}
+        />
+      )}
+
+      {/* ── TRIAL EXPIRED CTA ────────────────────────────────────── */}
+      {expiredInfo && (
+        <TrialExpired
+          info={expiredInfo}
+          onStartNew={() => { setExpiredInfo(null); setGateOpen(true); }}
+          onClose={() => setExpiredInfo(null)}
+        />
+      )}
+
       {/* ── TOP BAR ──────────────────────────────────────────────── */}
       <header style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -511,11 +948,11 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
             {uploading ? 'PARSING…' : 'UPLOAD DATA'}
           </BtnOutline>
           <BtnOutline color={DS.warning} onClick={handleShare}>SHARE REPORT</BtnOutline>
+          <BtnOutline color={DS.purple} onClick={downloadPdf} disabled={pdfLoading || !data.dq_score}>
+            {pdfLoading ? 'BUILDING PDF…' : '⬇ DOWNLOAD PDF'}
+          </BtnOutline>
           <BtnOutline color={DS.dim} onClick={() => setShowMethodology(true)}>METHODOLOGY</BtnOutline>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <div style={{ width: 7, height: 7, borderRadius: '50%', backgroundColor: DS.optimal, boxShadow: `0 0 8px ${DS.optimal}` }} />
-            <span style={{ color: DS.dim, fontSize: 10, letterSpacing: '0.12em' }}>LIVE</span>
-          </div>
+          <SessionBadge liveMode={liveMode} simRunning={simRunning} dataSource={dataSource} />
         </div>
       </header>
 
@@ -560,8 +997,10 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
         {/* ── MAIN CONTENT ──────────────────────────────────────── */}
         <main style={{ flex: 1, padding: '28px 32px', maxWidth: 'calc(100vw - 242px)', overflowX: 'hidden' }}>
 
-          {/* Welcome / empty state */}
-          {!hasData && !showUpload && (
+          {/* Welcome / empty state — only shown when on a data-dependent section
+              with no audit loaded. Skipped for live/appendix/govern which work
+              independently of audit data. */}
+          {!hasData && !showUpload && !['live', 'appendix', 'govern'].includes(activeSection) && (
             <div style={{ textAlign: 'center', padding: '70px 40px' }}>
               <div style={{ fontSize: 48, marginBottom: 16 }}>⚡</div>
               <div style={{ color: DS.text, fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Economic Decision Audit™</div>
@@ -574,7 +1013,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
               <div style={{ color: DS.dim, fontSize: 11, marginBottom: 28 }}>
                 Live SCADA/EMS streaming · Batch file audit · EDPC Certification — all on one asset-agnostic engine.
               </div>
-              <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+              <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
                 <BtnOutline color={DS.cyan} onClick={runDemo} disabled={loading}>
                   {loading ? 'OPTIMIZING…' : 'RUN DEMO AUDIT'}
                 </BtnOutline>
@@ -584,12 +1023,18 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                 <BtnOutline color={DS.warning} onClick={() => setActiveSection('live')}>
                   ⚡ LIVE MONITOR
                 </BtnOutline>
+                <BtnOutline color={DS.purple} onClick={() => setActiveSection('appendix')}>
+                  📐 SEE THE MATH
+                </BtnOutline>
+              </div>
+              <div style={{ color: DS.dim, fontSize: 10, marginTop: 24 }}>
+                Don&rsquo;t have data handy? RUN DEMO replays the reference 500 MW BESS audit (~7s on CBC).
               </div>
             </div>
           )}
 
           {/* ══ S01: Executive Summary ══════════════════════════════ */}
-          {activeSection === 'exec' && (
+          {hasData && activeSection === 'exec' && (
             <div>
               <SectionHeader tag="01" title="Executive Summary" />
 
@@ -697,7 +1142,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
 
           {/* ══ S02: Economic Value Flow ════════════════════════════ */}
-          {activeSection === 'flow' && (
+          {hasData && activeSection === 'flow' && (
             <div>
               <SectionHeader tag="02" title="Economic Value Flow" />
               {!hasData ? <EmptyMsg>Run an audit to populate the economic flow.</EmptyMsg> : (
@@ -732,7 +1177,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
 
           {/* ══ S03: Decision Audit Trail™ ══════════════════════════ */}
-          {activeSection === 'timeline' && (
+          {hasData && activeSection === 'timeline' && (
             <div>
               <SectionHeader tag="03" title="Decision Audit Trail™ — Economic Decision Forensics" />
 
@@ -852,7 +1297,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
 
           {/* ══ S04: Root Cause Analysis ════════════════════════════ */}
-          {activeSection === 'rootcause' && (
+          {hasData && activeSection === 'rootcause' && (
             <div>
               <SectionHeader tag="04" title="Root Cause Analysis — Pareto" />
               {(data.root_causes || []).length === 0 ? <EmptyMsg>Run an audit to generate the root cause analysis.</EmptyMsg> : (
@@ -893,7 +1338,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
 
           {/* ══ S05: Counterfactual Simulation ══════════════════════ */}
-          {activeSection === 'counter' && (
+          {hasData && activeSection === 'counter' && (
             <div>
               <SectionHeader tag="05" title='Counterfactual Simulation — "What Would Have Happened?"' />
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16, marginBottom: 20 }}>
@@ -941,7 +1386,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
 
           {/* ══ S06: EDA Metrics ════════════════════════════════════ */}
-          {activeSection === 'metrics' && (
+          {hasData && activeSection === 'metrics' && (
             <div>
               <SectionHeader tag="06" title="Economic Decision Quality Metrics" />
               {!m ? <EmptyMsg>Run an audit to generate metrics.</EmptyMsg> : (
@@ -972,7 +1417,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
 
           {/* ══ S07: Financial Leakage ══════════════════════════════ */}
-          {activeSection === 'leakage' && (
+          {hasData && activeSection === 'leakage' && (
             <div>
               <SectionHeader tag="07" title="Financial Value Leakage" />
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 20 }}>
@@ -1033,7 +1478,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
 
           {/* ══ S08: Decision Heat Map ══════════════════════════════ */}
-          {activeSection === 'heatmap' && (
+          {hasData && activeSection === 'heatmap' && (
             <div>
               <SectionHeader tag="08" title="Decision Heat Map — 24 Hours" />
               <div style={{ display: 'flex', gap: 16, marginBottom: 20, flexWrap: 'wrap' }}>
@@ -1066,7 +1511,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
 
           {/* ══ S09: Economic Action Plan™ ══════════════════════════ */}
-          {activeSection === 'opps' && (
+          {hasData && activeSection === 'opps' && (
             <div>
               <SectionHeader tag="09" title="Economic Action Plan™ — Value Recovery Roadmap" />
 
@@ -1156,7 +1601,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
 
           {/* ══ S10: Economic Intelligence Report™ ═════════════════ */}
-          {activeSection === 'ai' && (
+          {hasData && activeSection === 'ai' && (
             <div>
               <SectionHeader tag="10" title="Economic Intelligence Report™ — Independent Assessment" />
 
@@ -1246,6 +1691,56 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {activeSection === 'govern' && (
             <div>
               <SectionHeader tag="11" title="Governance &amp; Decision Authority" />
+
+              {/* ── SCADA / EMS Integration Framework (credibility layer) ── */}
+              <Card style={{ marginBottom: 20 }}>
+                <Label style={{ marginBottom: 6 }}>SCADA / EMS Integration Framework</Label>
+                <div style={{ color: DS.sub, fontSize: 11, marginBottom: 18, lineHeight: 1.6 }}>
+                  PREDAIOT is an <span style={{ color: DS.text, fontWeight: 700 }}>Economic Advisory Observer</span>,
+                  not a control system. We do not issue dispatch commands to your asset by default. Three integration tiers,
+                  selected per deployment:
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+                  {[
+                    {
+                      n: '1', tag: 'READ ONLY', color: DS.optimal,
+                      head: 'Telemetry in, intelligence out',
+                      body: 'SCADA / EMS → PREDAIOT. Compute the audit, surface gaps and opportunities. Asset operates unchanged. No write path of any kind.',
+                      meta: 'Default for diagnostic + audit phases.',
+                    },
+                    {
+                      n: '2', tag: 'ADVISORY', color: DS.cyan,
+                      head: 'Operator-in-the-loop',
+                      body: 'PREDAIOT generates per-interval recommendations. Operator or duty engineer accepts, rejects, or adjusts. Every decision recorded for governance + override-audit trail.',
+                      meta: 'Default for pilot deployments.',
+                    },
+                    {
+                      n: '3', tag: 'CLOSED LOOP', color: DS.warning,
+                      head: 'Direct dispatch — opt-in only',
+                      body: 'PREDAIOT writes dispatch commands directly to the EMS or scheduler. Requires explicit customer opt-in, regulatory sign-off, and a documented kill-switch / fail-safe revert path.',
+                      meta: 'Available on request; not enabled by default.',
+                    },
+                  ].map((t) => (
+                    <div key={t.n} style={{ padding: 16, background: `${t.color}06`, border: `1px solid ${t.color}30`, borderRadius: DS.r12 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                        <div style={{ width: 26, height: 26, borderRadius: '50%', background: t.color, color: '#001b08', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 12 }}>{t.n}</div>
+                        <div style={{ color: t.color, fontSize: 10, letterSpacing: '0.2em', fontWeight: 700 }}>LEVEL {t.n} · {t.tag}</div>
+                      </div>
+                      <div style={{ color: DS.text, fontSize: 12, fontWeight: 700, marginBottom: 6 }}>{t.head}</div>
+                      <div style={{ color: DS.sub, fontSize: 11, lineHeight: 1.6, marginBottom: 8 }}>{t.body}</div>
+                      <div style={{ color: t.color, fontSize: 10, fontStyle: 'italic' }}>{t.meta}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ marginTop: 16, padding: 12, background: `${DS.optimal}08`, border: `1px solid ${DS.optimal}25`, borderRadius: DS.r8 }}>
+                  <div style={{ color: DS.optimal, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em' }}>CURRENT POSTURE</div>
+                  <div style={{ color: DS.sub, fontSize: 11, marginTop: 4, lineHeight: 1.6 }}>
+                    PREDAIOT ships at <span style={{ color: DS.optimal, fontWeight: 700 }}>Level 1–2</span> by default.
+                    No dispatch authority over your asset. Level 3 requires an explicit signed integration agreement and is never enabled silently.
+                  </div>
+                </div>
+              </Card>
+
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
                 <Card>
                   <Label style={{ marginBottom: 16 }}>Decision Authority Breakdown</Label>
@@ -1302,16 +1797,61 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {activeSection === 'appendix' && (
             <div>
               <SectionHeader tag="12" title="Mathematical Appendix" />
+              <div style={{ color: DS.sub, fontSize: 11, marginBottom: 16, lineHeight: 1.6 }}>
+                Canonical formulas from the PREDAIOT Reference Manual (Ch. 4–6). These are the same equations the audit
+                engine computes — naming and arithmetic match <span style={{ fontFamily: DS.mono, color: DS.cyan }}>backend/main.py</span> exactly.
+              </div>
               <Card>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
                   {[
-                    { name: 'Economic Decision Efficiency (EDE)', formula: 'EDE = V_captured / V_potential', desc: 'Primary performance ratio. Measures the fraction of available market value actually captured by the dispatch strategy.', units: 'Dimensionless [0, 1]' },
-                    { name: 'Economic Leakage (EL)', formula: 'EL = V_potential − V_captured', desc: 'Absolute revenue destroyed by sub-optimal dispatch decisions. Physically achievable but economically squandered value.', units: 'USD per audit period' },
-                    { name: 'Decision Quality Index (DQI)', formula: 'DQI = Σ(wᵢ · Sᵢ) / Σwᵢ', desc: 'Weighted composite score. wᵢ = economic impact weight of decision i; Sᵢ = binary correctness score for that decision.', units: 'Score [0, 100]' },
-                    { name: 'Step Economic Decision Value (EDV)', formula: 'EDV(t) = P(t) × D(t) − c_deg × D(t)', desc: 'P(t) = market price [$/MWh], D(t) = discharge power [MW], c_deg = degradation cost per MWh dispatched.', units: 'USD per timestep' },
-                    { name: 'Counterfactual Gap (CG)', formula: 'CG(t) = EDV_optimal(t) − EDV_actual(t)', desc: 'Per-timestep revenue gap between the MILP-optimal solution and actual recorded dispatch. Core of the PREDAIOT patent method.', units: 'USD per timestep' },
-                    { name: 'Economic Intelligence Score (EIS)', formula: 'EIS = 0.45·EDE + 0.30·DA + 0.15·FUI + 0.10·(1−ELR)', desc: 'Composite ISO-style index. DA = Dispatch Accuracy; FUI = Forecast Utilization Index; ELR = Economic Leakage Ratio.', units: 'Score [0, 100]' },
-                    { name: 'Annual Leakage Projection (ALP)', formula: 'ALP = EL_24h × 365', desc: 'Linear annualisation of single-period leakage. Assumes stationary price/dispatch patterns across the year.', units: 'USD / year' },
+                    {
+                      name: 'Economic Decision Value (EDV) — Master Definition',
+                      formula: 'EDV(d) = R(d) − C_op(d) − C_deg(d) − C_opp(d) − C_risk(d)',
+                      desc: 'Net economic value of decision d. R = revenue captured; C_op = operating cost; C_deg = degradation cost; C_opp = opportunity cost of foregone alternatives; C_risk = risk-adjusted reserve. Universal across asset classes (BESS, Solar, Wind, Gas, Hydro, Hydrogen, Desalination, Nuclear).',
+                      units: 'USD per decision',
+                    },
+                    {
+                      name: 'Step EDV — Implementation Form',
+                      formula: 'EDV(t) = P(t) · D(t) − c_deg · D(t)',
+                      desc: 'Reduced form used by run_optimizer and process_calculation. P(t) = market price [$/MWh]; D(t) = discharge power [MW]; c_deg = degradation cost per MWh dispatched. C_op / C_opp / C_risk fold into c_deg or are captured separately in the root-cause attribution.',
+                      units: 'USD per timestep',
+                    },
+                    {
+                      name: 'Decision Quality (DQ)',
+                      formula: 'DQ = EDV_actual / EDV_optimal',
+                      desc: 'Fraction of achievable economic value the asset actually captured. Boundary case per Ch. 4.2: when EDV_optimal ≈ 0 and EDV_actual ≈ 0 (no arbitrage opportunity existed and operator correctly took none) DQ = 1.0, not 0.',
+                      units: 'Dimensionless [0, 1]',
+                    },
+                    {
+                      name: 'Economic Gap (G) — “Destroyed Value”',
+                      formula: 'G = EDV_optimal − EDV_actual',
+                      desc: 'Absolute revenue physically achievable but lost to sub-optimal dispatch. Surfaced as “Destroyed Value (Gap)” in the UI and as the basis for Financial Leakage projections (G × 365 for annualised).',
+                      units: 'USD per audit period',
+                    },
+                    {
+                      name: 'Economic Theoretical Limit (ETL)',
+                      formula: 'ETL = max_{d ∈ D_feasible} EDV(d)   under perfect hindsight',
+                      desc: 'Upper bound on EDV achievable by ANY decision policy given the realised price/demand series. The MILP optimiser approximates ETL by solving with full price visibility — this is the ceiling for “Economic Potential”.',
+                      units: 'USD per audit period',
+                    },
+                    {
+                      name: 'Economic Capture Factor (ECF)',
+                      formula: 'ECF = EDV_actual / ETL',
+                      desc: 'Asset-vs-theoretical-best ratio. Lower than DQ in general because DQ measures against the same-horizon MILP solution, while ECF measures against the perfect-hindsight ceiling.',
+                      units: 'Dimensionless [0, 1]',
+                    },
+                    {
+                      name: 'Economic Intelligence Score (EIS)',
+                      formula: 'EIS = 0.45·EDE + 0.30·DA + 0.15·FUI + 0.10·(1−ELR)',
+                      desc: 'Composite 0–100 score blending Economic Decision Efficiency (EDE), Dispatch Accuracy (DA), Forecast Utilization Index (FUI), and one minus Economic Leakage Ratio (ELR). Note: EDE ≡ DQ by construction — both equal EDV_actual / EDV_optimal under the same audit pipeline, so the 45% capture weight is functionally a “DQ-weighted-twice” signal in the current implementation.',
+                      units: 'Score [0, 100]',
+                    },
+                    {
+                      name: 'Annual Leakage Projection',
+                      formula: 'ALP = G_24h × 365',
+                      desc: 'Linear annualisation of single-period gap. Assumes stationary price/dispatch patterns across the year — adequate for prospect-stage diagnostics; the paid Economic Audit replaces this with horizon-specific projection.',
+                      units: 'USD / year',
+                    },
                   ].map((eq) => (
                     <div key={eq.name} style={{ padding: '16px 20px', background: `${DS.cyan}04`, border: `1px solid ${DS.cyan}18`, borderRadius: DS.r12 }}>
                       <div style={{ color: DS.cyan, fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{eq.name}</div>
@@ -1322,6 +1862,10 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   ))}
                 </div>
               </Card>
+              <div style={{ color: DS.dim, fontSize: 10, marginTop: 12, lineHeight: 1.6 }}>
+                Full theoretical derivations, sector-specific applications (Solar / Wind / Gas / Hydro / Hydrogen / Desalination / Nuclear),
+                and the patent-pending counterfactual decomposition live in the PREDAIOT Reference Manual (Vol. III).
+              </div>
             </div>
           )}
 
@@ -1360,6 +1904,24 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   {liveMode ? '⏹ DISCONNECT' : '▶ CONNECT TO /ws/live'}
                 </BtnOutline>
 
+                {/* Sector profile selector — chooses which synthetic feed shape to emit */}
+                <select
+                  value={simProfile}
+                  disabled={simRunning}
+                  onChange={(e) => setSimProfile(e.target.value)}
+                  style={{
+                    background: DS.surface, color: DS.text,
+                    border: `1px solid ${DS.border}`, borderRadius: DS.r8,
+                    padding: '8px 10px', fontSize: 11, fontFamily: DS.mono,
+                    letterSpacing: '0.05em', minWidth: 200,
+                    opacity: simRunning ? 0.5 : 1,
+                  }}
+                >
+                  {Object.entries(SIM_PROFILES).map(([k, p]) => (
+                    <option key={k} value={k}>{p.label}</option>
+                  ))}
+                </select>
+
                 <BtnOutline
                   color={simRunning ? DS.loss : DS.warning}
                   disabled={!liveMode}
@@ -1368,36 +1930,15 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                       if (simRef.current) { clearInterval(simRef.current); simRef.current = null; }
                       setSimRunning(false);
                     } else {
-                      simRef.soc = 0.5;
-                      simRef.step = 0;
+                      const profile = SIM_PROFILES[simProfile] || SIM_PROFILES.bess;
+                      profile.init(simRef);
                       const tick = () => {
                         if (!wsRef.current || wsRef.current.readyState !== 1) return;
-                        simRef.step += 1;
-                        const t = simRef.step;
-                        const price = Math.max(3, 45 + 55 * Math.sin((t - 18) * Math.PI / 36) + (Math.random() - 0.5) * 14);
-                        const curtailment = (t % 23 === 0) ? Math.round(8 + Math.random() * 20) : 0;
-                        const willDischarge = price > 70 && simRef.soc > 0.25;
-                        const willCharge = (price < 25 || curtailment > 0) && simRef.soc < 0.85;
-                        const actual_discharge = willDischarge ? Math.round(20 + Math.random() * 25) : 0;
-                        const actual_charge = willCharge ? Math.round(10 + Math.random() * 15) : 0;
-                        simRef.soc = Math.max(0.1, Math.min(0.95, simRef.soc + actual_charge * 0.004 - actual_discharge * 0.004));
-                        const forecast_price = Math.max(3, price * (0.85 + Math.random() * 0.3));
-
+                        const payload = profile.tick(simRef);
                         wsRef.current.send(JSON.stringify({
                           timestamp: new Date().toISOString(),
-                          asset_id: data.asset_name || 'DEMO_ASSET',
-                          market_price: Math.round(price * 100) / 100,
-                          actual_discharge,
-                          actual_charge,
-                          soc: Math.round(simRef.soc * 1000) / 1000,
-                          p_max: 50,
-                          e_max: 100,
-                          eta_charge: 0.95,
-                          eta_discharge: 0.95,
-                          deg_cost: 5,
-                          curtailment,
-                          forecast_price: Math.round(forecast_price * 100) / 100,
-                          grid_limit: 50,
+                          asset_id: data.asset_name || profile.asset_id,
+                          ...payload,
                         }));
                       };
                       tick();
@@ -1406,7 +1947,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                     }
                   }}
                 >
-                  {simRunning ? '⏹ STOP SIMULATED FEED' : '🧪 SIMULATE SCADA FEED'}
+                  {simRunning ? '⏹ STOP SIMULATED FEED' : `🧪 SIMULATE ${SIM_PROFILES[simProfile]?.label.split(' ·')[0] || 'BESS'} FEED`}
                 </BtnOutline>
 
                 {liveData.length > 0 && (
@@ -1544,7 +2085,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
 
           {/* ══ S14: EDPC Certificate ════════════════════════════ */}
-          {activeSection === 'cert' && (
+          {hasData && activeSection === 'cert' && (
             <div>
               <SectionHeader tag="🏆" title="Economic Decision Performance Certificate™ (EDPC)" />
               <div style={{ color: DS.sub, fontSize: 11, marginBottom: 20, maxWidth: 600 }}>
