@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Logs
 logs
 *.log
@@ -22,3 +23,14 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+=======
+# تجاهل ملفات بايثون الثقيلة
+backend/venv/
+backend/__pycache__/
+*.pyc
+*.db
+
+# تجاهل ملفات 노ود الثقيلة
+frontend/node_modules/
+frontend/dist/
+>>>>>>> 180d70a33735ed0cd92507e5f3c70c973cf18fe2
