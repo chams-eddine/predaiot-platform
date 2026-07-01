@@ -99,6 +99,10 @@ class AssetSpecs(BaseModel):
     eta_ch:     float = 0.95
     eta_dis:    float = 0.95
     deg_cost:   float = 5.0
+    # Cert "ISSUED TO" fields (Coverage Tasks Fix B). Optional — default falls
+    # back to "Confidential — Available on Request" in _build_certificate.
+    client_name:    Optional[str] = None
+    client_company: Optional[str] = None
 
 class TimeStepData(BaseModel):
     hour: int
@@ -205,6 +209,13 @@ class AuditResponse(BaseModel):
     financial_leakage: Optional[FinancialLeakage] = None
     ai_commentary: Optional[str] = None
     counterfactual_summary: Optional[str] = None
+    # ISSUED TO block (Coverage Tasks Fix B) — echoed from AssetSpecs so the
+    # certificate + PDF can render engagement-letter-style header without a
+    # second round-trip.
+    asset_id: Optional[str] = None
+    asset_location: Optional[str] = None
+    client_name: Optional[str] = None
+    client_company: Optional[str] = None
 
 class HistoricalResponse(BaseModel):
     history_log: List[DecisionRecord]
@@ -544,7 +555,24 @@ def _classify_decision(opt: float, act: float, price: float, threshold: float = 
         return "Partial Capture", 0.78
     return "Sub-optimal Dispatch", 0.70
 
-def _build_root_causes(decision_log: List[DecisionRecord], total_gap: float) -> List[RootCauseItem]:
+def _build_root_causes(
+    decision_log: List[DecisionRecord],
+    total_gap: float,
+    total_edv_opt: float,
+) -> List[RootCauseItem]:
+    """
+    Attribute the Economic Gap to category-level root causes.
+
+    Denominator note (P0 fix — Coverage Tasks v1): contribution_pct expresses
+    each category as a fraction of TOTAL ECONOMIC POTENTIAL (EDV_optimal), not
+    of total_gap. Using total_gap was a real bug: total_gap = Σ gap_step sums
+    both positive AND negative step-gaps (operator-override steps that beat
+    the MILP contribute negative), while category loss sums only positives —
+    the ratio could exceed 100% (observed: "Missed Arbitrage 152.2%"). Using
+    total_edv_opt guarantees ≤ 100% because Σ positive_gap ≤ Σ optimal_edv.
+    We also min(100, …) as belt-and-suspenders. Curtailment attribution is
+    a secondary tag (double-counts by design — flagged for a follow-up).
+    """
     cats = {
         "Missed Arbitrage":     0.0,
         "Schedule-based Dispatch": 0.0,
@@ -569,13 +597,15 @@ def _build_root_causes(decision_log: List[DecisionRecord], total_gap: float) -> 
         if (rec.curtailment_mw or 0) > 0:
             cats["Curtailment"] += gap * 0.15
 
+    denom = total_edv_opt if total_edv_opt and total_edv_opt > 0 else 0.0
     result = []
     for cat, loss in cats.items():
-        if loss > 0 and total_gap > 0:
+        if loss > 0 and denom > 0:
+            pct = min(100.0, (loss / denom) * 100.0)
             result.append(RootCauseItem(
                 category=cat,
-                contribution_pct=round((loss / total_gap) * 100, 1),
-                loss_usd=round(loss, 2)
+                contribution_pct=round(pct, 1),
+                loss_usd=round(loss, 2),
             ))
     result.sort(key=lambda x: x.contribution_pct, reverse=True)
     return result[:6]
@@ -975,7 +1005,7 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
 
     # Build EDA intelligence layers
     eda_metrics  = _build_eda_metrics(decision_log, total_edv_opt, total_edv_act, asset.asset_type)
-    root_causes  = _build_root_causes(decision_log, total_gap)
+    root_causes  = _build_root_causes(decision_log, total_gap, total_edv_opt)
     opportunities = _build_opportunities(total_gap, asset.asset_type, decision_log)
     heat_map     = _build_heat_map(decision_log)
     ai_commentary = _build_ai_commentary(
@@ -1016,7 +1046,12 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
             f"${total_edv_opt:,.2f} vs actual ${total_edv_act:,.2f}. "
             f"The counterfactual gap of ${total_gap:,.2f} represents decisions that "
             f"were physically feasible but economically sub-optimal."
-        )
+        ),
+        # Echo ISSUED TO fields from AssetSpecs
+        asset_id=asset.asset_id,
+        asset_location=asset.location,
+        client_name=asset.client_name,
+        client_company=asset.client_company,
     )
     latest_live_result = result
     return result
@@ -1766,9 +1801,36 @@ def _build_certificate(data: dict) -> dict:
             "Immediate operational review and EMS reconfiguration required."
         )
 
+    # ── ISSUED BY / ISSUED TO / AUDIT SCOPE (Coverage Tasks Fix B) ─────
+    # Big-4-style engagement-letter framing. The letterhead's company name
+    # ("Al Shams Investment and Trade Company SPC") is the licensed operator
+    # behind PREDAIOT, NOT the audit issuer — so we make that explicit and
+    # separate the recipient block cleanly.
+    CONFIDENTIAL = "Confidential — Available on Request"
+    issuer = {
+        "organization":   "PREDAIOT Economic Decision Intelligence",
+        "licensed_operator": "Al Shams Investment and Trade Company SPC",
+        "email":          "chams@preda-iot.com",
+        "domain":         "platform.preda-iot.com",
+    }
+    recipient = {
+        "asset_name":     data.get("asset_name") or CONFIDENTIAL,
+        "company":        data.get("client_company") or CONFIDENTIAL,
+        "location":       data.get("asset_location") or CONFIDENTIAL,
+        "contact_name":   data.get("client_name") or CONFIDENTIAL,
+    }
+    audit_scope = {
+        "asset_id":       data.get("asset_id") or (data.get("asset_name") or CONFIDENTIAL),
+        "asset_type":     data.get("asset_type", "Generic"),
+        "period":         data.get("audit_period_label", "24h"),
+    }
+
     return {
         "certificate_id":       cert_id,
         "issued_at":            datetime.utcnow().isoformat() + "Z",
+        "issuer":               issuer,
+        "recipient":            recipient,
+        "audit_scope":          audit_scope,
         "asset_name":           data.get("asset_name", "Energy Asset"),
         "asset_type":           data.get("asset_type", "Generic"),
         "audit_period":         data.get("audit_period_label", "24h"),
@@ -1900,18 +1962,66 @@ def _build_audit_pdf(audit: dict) -> bytes:
     c.setFillColorRGB(0.4, 0.4, 0.4)
     c.drawString(60, 655, "Economic Decision Performance Certificate (EDPC) — PREDAIOT")
 
-    # ── Asset header ───────────────────────────────────────────────────
-    asset_name = audit.get("asset_name", "Energy Asset")
-    asset_type = audit.get("asset_type", "Generic")
-    period     = audit.get("audit_period_label", "—")
-    issued_at  = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    # ── Engagement-letter header (ISSUED BY / ISSUED TO / AUDIT SCOPE) ─
+    # Coverage Tasks Fix B. Reframes the letterhead so the audit reads as
+    # "PREDAIOT issued this to Client X" (Big-4 style) rather than looking
+    # like a self-report by the letterhead's legal entity.
+    CONFIDENTIAL = "Confidential — Available on Request"
+    asset_name    = audit.get("asset_name", "Energy Asset")
+    asset_type    = audit.get("asset_type", "Generic")
+    asset_id      = audit.get("asset_id") or asset_name
+    asset_loc     = audit.get("asset_location") or CONFIDENTIAL
+    client_comp   = audit.get("client_company") or CONFIDENTIAL
+    period        = audit.get("audit_period_label", "—")
+    issued_at     = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
-    c.setFillColorRGB(0.18, 0.18, 0.2)
-    c.setFont("Helvetica-Bold", 11)
-    c.drawString(60, 628, asset_name)
-    c.setFont("Helvetica", 10)
-    c.setFillColorRGB(0.35, 0.35, 0.4)
-    c.drawString(60, 613, f"{asset_type}   ·   {period}   ·   Issued {issued_at}")
+    LABEL_C = (0.34, 0.4, 0.5)
+    BODY_C  = (0.14, 0.16, 0.2)
+    MUTED_C = (0.42, 0.44, 0.48)
+    RULE_C  = (0.8, 0.8, 0.84)
+
+    # Two-column engagement-letter header. Left column carries the long
+    # legal-operator line and needs more room (LEFT_X to RIGHT_X-8).
+    LEFT_X, RIGHT_X, MAX_X = 60, 345, 535
+    y = 630
+    c.setFillColorRGB(*LABEL_C)
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(LEFT_X, y, "ISSUED BY")
+    c.drawString(RIGHT_X, y, "ISSUED TO")
+
+    y -= 13
+    c.setFillColorRGB(*BODY_C)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(LEFT_X, y, "PREDAIOT Economic Decision Intelligence")
+    c.drawString(RIGHT_X, y, asset_name[:34])
+
+    y -= 12
+    c.setFont("Helvetica-Oblique", 8)  # 8pt italic so the long line fits under RIGHT_X
+    c.setFillColorRGB(*MUTED_C)
+    c.drawString(LEFT_X, y, "Al Shams Investment and Trade Company SPC (Licensed Operator)")
+    c.setFont("Helvetica", 9)
+    c.setFillColorRGB(0.34, 0.36, 0.4)
+    c.drawString(RIGHT_X, y, client_comp[:40])
+
+    y -= 12
+    c.drawString(LEFT_X, y, f"{_REPLACEMENT_EMAIL}  ·  platform.preda-iot.com")
+    c.drawString(RIGHT_X, y, asset_loc[:40])
+
+    # Divider + AUDIT SCOPE / ISSUED
+    y -= 12
+    c.setStrokeColorRGB(*RULE_C)
+    c.setLineWidth(0.5)
+    c.line(LEFT_X, y, 535, y)
+    y -= 12
+    c.setFillColorRGB(*LABEL_C)
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(LEFT_X, y, "AUDIT SCOPE")
+    c.drawString(RIGHT_X, y, "ISSUED")
+    y -= 11
+    c.setFillColorRGB(*BODY_C)
+    c.setFont("Helvetica", 9)
+    c.drawString(LEFT_X, y, f"{asset_id}  ·  {asset_type}  ·  {period}")
+    c.drawString(RIGHT_X, y, issued_at)
 
     # ── Executive Summary block ────────────────────────────────────────
     edv_opt = float(audit.get("edv_optimal_total", 0) or 0)
@@ -1920,7 +2030,7 @@ def _build_audit_pdf(audit: dict) -> bytes:
     dq_pct  = float(audit.get("dq_score", 0) or 0) * 100.0
     risk    = (audit.get("risk_level") or "Moderate")
 
-    y = 575
+    y = 540
     c.setFillColorRGB(0.04, 0.14, 0.22)
     c.setFont("Helvetica-Bold", 12)
     c.drawString(60, y, "EXECUTIVE SUMMARY")
