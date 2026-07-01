@@ -432,17 +432,36 @@ except ImportError:
     _HAS_SLOWAPI = False
 
 
+def _client_ip(request) -> str:
+    """
+    Real client IP behind Render's reverse proxy. `request.client.host` returns
+    the proxy's internal IP so every visitor would share one rate-limit key —
+    exactly the incident that put the trial gate in the 429 hole earlier. Parse
+    X-Forwarded-For instead (Render sets it; format is "client, proxy1, ...").
+    """
+    try:
+        xff = request.headers.get("X-Forwarded-For", "") if hasattr(request, "headers") else ""
+        if xff:
+            return xff.split(",")[0].strip()
+    except Exception:
+        pass
+    try:
+        return request.client.host if request.client else "unknown"
+    except Exception:
+        return "unknown"
+
+
 def _rate_limit_key(request) -> str:
     """
-    Rate-limit key: prefer the trial token (per-user) with the client IP as
-    fallback (per-connection). Falls back to a stable string if the request
-    context is unusual so slowapi never explodes.
+    Rate-limit key: prefer the trial token (per-user) with the real client IP
+    as fallback. Falls back to a stable string if the request context is
+    unusual so slowapi never explodes.
     """
     try:
         token = request.headers.get("X-Trial-Token") if hasattr(request, "headers") else None
         if token:
             return f"tok:{token[:16]}"
-        return f"ip:{get_remote_address(request)}"
+        return f"ip:{_client_ip(request)}"
     except Exception:
         return "unknown"
 
@@ -507,11 +526,7 @@ async def _api_access_log(request, call_next):
         if path.startswith("/api/v1/"):
             latency_ms = int((_t.perf_counter() - started) * 1000)
             token = request.headers.get("X-Trial-Token")
-            client_ip = None
-            try:
-                client_ip = request.client.host if request.client else None
-            except Exception:
-                pass
+            client_ip = _client_ip(request)   # real IP behind Render's proxy
             db = SessionLocal()
             try:
                 db.add(APIAccessLog(
@@ -1388,7 +1403,7 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
 from fastapi import BackgroundTasks  # local import keeps the imports block tidy
 
 @app.post("/api/v1/trial/start", response_model=TrialStartResponse)
-@limiter.limit("5/hour")
+@limiter.limit("20/hour")
 async def start_trial(request: Request, req: TrialStartRequest, background: BackgroundTasks):
     """
     Start a 7-day free diagnostic. Returns a trial_token that the frontend
