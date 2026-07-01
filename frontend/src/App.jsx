@@ -44,6 +44,30 @@ axios.interceptors.response.use(
 );
 
 // ══════════════════════════════════════════════════════════════════════
+// RESPONSIVE — viewport hook shared across the app
+// ══════════════════════════════════════════════════════════════════════
+// 720px is the "phone-portrait or narrow tablet" breakpoint. Below this,
+// the sidebar collapses to a hamburger drawer and the header buttons
+// wrap onto multiple rows.
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 720px)').matches
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mql = window.matchMedia('(max-width: 720px)');
+    const onChange = (e) => setIsMobile(e.matches);
+    if (mql.addEventListener) mql.addEventListener('change', onChange);
+    else mql.addListener(onChange);  // older Safari
+    return () => {
+      if (mql.removeEventListener) mql.removeEventListener('change', onChange);
+      else mql.removeListener(onChange);
+    };
+  }, []);
+  return isMobile;
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // DESIGN SYSTEM — PREDAIOT Economic Decision Audit™
 // ══════════════════════════════════════════════════════════════════════
 const DS = {
@@ -608,6 +632,86 @@ function SessionBadge({ liveMode, simRunning, dataSource }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// INGESTION NOTES BANNER — shown after an upload when the pipeline made
+// auto-corrections (units, timestamps, or fuzzy column matches). Lets the
+// operator see "here's what we assumed" before they quote the audit to
+// their boss. Dismissible.
+// ══════════════════════════════════════════════════════════════════════
+function IngestionNotesBanner({ notes, onDismiss }) {
+  const units      = notes.unit_corrections || [];
+  const timestamps = notes.timestamp_corrections || [];
+  const fuzzy      = notes.fuzzy_column_matches || {};
+  const fuzzyList  = Object.entries(fuzzy);
+  if (units.length === 0 && timestamps.length === 0 && fuzzyList.length === 0) return null;
+
+  return (
+    <div style={{
+      background: `linear-gradient(135deg, ${DS.cyan}12, ${DS.blue}08)`,
+      border: `1px solid ${DS.cyan}35`,
+      borderRadius: DS.r12,
+      padding: '14px 18px',
+      marginBottom: 18,
+      position: 'relative',
+    }}>
+      <button
+        onClick={onDismiss}
+        aria-label="Dismiss ingestion notes"
+        style={{
+          position: 'absolute', top: 8, right: 10,
+          background: 'transparent', border: 'none', color: DS.dim,
+          cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 6,
+        }}
+      >
+        ✕
+      </button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <span style={{ fontSize: 14 }}>🧭</span>
+        <div style={{ color: DS.cyan, fontSize: 10, fontWeight: 700, letterSpacing: '0.15em' }}>
+          INGESTION AUTO-CORRECTIONS APPLIED
+        </div>
+      </div>
+      <div style={{ color: DS.sub, fontSize: 11, marginBottom: 10, lineHeight: 1.5 }}>
+        The audit engine made the following assumptions about your file. Review before quoting the audit externally.
+      </div>
+
+      {units.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ color: DS.warning, fontSize: 10, letterSpacing: '0.1em', fontWeight: 700, marginBottom: 4 }}>UNIT CONVERSIONS</div>
+          {units.map((line, i) => (
+            <div key={i} style={{ color: DS.text, fontSize: 11, marginBottom: 3, paddingLeft: 12 }}>
+              • {line}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {timestamps.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ color: DS.warning, fontSize: 10, letterSpacing: '0.1em', fontWeight: 700, marginBottom: 4 }}>TIMESTAMP RECOVERY</div>
+          {timestamps.map((line, i) => (
+            <div key={i} style={{ color: DS.text, fontSize: 11, marginBottom: 3, paddingLeft: 12 }}>
+              • {line}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {fuzzyList.length > 0 && (
+        <div>
+          <div style={{ color: DS.warning, fontSize: 10, letterSpacing: '0.1em', fontWeight: 700, marginBottom: 4 }}>FUZZY COLUMN MATCHES</div>
+          {fuzzyList.map(([internal, info]) => (
+            <div key={internal} style={{ color: DS.text, fontSize: 11, marginBottom: 3, paddingLeft: 12, fontFamily: DS.mono }}>
+              • <span style={{ color: DS.cyan }}>{info.from_col}</span> → <span style={{ color: DS.optimal }}>{internal}</span>{' '}
+              <span style={{ color: DS.dim }}>({info.score}% match to “{info.matched_alias}”)</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // MAIN APP
 // ══════════════════════════════════════════════════════════════════════
 export default function App() {
@@ -617,6 +721,17 @@ export default function App() {
   const [shareLink, setShareLink]         = useState('');
   const [activeSection, setActiveSection] = useState('exec');
   const [showMethodology, setShowMethodology] = useState(false);
+
+  // ── Mobile responsive state ────────────────────────────────────────
+  const isMobile = useIsMobile();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  useEffect(() => {
+    // Close the drawer if the viewport transitions back to desktop
+    if (!isMobile && sidebarOpen) setSidebarOpen(false);
+  }, [isMobile, sidebarOpen]);
+
+  // ── Ingestion notes from the upload pipeline ───────────────────────
+  const [ingestionNotes, setIngestionNotes] = useState(null);
   const [showUpload, setShowUpload]       = useState(false);
   const [aiLoading, setAiLoading]         = useState(false);
   const [aiText, setAiText]               = useState('');
@@ -739,6 +854,7 @@ export default function App() {
       setData(r.data);
       setDataSource('demo');
       setAiText('');
+      setIngestionNotes(null);  // demo data is synthetic; no ingestion notes
       setActiveSection('exec');
     } catch (e) { console.error(e); }
     setLoading(false);
@@ -756,6 +872,10 @@ export default function App() {
       setData(r.data);
       setDataSource('upload');
       setAiText('');
+      // ingestion_notes is appended by the backend when auto-corrections fire
+      // (unit / timestamp / fuzzy column). Surface them so operators see
+      // exactly what the pipeline did before quoting the audit.
+      setIngestionNotes(r.data?.ingestion_notes || null);
       setActiveSection('exec');
     } catch (err) {
       const detail = err?.response?.data?.detail || '';
@@ -947,17 +1067,35 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
       {/* ── TOP BAR ──────────────────────────────────────────────── */}
       <header style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        padding: '13px 28px', borderBottom: `1px solid ${DS.border}`,
+        padding: isMobile ? '11px 14px' : '13px 28px',
+        borderBottom: `1px solid ${DS.border}`,
         position: 'sticky', top: 0, backgroundColor: `${DS.bg}f0`, backdropFilter: 'blur(12px)',
-        zIndex: 100,
+        zIndex: 100, gap: 8,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <img src="/logo.jpeg" alt="PREDAIOT" style={{ height: 36, objectFit: 'contain' }} />
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: '0.18em', color: DS.text }}>PREDAIOT</div>
-            <div style={{ fontSize: 9, letterSpacing: '0.2em', color: DS.dim }}>ECONOMIC DECISION AUDIT™</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 14, minWidth: 0, flex: '0 1 auto' }}>
+          {isMobile && (
+            <button
+              onClick={() => setSidebarOpen((v) => !v)}
+              aria-label={sidebarOpen ? 'Close navigation' : 'Open navigation'}
+              style={{
+                background: 'none', border: `1px solid ${DS.border}`,
+                color: DS.text, cursor: 'pointer',
+                minWidth: 44, minHeight: 44, borderRadius: DS.r8,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 18, lineHeight: 1,
+              }}
+            >
+              {sidebarOpen ? '✕' : '☰'}
+            </button>
+          )}
+          <img src="/logo.jpeg" alt="PREDAIOT" style={{ height: isMobile ? 28 : 36, objectFit: 'contain' }} />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: isMobile ? 12 : 14, fontWeight: 700, letterSpacing: '0.18em', color: DS.text }}>PREDAIOT</div>
+            {!isMobile && (
+              <div style={{ fontSize: 9, letterSpacing: '0.2em', color: DS.dim }}>ECONOMIC DECISION AUDIT™</div>
+            )}
           </div>
-          {hasData && (
+          {hasData && !isMobile && (
             <div style={{ marginLeft: 16, display: 'flex', gap: 8, alignItems: 'center' }}>
               <span style={{ fontSize: 11, color: DS.sub }}>{data.asset_name}</span>
               <Pill label={data.risk_level || 'Moderate'} color={riskColor(data.risk_level)} />
@@ -966,18 +1104,22 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: isMobile ? 6 : 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <BtnOutline color={DS.cyan} onClick={runDemo} disabled={loading || uploading}>
-            {loading ? 'OPTIMIZING…' : 'RUN DEMO'}
+            {loading ? 'OPTIMIZING…' : (isMobile ? 'DEMO' : 'RUN DEMO')}
           </BtnOutline>
           <BtnOutline color={DS.optimal} onClick={() => setShowUpload(!showUpload)} disabled={uploading}>
-            {uploading ? 'PARSING…' : 'UPLOAD DATA'}
+            {uploading ? 'PARSING…' : (isMobile ? 'UPLOAD' : 'UPLOAD DATA')}
           </BtnOutline>
-          <BtnOutline color={DS.warning} onClick={handleShare}>SHARE REPORT</BtnOutline>
+          {!isMobile && (
+            <BtnOutline color={DS.warning} onClick={handleShare}>SHARE REPORT</BtnOutline>
+          )}
           <BtnOutline color={DS.purple} onClick={downloadPdf} disabled={pdfLoading || !data.dq_score}>
-            {pdfLoading ? 'BUILDING PDF…' : '⬇ DOWNLOAD PDF'}
+            {pdfLoading ? 'PDF…' : (isMobile ? '⬇ PDF' : '⬇ DOWNLOAD PDF')}
           </BtnOutline>
-          <BtnOutline color={DS.dim} onClick={() => setShowMethodology(true)}>METHODOLOGY</BtnOutline>
+          {!isMobile && (
+            <BtnOutline color={DS.dim} onClick={() => setShowMethodology(true)}>METHODOLOGY</BtnOutline>
+          )}
           <SessionBadge liveMode={liveMode} simRunning={simRunning} dataSource={dataSource} />
         </div>
       </header>
@@ -996,8 +1138,24 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
       )}
 
       <div style={{ display: 'flex' }}>
-        {/* ── SIDEBAR ───────────────────────────────────────────── */}
-        <nav style={{
+        {/* ── SIDEBAR — persistent on desktop, drawer on mobile ── */}
+        {isMobile && sidebarOpen && (
+          <div
+            onClick={() => setSidebarOpen(false)}
+            style={{
+              position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+              zIndex: 99, backdropFilter: 'blur(2px)',
+            }}
+            aria-label="Close navigation"
+          />
+        )}
+        <nav style={isMobile ? {
+          position: 'fixed', left: sidebarOpen ? 0 : -272, top: 0, bottom: 0,
+          width: 272, padding: '76px 0 20px 0', background: DS.bgRaised,
+          borderRight: `1px solid ${DS.borderHi}`,
+          transition: 'left 0.24s ease', overflowY: 'auto',
+          zIndex: 100, boxShadow: sidebarOpen ? '4px 0 30px rgba(0,0,0,0.5)' : 'none',
+        } : {
           width: 210, minWidth: 210, padding: '20px 0',
           borderRight: `1px solid ${DS.border}`,
           position: 'sticky', top: 67, height: 'calc(100vh - 67px)', overflowY: 'auto',
@@ -1005,15 +1163,25 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {navItems.map((n) => {
             const active = activeSection === n.id;
             return (
-              <button key={n.id} onClick={() => setActiveSection(n.id)} style={{
-                display: 'block', width: '100%', textAlign: 'left',
-                padding: '9px 20px', fontSize: 11, background: 'none', border: 'none',
-                cursor: 'pointer', letterSpacing: '0.04em',
-                color: active ? DS.cyan : DS.sub,
-                borderLeft: `2px solid ${active ? DS.cyan : 'transparent'}`,
-                transition: 'all 0.12s',
-              }}>
-                <span style={{ fontFamily: DS.mono, fontSize: 9, color: DS.dim, marginRight: 8 }}>{n.tag}</span>
+              <button
+                key={n.id}
+                onClick={() => {
+                  setActiveSection(n.id);
+                  if (isMobile) setSidebarOpen(false);
+                }}
+                style={{
+                  display: 'block', width: '100%', textAlign: 'left',
+                  padding: isMobile ? '14px 22px' : '9px 20px',
+                  minHeight: isMobile ? 44 : undefined,  // Apple HIG / Material touch target
+                  fontSize: isMobile ? 13 : 11,
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  letterSpacing: '0.04em',
+                  color: active ? DS.cyan : DS.sub,
+                  borderLeft: `2px solid ${active ? DS.cyan : 'transparent'}`,
+                  transition: 'all 0.12s',
+                }}
+              >
+                <span style={{ fontFamily: DS.mono, fontSize: isMobile ? 10 : 9, color: DS.dim, marginRight: 8 }}>{n.tag}</span>
                 {n.label}
               </button>
             );
@@ -1021,7 +1189,11 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
         </nav>
 
         {/* ── MAIN CONTENT ──────────────────────────────────────── */}
-        <main style={{ flex: 1, minWidth: 0, padding: '28px 32px', overflowX: 'hidden' }}>
+        <main style={{
+          flex: 1, minWidth: 0,
+          padding: isMobile ? '18px 14px' : '28px 32px',
+          overflowX: 'hidden',
+        }}>
 
           {/* Welcome / empty state — only shown when on a data-dependent section
               with no audit loaded. Skipped for live/appendix/govern which work
@@ -1063,6 +1235,16 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {hasData && activeSection === 'exec' && (
             <div>
               <SectionHeader tag="01" title="Executive Summary" />
+
+              {/* Ingestion auto-corrections banner — shown when the /audit/file
+                  pipeline made assumptions the operator should confirm. */}
+              {ingestionNotes && (
+                <IngestionNotesBanner
+                  notes={ingestionNotes}
+                  onDismiss={() => setIngestionNotes(null)}
+                />
+              )}
+
 
               {/* KPI shock panel */}
               <div style={{
