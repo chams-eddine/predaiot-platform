@@ -642,7 +642,16 @@ function IngestionNotesBanner({ notes, onDismiss }) {
   const timestamps = notes.timestamp_corrections || [];
   const fuzzy      = notes.fuzzy_column_matches || {};
   const fuzzyList  = Object.entries(fuzzy);
-  if (units.length === 0 && timestamps.length === 0 && fuzzyList.length === 0) return null;
+  const tsFormat   = notes.timestamp_format || null;
+  const resolution = notes.time_resolution || null;
+
+  const showTsFormat   = tsFormat && tsFormat.format_detected;
+  const showResolution = resolution && (resolution.detected_resolution_sec || resolution.warning);
+
+  if (
+    units.length === 0 && timestamps.length === 0 && fuzzyList.length === 0 &&
+    !showTsFormat && !showResolution
+  ) return null;
 
   return (
     <div style={{
@@ -697,7 +706,7 @@ function IngestionNotesBanner({ notes, onDismiss }) {
       )}
 
       {fuzzyList.length > 0 && (
-        <div>
+        <div style={{ marginBottom: 8 }}>
           <div style={{ color: DS.warning, fontSize: 10, letterSpacing: '0.1em', fontWeight: 700, marginBottom: 4 }}>FUZZY COLUMN MATCHES</div>
           {fuzzyList.map(([internal, info]) => (
             <div key={internal} style={{ color: DS.text, fontSize: 11, marginBottom: 3, paddingLeft: 12, fontFamily: DS.mono }}>
@@ -705,6 +714,43 @@ function IngestionNotesBanner({ notes, onDismiss }) {
               <span style={{ color: DS.dim }}>({info.score}% match to “{info.matched_alias}”)</span>
             </div>
           ))}
+        </div>
+      )}
+
+      {showTsFormat && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ color: DS.warning, fontSize: 10, letterSpacing: '0.1em', fontWeight: 700, marginBottom: 4 }}>TIMESTAMP FORMAT</div>
+          <div style={{ color: DS.text, fontSize: 11, marginBottom: 3, paddingLeft: 12 }}>
+            • Detected format: <span style={{ color: DS.cyan, fontFamily: DS.mono }}>{tsFormat.format_detected}</span>
+          </div>
+          {tsFormat.first_ts && (
+            <div style={{ color: DS.sub, fontSize: 10, marginBottom: 3, paddingLeft: 12, fontFamily: DS.mono }}>
+              • Range: {String(tsFormat.first_ts).slice(0, 19)} → {String(tsFormat.last_ts || '').slice(0, 19)}
+            </div>
+          )}
+        </div>
+      )}
+
+      {showResolution && (
+        <div>
+          <div style={{ color: DS.warning, fontSize: 10, letterSpacing: '0.1em', fontWeight: 700, marginBottom: 4 }}>TIME RESOLUTION</div>
+          {resolution.detected_resolution_label && (
+            <div style={{ color: DS.text, fontSize: 11, marginBottom: 3, paddingLeft: 12 }}>
+              • Detected: <span style={{ color: DS.cyan }}>{resolution.detected_resolution_label}</span>
+              {' '}steps
+              {resolution.resampled && (
+                <span style={{ color: DS.optimal }}>
+                  {' — resampled '}{resolution.actual_steps} → {resolution.expected_steps} steps
+                  {' ('}{resolution.missing_pct}% missing filled{')'}
+                </span>
+              )}
+            </div>
+          )}
+          {resolution.warning && (
+            <div style={{ color: DS.loss, fontSize: 11, marginBottom: 3, paddingLeft: 12, lineHeight: 1.5 }}>
+              ⚠ {resolution.warning}
+            </div>
+          )}
         </div>
       )}
     </div>

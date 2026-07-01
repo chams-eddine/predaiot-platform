@@ -1595,17 +1595,193 @@ def _detect_excel_serial_timestamps(df: pd.DataFrame) -> tuple:
     """
     Excel-saved CSVs often serialise timestamps as float days-since-1899-12-30.
     Detection: the timestamp column is entirely numeric and falls in the plausible
-    Excel-date range (40000..60000 covers 2009 through 2064). If so, replace with
-    an ordered index — the audit engine only needs ordering, not wall-clock time.
+    Excel-date range (40000..60000 covers 2009 through 2064). If so, convert to
+    real datetime — the resolution detector downstream can then work on it.
     """
     corrections = []
     if "hour" not in df.columns:
         return df, corrections
     series = pd.to_numeric(df["hour"], errors="coerce")
     if series.notna().all() and 40000 < float(series.min()) and float(series.max()) < 60000:
-        df["hour"] = list(range(len(df)))
-        corrections.append("hour column looked like Excel serial timestamps; replaced with a 0..N-1 ordered index.")
+        df["hour"] = pd.to_datetime(series, unit="D", origin="1899-12-30")
+        corrections.append("hour column looked like Excel serial timestamps; parsed as datetime.")
     return df, corrections
+
+
+# Order matters: try the strictest / most-informative parses first. ISO 8601
+# (including Z-suffixed and offset-suffixed variants) parses cleanly with just
+# `utc=True`; only fall through to Gulf/US slash-date if ISO fails.
+_TIMESTAMP_FORMAT_ATTEMPTS = [
+    # (label, pandas args to try in `pd.to_datetime(series, **kw)`)
+    ("ISO 8601",                    dict(utc=True)),
+    ("DD/MM/YYYY (Gulf default)",   dict(dayfirst=True)),
+    ("MM/DD/YYYY (US)",             dict(dayfirst=False)),
+]
+
+
+def _parse_timestamps(df: pd.DataFrame) -> tuple:
+    """
+    Best-effort timestamp parsing for the "hour" column.
+
+    Tries a fixed matrix of formats: ISO 8601 (Z, offset, space), Unix epoch
+    (seconds vs milliseconds), then DD/MM (Gulf convention) and MM/DD (US) for
+    ambiguous slash-separated dates. Assumes Gulf Standard Time (UTC+4) for
+    timezone-naive inputs since that's the sales target (Coverage Tasks 1.4).
+
+    Returns (df, notes). `notes` is a dict with `format_detected` (str or None)
+    and, if a datetime column was produced, `first_ts` / `last_ts` ISO strings.
+    """
+    notes = {"format_detected": None, "first_ts": None, "last_ts": None}
+    if "hour" not in df.columns:
+        return df, notes
+
+    col = df["hour"]
+
+    # Already datetime? Nothing to do.
+    if pd.api.types.is_datetime64_any_dtype(col):
+        notes["format_detected"] = "already datetime"
+        _fill_ts_bounds(col, notes)
+        return df, notes
+
+    # Try Unix epoch first (small integers won't collide with slash dates).
+    numeric = pd.to_numeric(col, errors="coerce")
+    if numeric.notna().all():
+        m = float(numeric.abs().max())
+        # Excel-serial range gets handled by _detect_excel_serial_timestamps; skip that here.
+        if 40000 < m < 60000:
+            pass  # Excel-serial branch owns this
+        elif 1e12 < m < 1e14:
+            df["hour"] = pd.to_datetime(numeric, unit="ms", utc=True)
+            notes["format_detected"] = "Unix epoch (ms)"
+            _fill_ts_bounds(df["hour"], notes)
+            return df, notes
+        elif 1e9 < m < 1e11:
+            df["hour"] = pd.to_datetime(numeric, unit="s", utc=True)
+            notes["format_detected"] = "Unix epoch (s)"
+            _fill_ts_bounds(df["hour"], notes)
+            return df, notes
+
+    # String-shaped: run through the format matrix. Accept `object` (legacy
+    # pandas) and `str` (pandas 2.1+) alike — the numeric path above handled
+    # anything else that could plausibly be a timestamp.
+    if not pd.api.types.is_numeric_dtype(col) and not pd.api.types.is_datetime64_any_dtype(col):
+        s = col.astype(str)
+        for label, kw in _TIMESTAMP_FORMAT_ATTEMPTS:
+            try:
+                parsed = pd.to_datetime(s, errors="coerce", **kw)
+            except (ValueError, TypeError):
+                continue
+            # Accept a format only if it parses (mostly) everything cleanly.
+            if parsed.notna().mean() >= 0.98:
+                suffix = ""
+                # Timezone-naive → assume Gulf Standard Time (UTC+4). Per brief
+                # 1.4: sales target is Oman/GCC, so the local wall-clock reading
+                # is what the operator meant when they omitted the tz.
+                if parsed.dt.tz is None:
+                    parsed = parsed.dt.tz_localize("Asia/Muscat", nonexistent="shift_forward", ambiguous="NaT")
+                    suffix = " (Gulf tz assumed)"
+                df["hour"] = parsed
+                notes["format_detected"] = label + suffix
+                _fill_ts_bounds(parsed, notes)
+                return df, notes
+
+    return df, notes
+
+
+def _fill_ts_bounds(series, notes: dict) -> None:
+    try:
+        notes["first_ts"] = pd.Timestamp(series.iloc[0]).isoformat()
+        notes["last_ts"]  = pd.Timestamp(series.iloc[-1]).isoformat()
+    except Exception:
+        pass
+
+
+# Standard energy-market resolutions we snap to (seconds)
+_STANDARD_INTERVALS = [60, 300, 900, 1800, 3600]  # 1min, 5min, 15min, 30min, 60min
+
+
+def _detect_and_resample(df: pd.DataFrame) -> tuple:
+    """
+    If the "hour" column is a real datetime, compute the median inter-step delta,
+    snap it to the nearest standard interval, and resample:
+      - forward-fill  operational fields (actual_discharge, actual_charge,
+        soc, curtailment_mw, operator_override) — these persist between reads
+      - linear-interp continuous fields (price, forecast_price) — these vary smoothly
+
+    Skips resampling (with a warning) if more than 20% of the expected steps
+    would be missing — better to audit what the operator actually gave us than
+    fabricate 20% of the data. Also converts "hour" to an ordered int index at
+    the end so process_calculation sees the shape it expects.
+
+    Returns (df, notes). Notes shape:
+      { detected_resolution_sec, expected_steps, actual_steps,
+        resampled, missing_pct, warning (if any) }
+    """
+    notes = {
+        "detected_resolution_sec": None,
+        "detected_resolution_label": None,
+        "expected_steps": None,
+        "actual_steps": int(len(df)),
+        "resampled": False,
+        "missing_pct": None,
+        "warning": None,
+    }
+    if "hour" not in df.columns or not pd.api.types.is_datetime64_any_dtype(df["hour"]):
+        return df, notes
+
+    ts = df["hour"]
+    if len(ts) < 3:
+        return df, notes
+
+    deltas = ts.diff().dt.total_seconds().dropna()
+    median_delta = float(deltas.median())
+    if median_delta <= 0:
+        return df, notes
+
+    # Snap to the nearest standard interval by log-distance
+    import math
+    snapped = min(_STANDARD_INTERVALS, key=lambda x: abs(math.log(x) - math.log(median_delta)))
+    notes["detected_resolution_sec"] = snapped
+    notes["detected_resolution_label"] = {
+        60: "1-minute", 300: "5-minute", 900: "15-minute",
+        1800: "30-minute", 3600: "60-minute",
+    }[snapped]
+
+    span_sec = (ts.iloc[-1] - ts.iloc[0]).total_seconds()
+    expected = int(span_sec / snapped) + 1
+    notes["expected_steps"] = expected
+    missing_pct = max(0.0, (expected - len(df)) / max(1, expected) * 100)
+    notes["missing_pct"] = round(missing_pct, 2)
+
+    if missing_pct >= 20.0:
+        notes["warning"] = (
+            f"Data has {missing_pct:.1f}% missing steps at the detected {notes['detected_resolution_label']} "
+            "resolution. Skipping resample — audit uses steps as-provided."
+        )
+        return df, notes
+
+    # Resample. Set the datetime as index, apply per-column policy, reset.
+    df = df.set_index("hour").sort_index()
+    op_cols  = [c for c in ("actual_discharge", "actual_charge", "soc",
+                            "curtailment_mw", "operator_override") if c in df.columns]
+    con_cols = [c for c in ("price", "forecast_price") if c in df.columns]
+    rule = f"{snapped}s"
+
+    parts = []
+    if op_cols:
+        parts.append(df[op_cols].resample(rule).ffill())
+    if con_cols:
+        # numeric only — linear interp
+        parts.append(df[con_cols].apply(pd.to_numeric, errors="coerce").resample(rule).mean().interpolate("linear"))
+    # Pass-through anything else (grid_demand etc.) with ffill
+    other = [c for c in df.columns if c not in op_cols + con_cols]
+    if other:
+        parts.append(df[other].resample(rule).ffill())
+
+    df = pd.concat(parts, axis=1).reset_index()
+    notes["resampled"] = True
+    notes["actual_steps"] = int(len(df))
+    return df, notes
 
 
 def _parse_file_bytes(contents: bytes, filename: str) -> pd.DataFrame:
@@ -1652,6 +1828,39 @@ def _parse_file_bytes(contents: bytes, filename: str) -> pd.DataFrame:
             "JSON must be an array of records, a wrapper like {\"data\": [...]}, "
             "or a column-oriented dict of same-length arrays."
         )
+
+    # ── XML ────────────────────────────────────────────────────────────────────
+    # Common in EMS / SCADA historian exports (OSIsoft PI XML, various DCS).
+    # pandas.read_xml handles the standard "list of rows" shape without much
+    # coaxing. Lazy import so the app boots without lxml installed.
+    if fname.endswith(".xml"):
+        try:
+            # pandas' read_xml uses lxml under the hood; give a clear error if
+            # the operator hasn't installed it (this file path is opt-in).
+            return pd.read_xml(BytesIO(contents))
+        except ImportError:
+            raise ValueError(
+                "XML upload requires the 'lxml' package. Install with "
+                "`pip install lxml` (already declared in requirements.txt)."
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Could not parse XML: {e}. Common shape: a root element with "
+                "repeated child rows, each row containing scalar fields."
+            ) from e
+
+    # ── Parquet ────────────────────────────────────────────────────────────────
+    # Data-lake exports. Lazy import — pyarrow is ~50MB, opt-in per deployment.
+    if fname.endswith(".parquet"):
+        try:
+            return pd.read_parquet(BytesIO(contents))
+        except ImportError:
+            raise ValueError(
+                "Parquet upload requires the 'pyarrow' package (~50MB). Install "
+                "with `pip install pyarrow` if your deploy environment can afford it."
+            )
+        except Exception as e:
+            raise ValueError(f"Could not parse Parquet: {e}") from e
 
     # Separator heuristic
     sep = "\t" if fname.endswith(".tsv") else ","
@@ -1780,11 +1989,14 @@ async def audit_from_file(
             if col not in df.columns:
                 df[col] = default
 
-        # Excel-serial timestamp recovery (before we blast hour with range())
+        # Excel-serial timestamp recovery, then full timestamp matrix.
         df, ts_corrections = _detect_excel_serial_timestamps(df)
+        df, ts_format = _parse_timestamps(df)
 
-        # Fill hour index if still missing / all-null
-        if df['hour'].isnull().all():
+        # If we still have no usable "hour", fall back to a 0..N-1 index. The
+        # audit engine only needs ordering; wall-clock time is a nice-to-have
+        # for the resolution detector.
+        if 'hour' not in df.columns or df['hour'].isnull().all():
             df['hour'] = range(len(df))
 
         df = df.fillna({'actual_discharge': 0.0, 'actual_charge': 0.0, 'curtailment_mw': 0.0})
@@ -1799,6 +2011,14 @@ async def audit_from_file(
 
         # Unit auto-detection (kW→MW, $/kWh→$/MWh)
         df, unit_corrections = _detect_and_apply_units(df)
+
+        # Time-resolution auto-detect + optional resample (only when hour is a
+        # real datetime, so this is a no-op for CSV/JSON without a timestamp).
+        df, resolution_notes = _detect_and_resample(df)
+
+        # Collapse "hour" back to an ordered integer for the audit engine
+        if 'hour' in df.columns and pd.api.types.is_datetime64_any_dtype(df['hour']):
+            df['hour'] = range(len(df))
 
         # Asset specs from meta-columns (first row)
         asset_kwargs = {}
@@ -1816,14 +2036,21 @@ async def audit_from_file(
 
         result = process_calculation(asset, time_series)
         background.add_task(_bump_audit_count, lead.token)
+
         # Non-fatal ingestion notes — surfaced on the response for the frontend
         # to display "we auto-corrected X, confirm before quoting the audit."
-        if unit_corrections or ts_corrections or col_info["fuzzy_scores"]:
+        has_notes = (
+            unit_corrections or ts_corrections or col_info["fuzzy_scores"]
+            or ts_format.get("format_detected") or resolution_notes.get("detected_resolution_sec")
+        )
+        if has_notes:
             result_dict = result.dict()
             result_dict["ingestion_notes"] = {
                 "unit_corrections":       unit_corrections,
                 "timestamp_corrections":  ts_corrections,
                 "fuzzy_column_matches":   col_info["fuzzy_scores"],
+                "timestamp_format":       ts_format,
+                "time_resolution":        resolution_notes,
             }
             return JSONResponse(content=result_dict)
         return result
@@ -1865,7 +2092,9 @@ async def inspect_file(file: UploadFile = File(...)):
                     errors='coerce'
                 ).fillna(0.0)
         preview, ts_corrections = _detect_excel_serial_timestamps(preview) if "hour" in preview.columns else (preview, [])
+        preview, ts_format = _parse_timestamps(preview)
         preview, unit_corrections = _detect_and_apply_units(preview)
+        preview, resolution_notes = _detect_and_resample(preview)
 
         # Warnings for missing optional fields
         expected_optional = ["actual_charge", "soc", "curtailment_mw", "forecast_price",
@@ -1887,6 +2116,8 @@ async def inspect_file(file: UploadFile = File(...)):
             "unresolved_columns":   [c for c in df.columns if c not in col_map.values()],
             "unit_corrections":     unit_corrections,
             "timestamp_corrections": ts_corrections,
+            "timestamp_format":     ts_format,
+            "time_resolution":      resolution_notes,
             "field_warnings":       field_warnings,
             "will_succeed":         "price" in col_map and "actual_discharge" in col_map,
             "sample_row":           df.iloc[0].to_dict() if len(df) > 0 else {},

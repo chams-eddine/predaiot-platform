@@ -9,3 +9,8 @@ openpyxl
 pypdf
 reportlab
 rapidfuzz
+lxml
+# pyarrow is ~50MB — needed for .parquet uploads. If your Render plan is
+# size-constrained, remove this line and the .parquet path will return a
+# clear "install pyarrow" error rather than crashing at import.
+pyarrow
