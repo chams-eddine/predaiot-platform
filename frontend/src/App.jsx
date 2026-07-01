@@ -394,6 +394,29 @@ const SIM_PROFILES = {
       };
     },
   },
+  h2: {
+    label: 'H₂ · 20 MW electrolyzer',
+    asset_id: 'DEMO_H2_20MW',
+    p_max: 20, deg_cost: 3,
+    init: (ref) => { ref.step = 0; },
+    tick: (ref) => {
+      ref.step += 1;
+      const t = ref.step;
+      // Diurnal price shape — the electrolyzer wants the trough
+      const price = Math.max(4, 45 + 40 * Math.sin((t - 18) * Math.PI / 36) + (Math.random() - 0.5) * 14);
+      // Naive operator: run baseload 24/7 regardless of price, meets target
+      // by brute force. Optimal would concentrate consumption in the trough.
+      const actual_charge = 12 + Math.round((Math.random() - 0.5) * 6);
+      return {
+        market_price: Math.round(price * 100) / 100,
+        actual_discharge: 0, actual_charge,
+        p_max: 20, e_max: 0,
+        deg_cost: 3, curtailment: 0,
+        forecast_price: Math.round(price * (0.9 + Math.random() * 0.2) * 100) / 100,
+        grid_limit: 20,
+      };
+    },
+  },
 };
 
 const EMPTY = {

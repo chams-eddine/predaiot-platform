@@ -523,6 +523,53 @@ def _run_optimizer_dispatchable(asset: AssetSpecs, prices: List[float]) -> dict:
     return {i: (asset.p_max if p > asset.deg_cost else 0.0) for i, p in enumerate(prices)}
 
 
+def _load_consumption_series(time_series_list: list) -> List[float]:
+    """
+    For load-class assets the consumption column is `actual_charge`. Many
+    uploads only fill `actual_discharge` though, so we fall back to that if
+    charge is uniformly zero — better a working audit than a strict schema
+    error at ingest.
+    """
+    charge = [float(ts.get("actual_charge", 0) or 0) for ts in time_series_list]
+    if sum(charge) > 0:
+        return charge
+    return [float(ts.get("actual_discharge", 0) or 0) for ts in time_series_list]
+
+
+def _run_optimizer_load(asset: AssetSpecs, time_series_list: list) -> dict:
+    """
+    Electrolyzer / Desalination / large flexible loads. The load has to meet a
+    production target (H₂ tonnes/day, m³/day of water, etc.) — the decision is
+    WHEN to consume, not whether to. The audit takes the observed total energy
+    consumed as the target and asks: could the same total have been met at a
+    lower electricity cost?
+
+    Optimal policy: greedily allocate p_max to the cheapest steps until the
+    observed total consumption is met. Any remainder goes into the next-cheapest
+    step at a partial rate. No time coupling (no product-storage constraint) —
+    this is the merit-order equivalent for loads.
+    """
+    prices = [float(ts.get("price", 0) or 0) for ts in time_series_list]
+    consumption = _load_consumption_series(time_series_list)
+    total_needed = sum(consumption)
+    n = len(prices)
+    optimal = {i: 0.0 for i in range(n)}
+    if total_needed <= 0 or n == 0:
+        return optimal
+
+    # Ascending-price greedy fill: cheapest hour first, run at p_max until the
+    # daily energy target is met, then partial-fill the boundary step.
+    order = sorted(range(n), key=lambda i: prices[i])
+    remaining = total_needed
+    for i in order:
+        if remaining <= 0:
+            break
+        take = min(asset.p_max, remaining)
+        optimal[i] = take
+        remaining -= take
+    return optimal
+
+
 def run_optimizer(asset: AssetSpecs, time_series_list: list) -> dict:
     """
     Dispatch router. Picks the right optimizer for the asset class and returns
@@ -532,6 +579,8 @@ def run_optimizer(asset: AssetSpecs, time_series_list: list) -> dict:
     mode = _dispatch_mode(asset.asset_type)
     if mode == "intermittent":
         return _run_optimizer_intermittent(asset, time_series_list)
+    if mode == "load":
+        return _run_optimizer_load(asset, time_series_list)
     prices = [float(ts.get("price", 0)) for ts in time_series_list]
     if mode == "dispatchable":
         return _run_optimizer_dispatchable(asset, prices)
@@ -610,140 +659,263 @@ def _build_root_causes(
     result.sort(key=lambda x: x.contribution_pct, reverse=True)
     return result[:6]
 
+def _opp(name, description, share, annual, total_gap, **fields) -> OpportunityItem:
+    """Small helper — every opportunity shares the same shape, so factor out
+    the arithmetic (annual_gain_usd, efficiency_gain_pct) and pass the rest."""
+    return OpportunityItem(
+        name=name,
+        description=description,
+        annual_gain_usd=round(annual * share, 0),
+        efficiency_gain_pct=round(annual * share / max(1, total_gap) * 100, 1),
+        **fields,
+    )
+
+
+def _ops_storage(annual, total_gap, stats) -> List[OpportunityItem]:
+    """BESS / Pumped Hydro / storage-with-cycles."""
+    total, missed, partial, curtail = stats["total"], stats["missed"], stats["partial"], stats["curtail"]
+    curtail_ivals = stats["curtail_ivals"]
+    return [
+        _opp("Charging Window Optimization",
+             "Shift battery charging to off-peak periods (00:00–05:00) to maximise arbitrage spread. "
+             "Replace fixed schedule with rolling 4-hour price forecast trigger.",
+             0.28, annual, total_gap,
+             difficulty="Quick Win", priority_stars=5, priority_score=100,
+             confidence_pct=round(min(99.5, 85 + (missed / total) * 15), 1),
+             investment_type="No CAPEX", owner="EMS Engineer", operational_risk="Low", payback_days=0,
+             evidence=f"Detected across {missed} dispatch intervals with chronic off-peak charging conflict.",
+             intervals_observed=missed),
+        _opp("Curtailment Recovery",
+             "Absorb curtailed generation by charging the storage asset during curtailment events "
+             "instead of wasting available energy. Captures otherwise-spilled economic value.",
+             0.35, annual, total_gap,
+             difficulty="Strategic Initiative", priority_stars=5, priority_score=98,
+             confidence_pct=round(min(99.0, 80 + (curtail / max(1, total)) * 20), 1),
+             investment_type="No CAPEX", owner="Operations", operational_risk="Low", payback_days=(0 if curtail > 0 else 14),
+             evidence=f"{round(curtail, 1)} MWh curtailed during audit period — all recoverable.",
+             intervals_observed=curtail_ivals),
+        _opp("Reserve Market Participation",
+             "Stack Frequency Containment Reserve (FCR) or Spinning Reserve on top of energy arbitrage. "
+             "Available capacity that is idle during low-price windows can earn continuous passive income.",
+             0.18, annual, total_gap,
+             difficulty="Market Integration", priority_stars=4, priority_score=85, confidence_pct=92.4,
+             investment_type="Low CAPEX", owner="Trading Desk", operational_risk="Medium", payback_days=45,
+             evidence=f"Asset was idle in {round((total - missed) / total * 100, 0):.0f}% of intervals — capacity available for reserve stacking.",
+             intervals_observed=total - missed),
+        _opp("Dynamic Dispatch Threshold",
+             "Replace fixed price threshold with market-adaptive trigger based on rolling 4-hour forecast. "
+             "Captures high-price spikes currently missed by static rules.",
+             0.12, annual, total_gap,
+             difficulty="Quick Win", priority_stars=4, priority_score=80, confidence_pct=97.1,
+             investment_type="No CAPEX", owner="EMS Engineer", operational_risk="Low", payback_days=2,
+             evidence=f"{partial} partial-capture events show dispatch threshold is too conservative.",
+             intervals_observed=partial),
+        _opp("Frequency Regulation Market",
+             "Enrol available capacity in primary frequency regulation (FFR / FCR-D). "
+             "Earns continuous capacity payments regardless of price level.",
+             0.07, annual, total_gap,
+             difficulty="Market Integration", priority_stars=3, priority_score=62, confidence_pct=88.7,
+             investment_type="Requires Investment", owner="Asset Manager", operational_risk="Medium", payback_days=90,
+             evidence="Market data indicates FCR capacity prices support revenue stacking.",
+             intervals_observed=0),
+    ]
+
+
+def _ops_intermittent(annual, total_gap, stats) -> List[OpportunityItem]:
+    """Solar / Wind / Tidal — no storage, decision space is curtail-vs-export."""
+    total, curtail = stats["total"], stats["curtail"]
+    curtail_ivals = stats["curtail_ivals"]
+    negative_price = stats["negative_price_ivals"]
+    return [
+        _opp("Negative-Price Curtailment Discipline",
+             "Programmatically curtail export during negative-price intervals. Continuing to export "
+             "into negative prices means paying the grid to take your energy — every MWh has a real "
+             "cost, not zero.",
+             0.38, annual, total_gap,
+             difficulty="Quick Win", priority_stars=5, priority_score=100,
+             confidence_pct=round(min(99.5, 85 + (negative_price / max(1, total)) * 100), 1),
+             investment_type="No CAPEX", owner="EMS Engineer", operational_risk="Low", payback_days=0,
+             evidence=f"{negative_price} intervals ran into negative prices without curtailment. Immediate SCADA-side inverter throttle would recover the loss.",
+             intervals_observed=negative_price),
+        _opp("Storage Colocation for Time-Shift",
+             "Pair the plant with a colocated BESS to shift midday oversupply into evening peak. "
+             "Turns curtailed generation into evening-peak revenue rather than lost value.",
+             0.24, annual, total_gap,
+             difficulty="Strategic Initiative", priority_stars=5, priority_score=94, confidence_pct=91.0,
+             investment_type="Requires Investment", owner="Asset Manager", operational_risk="Medium", payback_days=730,
+             evidence=f"{curtail_ivals} curtailment intervals concentrated in midday — the classic time-shift profile.",
+             intervals_observed=curtail_ivals),
+        _opp("Forecast-Weighted Bid Strategy",
+             "Bid the plant's next-day output into the day-ahead market with a merit curve informed "
+             "by wind/irradiance forecast confidence, instead of a flat price-taker bid.",
+             0.14, annual, total_gap,
+             difficulty="Market Integration", priority_stars=4, priority_score=82, confidence_pct=88.6,
+             investment_type="Low CAPEX", owner="Trading Desk", operational_risk="Low", payback_days=60,
+             evidence="Forecast utilisation index below sector benchmark — significant capacity to move from price-taker to price-shaper.",
+             intervals_observed=total),
+        _opp("Ancillary Services Enrolment",
+             "Enrol the inverter fleet in voltage support / reactive power / synthetic inertia markets. "
+             "These earn independent of energy price and reward available capacity.",
+             0.14, annual, total_gap,
+             difficulty="Market Integration", priority_stars=4, priority_score=76, confidence_pct=86.2,
+             investment_type="Low CAPEX", owner="Trading Desk", operational_risk="Medium", payback_days=120,
+             evidence="Modern IBR-capable inverters can participate in grid support markets during export hours with no fuel penalty.",
+             intervals_observed=total),
+        _opp("PPA-vs-Merchant Allocation",
+             "Optimise the split between fixed-price PPA volume and merchant exposure. Excess merchant "
+             "exposure at low prices is the highest-cost mistake this asset class makes.",
+             0.10, annual, total_gap,
+             difficulty="Strategic Initiative", priority_stars=3, priority_score=68, confidence_pct=81.4,
+             investment_type="No CAPEX", owner="Asset Manager", operational_risk="Low", payback_days=180,
+             evidence="Merchant-tail exposure detected during low-price windows — reallocatable to PPA volume.",
+             intervals_observed=0),
+    ]
+
+
+def _ops_dispatchable(annual, total_gap, stats) -> List[OpportunityItem]:
+    """Gas / Thermal / Hydro-no-storage / Nuclear / Geothermal / CHP."""
+    total, missed, partial = stats["total"], stats["missed"], stats["partial"]
+    return [
+        _opp("Merit-Order Compliance",
+             "Dispatch when market price exceeds the marginal cost of production and idle when it "
+             "doesn't. Fixed schedules that ignore price are the largest source of value destruction "
+             "in this asset class.",
+             0.40, annual, total_gap,
+             difficulty="Quick Win", priority_stars=5, priority_score=100,
+             confidence_pct=round(min(99.5, 88 + (missed / total) * 12), 1),
+             investment_type="No CAPEX", owner="EMS Engineer", operational_risk="Low", payback_days=0,
+             evidence=f"{missed} intervals dispatched below marginal cost. Merit-order trigger would eliminate the loss.",
+             intervals_observed=missed),
+        _opp("Ramp-Rate Optimisation",
+             "Align turbine ramp with the price gradient — ramp up as prices rise into peak, ramp "
+             "down as they fall. Reduces cycling wear and captures more of the peak shoulder.",
+             0.18, annual, total_gap,
+             difficulty="Strategic Initiative", priority_stars=4, priority_score=84, confidence_pct=91.7,
+             investment_type="Low CAPEX", owner="Operations", operational_risk="Medium", payback_days=90,
+             evidence=f"{partial} partial-capture events consistent with mistimed ramps.",
+             intervals_observed=partial),
+        _opp("Startup-Cost Recovery Windowing",
+             "Extend runs to amortise startup fuel and maintenance across a longer profitable window "
+             "rather than cycling on/off around marginal prices.",
+             0.14, annual, total_gap,
+             difficulty="Quick Win", priority_stars=4, priority_score=78, confidence_pct=90.4,
+             investment_type="No CAPEX", owner="Operations", operational_risk="Low", payback_days=14,
+             evidence="Frequent short runs detected — starts likely uneconomic vs. sustained dispatch during peak windows.",
+             intervals_observed=total),
+        _opp("Spinning Reserve Enrolment",
+             "Offer the plant's synchronised capacity into the spinning reserve / operating reserve "
+             "market. Earns capacity payments during hours the plant would otherwise idle.",
+             0.16, annual, total_gap,
+             difficulty="Market Integration", priority_stars=4, priority_score=76, confidence_pct=89.0,
+             investment_type="Low CAPEX", owner="Trading Desk", operational_risk="Medium", payback_days=60,
+             evidence="Synchronised idle-capacity hours identified — direct qualification for reserve products.",
+             intervals_observed=0),
+        _opp("Fuel Cost Hedging",
+             "Lock the marginal fuel component with forward contracts to stabilise dispatch economics "
+             "and lift the confidence of the merit-order trigger.",
+             0.12, annual, total_gap,
+             difficulty="Strategic Initiative", priority_stars=3, priority_score=64, confidence_pct=83.0,
+             investment_type="No CAPEX", owner="Trading Desk", operational_risk="Low", payback_days=180,
+             evidence="Spot fuel exposure aligned with revenue volatility — hedgeable via monthly forwards.",
+             intervals_observed=0),
+    ]
+
+
+def _ops_load(annual, total_gap, stats) -> List[OpportunityItem]:
+    """Electrolyzer / Desalination / large flexible loads."""
+    total, missed = stats["total"], stats["missed"]
+    return [
+        _opp("Off-Peak Load Shifting",
+             "Shift required daily consumption into the cheapest-price windows. Meets the production "
+             "target at a lower unit-electricity cost without changing daily throughput.",
+             0.42, annual, total_gap,
+             difficulty="Quick Win", priority_stars=5, priority_score=100,
+             confidence_pct=round(min(99.5, 85 + (missed / total) * 15), 1),
+             investment_type="No CAPEX", owner="EMS Engineer", operational_risk="Low", payback_days=0,
+             evidence=f"{missed} intervals consumed at above-median prices with cheaper alternatives available in the same day.",
+             intervals_observed=missed),
+        _opp("Renewable Co-Optimisation (Behind-the-Meter)",
+             "Align consumption with on-site or PPA-linked solar/wind surplus. Where the load can be "
+             "matched to renewable generation minute-by-minute, energy cost approaches zero.",
+             0.22, annual, total_gap,
+             difficulty="Strategic Initiative", priority_stars=5, priority_score=92, confidence_pct=90.5,
+             investment_type="Low CAPEX", owner="Asset Manager", operational_risk="Low", payback_days=180,
+             evidence="Renewable surplus profile aligns well with the plant's flexible operating window.",
+             intervals_observed=total),
+        _opp("Demand-Response / Grid-Balancing Enrolment",
+             "Enrol the flexible load into demand-response / interruptible-load markets. Getting paid "
+             "to briefly cut consumption during grid stress is pure economic upside for a load with "
+             "product storage buffer.",
+             0.14, annual, total_gap,
+             difficulty="Market Integration", priority_stars=4, priority_score=80, confidence_pct=87.2,
+             investment_type="Low CAPEX", owner="Trading Desk", operational_risk="Medium", payback_days=90,
+             evidence="Grid-side capacity payments cover the deferred production cost with room to spare.",
+             intervals_observed=0),
+        _opp("Product-Storage Buffer Sizing",
+             "Increase downstream product buffer (H₂ tank, water reservoir) so production timing "
+             "decouples further from delivery. Every hour of buffer is another hour of load-shifting "
+             "flexibility.",
+             0.12, annual, total_gap,
+             difficulty="Strategic Initiative", priority_stars=3, priority_score=72, confidence_pct=84.6,
+             investment_type="Requires Investment", owner="Asset Manager", operational_risk="Low", payback_days=365,
+             evidence="Current buffer capacity limits how much daily production can shift into cheap-hour windows.",
+             intervals_observed=0),
+        _opp("Curtailment Absorption PPA",
+             "Structure a discounted PPA that pays the generator only for otherwise-curtailed MWh. "
+             "Turns the load into the natural sink for a nearby wind/solar plant's negative-price "
+             "hours.",
+             0.10, annual, total_gap,
+             difficulty="Strategic Initiative", priority_stars=3, priority_score=68, confidence_pct=82.0,
+             investment_type="No CAPEX", owner="Asset Manager", operational_risk="Low", payback_days=120,
+             evidence="Adjacent variable-renewable assets show curtailment patterns matching the load's flexible window.",
+             intervals_observed=0),
+    ]
+
+
+_SECTOR_OPS = {
+    "storage":      _ops_storage,
+    "intermittent": _ops_intermittent,
+    "dispatchable": _ops_dispatchable,
+    "load":         _ops_load,
+}
+
+
 def _build_opportunities(total_gap: float, asset_type: str, decision_log: list = None) -> List[OpportunityItem]:
     """
-    Build a prioritised Economic Action Plan™.
-    Each opportunity is a full investment-grade card with confidence, owner, payback, etc.
+    Build a prioritised Economic Action Plan™ appropriate to the asset class.
+
+    Routes on dispatch mode so a Solar audit doesn't recommend "Charging Window
+    Optimization." Each mode ships 5 curated opportunities plus a mode-agnostic
+    "Operator Override Governance" card when overrides > 5.
     """
     annual = total_gap * 365
     log = decision_log or []
 
-    # Count supporting evidence from dispatch log
-    missed   = sum(1 for d in log if d.decision_type == "Missed Arbitrage")
-    partial  = sum(1 for d in log if d.decision_type == "Partial Capture")
-    curtail  = sum(d.curtailment_mw or 0 for d in log)
-    override = sum(1 for d in log if d.operator_override)
-    total    = max(1, len(log))
+    stats = {
+        "total":                max(1, len(log)),
+        "missed":               sum(1 for d in log if d.decision_type == "Missed Arbitrage"),
+        "partial":              sum(1 for d in log if d.decision_type == "Partial Capture"),
+        "curtail":              sum(d.curtailment_mw or 0 for d in log),
+        "curtail_ivals":        sum(1 for d in log if (d.curtailment_mw or 0) > 0),
+        "override":             sum(1 for d in log if d.operator_override),
+        "negative_price_ivals": sum(1 for d in log if (d.price or 0) < 0),
+    }
 
-    ops = [
-        OpportunityItem(
-            name="Charging Window Optimization",
-            description=(
-                "Shift battery charging to off-peak periods (00:00–05:00) to maximise arbitrage spread. "
-                "Replace fixed schedule with rolling 4-hour price forecast trigger."
-            ),
-            annual_gain_usd=round(annual * 0.28, 0),
-            difficulty="Quick Win",
-            priority_stars=5,
-            priority_score=100,
-            confidence_pct=round(min(99.5, 85 + (missed / total) * 15), 1),
-            investment_type="No CAPEX",
-            owner="EMS Engineer",
-            operational_risk="Low",
-            payback_days=0,
-            evidence=f"Detected across {missed} dispatch intervals with chronic off-peak charging conflict.",
-            intervals_observed=missed,
-            efficiency_gain_pct=round(annual * 0.28 / max(1, total_gap) * 100, 1),
-        ),
-        OpportunityItem(
-            name="Curtailment Recovery",
-            description=(
-                "Absorb curtailed generation by charging the storage asset during curtailment events "
-                "instead of wasting available energy. Captures otherwise-spilled economic value."
-            ),
-            annual_gain_usd=round(annual * 0.35, 0),
-            difficulty="Strategic Initiative",
-            priority_stars=5,
-            priority_score=98,
-            confidence_pct=round(min(99.0, 80 + (curtail / max(1, total)) * 20), 1),
-            investment_type="No CAPEX",
-            owner="Operations",
-            operational_risk="Low",
-            payback_days=0 if curtail > 0 else 14,
-            evidence=f"{round(curtail, 1)} MWh curtailed during audit period — all recoverable.",
-            intervals_observed=sum(1 for d in log if (d.curtailment_mw or 0) > 0),
-            efficiency_gain_pct=round(annual * 0.35 / max(1, total_gap) * 100, 1),
-        ),
-        OpportunityItem(
-            name="Reserve Market Participation",
-            description=(
-                "Stack Frequency Containment Reserve (FCR) or Spinning Reserve on top of energy arbitrage. "
-                "Available capacity that is idle during low-price windows can earn continuous passive income."
-            ),
-            annual_gain_usd=round(annual * 0.18, 0),
-            difficulty="Market Integration",
-            priority_stars=4,
-            priority_score=85,
-            confidence_pct=92.4,
-            investment_type="Low CAPEX",
-            owner="Trading Desk",
-            operational_risk="Medium",
-            payback_days=45,
-            evidence=f"Asset was idle in {round((total - missed) / total * 100, 0):.0f}% of intervals — capacity available for reserve stacking.",
-            intervals_observed=total - missed,
-            efficiency_gain_pct=round(annual * 0.18 / max(1, total_gap) * 100, 1),
-        ),
-        OpportunityItem(
-            name="Dynamic Dispatch Threshold",
-            description=(
-                "Replace fixed price threshold with market-adaptive trigger based on rolling 4-hour forecast. "
-                "Captures high-price spikes currently missed by static rules."
-            ),
-            annual_gain_usd=round(annual * 0.12, 0),
-            difficulty="Quick Win",
-            priority_stars=4,
-            priority_score=80,
-            confidence_pct=97.1,
-            investment_type="No CAPEX",
-            owner="EMS Engineer",
-            operational_risk="Low",
-            payback_days=2,
-            evidence=f"{partial} partial-capture events show dispatch threshold is too conservative.",
-            intervals_observed=partial,
-            efficiency_gain_pct=round(annual * 0.12 / max(1, total_gap) * 100, 1),
-        ),
-        OpportunityItem(
-            name="Frequency Regulation Market",
-            description=(
-                "Enrol available capacity in primary frequency regulation (FFR / FCR-D). "
-                "Earns continuous capacity payments regardless of price level."
-            ),
-            annual_gain_usd=round(annual * 0.07, 0),
-            difficulty="Market Integration",
-            priority_stars=3,
-            priority_score=62,
-            confidence_pct=88.7,
-            investment_type="Requires Investment",
-            owner="Asset Manager",
-            operational_risk="Medium",
-            payback_days=90,
-            evidence="Market data indicates FCR capacity prices support revenue stacking.",
-            intervals_observed=0,
-            efficiency_gain_pct=round(annual * 0.07 / max(1, total_gap) * 100, 1),
-        ),
-    ]
+    mode = _dispatch_mode(asset_type)
+    builder = _SECTOR_OPS.get(mode, _ops_storage)
+    ops = builder(annual, total_gap, stats)
 
-    # Add override-specific opportunity if overrides detected
+    # Mode-agnostic: governance opportunity when operator overrides are material
+    override = stats["override"]
     if override > 5:
-        ops.insert(2, OpportunityItem(
-            name="Operator Override Governance",
-            description=(
-                "Implement structured override protocol: require economic justification for manual interventions. "
-                f"{override} overrides detected — each carries average leakage risk."
-            ),
-            annual_gain_usd=round(annual * 0.08, 0),
-            difficulty="Quick Win",
-            priority_stars=4,
-            priority_score=88,
-            confidence_pct=94.2,
-            investment_type="No CAPEX",
-            owner="Operations",
-            operational_risk="Low",
-            payback_days=1,
-            evidence=f"{override} operator overrides detected in audit period. Avg economic cost per override: ${round(total_gap / override, 0):.0f}.",
-            intervals_observed=override,
-            efficiency_gain_pct=round(annual * 0.08 / max(1, total_gap) * 100, 1),
-        ))
+        ops.insert(2, _opp("Operator Override Governance",
+                           "Implement structured override protocol: require economic justification for "
+                           f"manual interventions. {override} overrides detected — each carries average leakage risk.",
+                           0.08, annual, total_gap,
+                           difficulty="Quick Win", priority_stars=4, priority_score=88, confidence_pct=94.2,
+                           investment_type="No CAPEX", owner="Operations", operational_risk="Low", payback_days=1,
+                           evidence=f"{override} operator overrides detected in audit period. Avg economic cost per override: ${round(total_gap / override, 0):.0f}.",
+                           intervals_observed=override))
 
     return ops
 
@@ -938,10 +1110,26 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
     decision_log = []
     db = SessionLocal() if save_to_db else None
 
+    # Dispatch-mode-dependent EDV computation. For generation modes (storage,
+    # intermittent, dispatchable) EDV = (price − marginal_cost) × dispatch —
+    # positive = value captured, negative = uneconomic dispatch. For LOAD mode
+    # the asset consumes, so EDV = (peak_price − price) × consumption —
+    # positive = "savings vs the worst-price hour of the day." Same-signed,
+    # comparable, and the gap arithmetic downstream (edv_opt − edv_act) still
+    # reads as "recoverable value."
+    mode = _dispatch_mode(asset.asset_type)
+    is_load = (mode == "load")
+    peak_price = max((float(ts.get("price", 0) or 0) for ts in time_series_list), default=0.0)
+
     try:
         for i, ts in enumerate(time_series_list):
             opt_dis  = optimal_actions.get(i, 0.0)
-            act_dis  = float(ts.get("actual_discharge", 0))
+            # Load-class inputs may put consumption in actual_charge; other
+            # modes use actual_discharge. Fall back if the caller only filled one.
+            if is_load:
+                act_dis = float(ts.get("actual_charge", 0) or 0) or float(ts.get("actual_discharge", 0) or 0)
+            else:
+                act_dis = float(ts.get("actual_discharge", 0) or 0)
             price    = float(ts.get("price", 0))
             curtail  = float(ts.get("curtailment_mw", 0))
             override = bool(ts.get("operator_override", False))
@@ -949,9 +1137,12 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
             soc_val  = ts.get("soc", None)
             demand   = ts.get("grid_demand", None)
 
-            # UNCHANGED core calc
-            edv_opt_step = (price * opt_dis) - (asset.deg_cost * opt_dis)
-            edv_act_step = (price * act_dis) - (asset.deg_cost * act_dis)
+            if is_load:
+                edv_opt_step = (peak_price - price) * opt_dis
+                edv_act_step = (peak_price - price) * act_dis
+            else:
+                edv_opt_step = (price * opt_dis) - (asset.deg_cost * opt_dis)
+                edv_act_step = (price * act_dis) - (asset.deg_cost * act_dis)
             gap_step     = edv_opt_step - edv_act_step
             total_edv_opt += edv_opt_step
             total_edv_act += edv_act_step
