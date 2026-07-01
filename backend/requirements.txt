@@ -9,17 +9,17 @@ openpyxl
 pypdf
 reportlab
 rapidfuzz
-lxml
-# pyarrow is ~50MB — needed for .parquet uploads. If your Render plan is
-# size-constrained, remove this line and the .parquet path will return a
-# clear "install pyarrow" error rather than crashing at import.
-pyarrow
-# Real-time integrations — all lazy-imported. If a dep is missing the
-# corresponding endpoint returns 503 with a "pip install X" message
-# rather than crashing at boot, so you can trim these on a lean deploy.
-paho-mqtt
-pymodbus
-asyncua
-PyYAML
-# Rate limiting (safety hardening)
+# Rate limiting — small, essential for the safety pass. Falls back to a
+# null-object shim if not installed, so removing this line makes the
+# rate-limit decorators no-ops without breaking the app.
 slowapi
+# Optional integration deps — all lazy-imported. Uncomment to enable
+# the corresponding endpoints; without them the endpoints return 503
+# with a clear "pip install X" message. Kept commented to preserve the
+# lean Render deploy footprint (pyarrow alone is ~50MB).
+# lxml           # XML upload parser
+# pyarrow        # Parquet upload parser
+# paho-mqtt      # MQTT bridge (Coverage Tasks 3.3)
+# pymodbus       # Modbus TCP polling adapter (future)
+# asyncua        # OPC-UA client (future)
+# PyYAML         # On-prem agent config parsing (future)
