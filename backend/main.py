@@ -130,7 +130,7 @@ class TimeStepData(BaseModel):
     # Optional enrichment columns accepted from uploaded files
     actual_charge: Optional[float] = 0.0
     soc: Optional[float] = None
-    grid_demand: Optional[str] = None
+    grid_demand: Optional[float] = None
     curtailment_mw: Optional[float] = 0.0
     operator_override: Optional[bool] = False
     forecast_price: Optional[float] = None
@@ -154,7 +154,7 @@ class DecisionRecord(BaseModel):
     operator_override: Optional[bool] = False
     curtailment_mw: Optional[float] = 0.0
     soc: Optional[float] = None
-    grid_demand: Optional[str] = None
+    grid_demand: Optional[float] = None
     forecast_price: Optional[float] = None
     confidence: Optional[float] = None
 
