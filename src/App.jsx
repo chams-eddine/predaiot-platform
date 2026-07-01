@@ -105,7 +105,10 @@ const Label = ({ children, style }) => (
 );
 
 const BigNum = ({ v, color, size = 26 }) => (
-  <div style={{ color: color || DS.text, fontSize: size, fontWeight: 700, fontFamily: DS.mono, lineHeight: 1.1 }}>{v}</div>
+  <div style={{
+    color: color || DS.text, fontSize: size, fontWeight: 700, fontFamily: DS.mono,
+    lineHeight: 1.1, whiteSpace: 'nowrap',
+  }}>{v}</div>
 );
 
 const Pill = ({ label, color }) => (
@@ -995,7 +998,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
         </nav>
 
         {/* ── MAIN CONTENT ──────────────────────────────────────── */}
-        <main style={{ flex: 1, padding: '28px 32px', maxWidth: 'calc(100vw - 242px)', overflowX: 'hidden' }}>
+        <main style={{ flex: 1, minWidth: 0, padding: '28px 32px', overflowX: 'hidden' }}>
 
           {/* Welcome / empty state — only shown when on a data-dependent section
               with no audit loaded. Skipped for live/appendix/govern which work
@@ -1043,7 +1046,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                 background: `linear-gradient(135deg, rgba(75,191,255,0.07) 0%, rgba(0,230,118,0.05) 100%)`,
                 border: `1px solid ${DS.blue}25`, borderRadius: DS.r16, padding: 28, marginBottom: 20,
               }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 24 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 24 }}>
                   {[
                     { label: 'Asset', value: data.asset_name || '—', color: DS.text, mono: false },
                     { label: 'Audit Period', value: data.audit_period_label || '—', color: DS.cyan, mono: true },
@@ -1059,7 +1062,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
 
                 <Divider />
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 24 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 24 }}>
                   {[
                     { label: 'Destroyed Value', value: fmtUSD(data.total_gap_usd), color: DS.loss },
                     { label: 'DQ Score', value: hasData ? `${((data.dq_score || 0) * 100).toFixed(1)} / 100` : '—', color: qualColor(captureRate) },
@@ -1073,6 +1076,95 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   ))}
                 </div>
               </div>
+
+              {/* ── Before / After PREDAIOT — value visualization (Area 2) ─── */}
+              {log.length > 0 && (
+                <Card style={{ marginBottom: 20 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
+                    <div>
+                      <Label style={{ marginBottom: 2 }}>Optimal vs Actual Dispatch — Economic Value per Step</Label>
+                      <div style={{ color: DS.dim, fontSize: 10, letterSpacing: '0.08em' }}>
+                        SHADED AREA = ECONOMIC GAP RECOVERABLE WITH PREDAIOT
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 14, fontSize: 10, color: DS.sub }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ width: 10, height: 3, background: DS.optimal, borderRadius: 2 }} />
+                        With PREDAIOT (optimal)
+                      </span>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ width: 10, height: 3, background: DS.orange, borderRadius: 2 }} />
+                        Without PREDAIOT (actual)
+                      </span>
+                    </div>
+                  </div>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <AreaChart data={log} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="gExecOpt" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor={DS.optimal} stopOpacity={0.28} />
+                          <stop offset="100%" stopColor={DS.optimal} stopOpacity={0} />
+                        </linearGradient>
+                        <linearGradient id="gExecAct" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor={DS.orange} stopOpacity={0.24} />
+                          <stop offset="100%" stopColor={DS.orange} stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke={DS.border} />
+                      <XAxis dataKey="hour" stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} />
+                      <YAxis stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} tickFormatter={(v) => `$${v}`} />
+                      <Tooltip
+                        contentStyle={{ background: '#0f1318', border: `1px solid ${DS.border}`, borderRadius: 8, fontSize: 11 }}
+                        formatter={(v, name) => [`$${(v || 0).toFixed(2)}`, name]}
+                        labelFormatter={(h) => `Step ${h}`}
+                      />
+                      <Area type="monotone" dataKey="edv_optimal_step" name="With PREDAIOT" stroke={DS.optimal} fill="url(#gExecOpt)" strokeWidth={2} dot={false} />
+                      <Area type="monotone" dataKey="edv_actual_step" name="Without PREDAIOT" stroke={DS.orange} fill="url(#gExecAct)" strokeWidth={2} dot={false} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </Card>
+              )}
+
+              {/* ── Value Waterfall — Potential → Captured → Destroyed ─── */}
+              {hasData && (() => {
+                const pot = data.edv_optimal_total || 0;
+                const act = data.edv_actual_total || 0;
+                const gap = data.total_gap_usd || 0;
+                const maxV = Math.max(pot, 1);
+                const rows = [
+                  { label: 'Economic Potential',   sub: 'MILP counterfactual', value: pot, color: DS.optimal, pct: 100 },
+                  { label: 'Captured Value',       sub: 'What actually happened', value: act, color: DS.blue,   pct: Math.min(100, (act / maxV) * 100) },
+                  { label: 'Destroyed Value',      sub: 'Recoverable with PREDAIOT', value: gap, color: DS.loss, pct: Math.min(100, (gap / maxV) * 100) },
+                ];
+                return (
+                  <Card style={{ marginBottom: 20 }}>
+                    <Label style={{ marginBottom: 14 }}>Value Waterfall — Where Every Dollar Went</Label>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                      {rows.map((r) => (
+                        <div key={r.label}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 5, fontSize: 12 }}>
+                            <span>
+                              <span style={{ color: DS.text, fontWeight: 700 }}>{r.label}</span>
+                              <span style={{ color: DS.dim, fontSize: 10, marginLeft: 8, letterSpacing: '0.05em' }}>{r.sub}</span>
+                            </span>
+                            <span style={{ color: r.color, fontFamily: DS.mono, fontWeight: 700 }}>{fmtUSD(r.value)}</span>
+                          </div>
+                          <div style={{ height: 10, background: `${DS.border}88`, borderRadius: 5, overflow: 'hidden' }}>
+                            <div style={{
+                              width: `${r.pct}%`, height: '100%',
+                              background: `linear-gradient(90deg, ${r.color} 0%, ${r.color}bb 100%)`,
+                              boxShadow: `0 0 12px ${r.color}55`,
+                            }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${DS.border}`, fontSize: 10, color: DS.dim, letterSpacing: '0.06em' }}>
+                      The <span style={{ color: DS.loss, fontWeight: 700 }}>{fmtUSD(gap)}</span> destroyed-value bar is the number PREDAIOT&rsquo;s Economic Action Plan is designed to recover.
+                    </div>
+                  </Card>
+                );
+              })()}
 
               {/* Risk banner */}
               {hasData && (
@@ -1098,7 +1190,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
 
               {/* EIS gauge (circular text display) */}
               {m && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 20 }}>
                   <Card>
                     <Label>Economic Intelligence Score</Label>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginTop: 8 }}>
@@ -1420,7 +1512,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {hasData && activeSection === 'leakage' && (
             <div>
               <SectionHeader tag="07" title="Financial Value Leakage" />
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 20 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 16, marginBottom: 20 }}>
                 {[
                   { label: '24-Hour', value: fmtUSD(data.total_gap_usd), color: DS.loss },
                   { label: '7-Day (Est.)', value: data.total_gap_usd > 0 ? fmtUSD(data.total_gap_usd * 7) : '—', color: DS.orange },
@@ -2125,10 +2217,54 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                     boxShadow: `0 0 80px ${certificate.rating_color}14`,
                   }}>
                     {/* Header */}
-                    <div style={{ textAlign: 'center', marginBottom: 36 }}>
+                    <div style={{ textAlign: 'center', marginBottom: 28 }}>
                       <div style={{ color: DS.dim, fontSize: 9, letterSpacing: '0.4em', marginBottom: 10 }}>PREDAIOT ECONOMIC DECISION PERFORMANCE CERTIFICATE™</div>
                       <div style={{ color: DS.text, fontSize: 24, fontWeight: 900, letterSpacing: '0.06em', marginBottom: 4 }}>EDPC</div>
                       <div style={{ color: DS.dim, fontSize: 10, letterSpacing: '0.25em' }}>{certificate.standard}</div>
+                    </div>
+
+                    {/* ISSUED BY / ISSUED TO / AUDIT SCOPE — engagement-letter framing */}
+                    <div style={{
+                      display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24,
+                      padding: '18px 20px', marginBottom: 28,
+                      background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: DS.r12,
+                    }}>
+                      <div>
+                        <div style={{ color: DS.dim, fontSize: 9, letterSpacing: '0.2em', fontWeight: 700, marginBottom: 8 }}>ISSUED BY</div>
+                        <div style={{ color: DS.text, fontSize: 13, fontWeight: 700, marginBottom: 3 }}>
+                          {certificate.issuer?.organization || 'PREDAIOT Economic Decision Intelligence'}
+                        </div>
+                        <div style={{ color: DS.sub, fontSize: 10, lineHeight: 1.6, fontStyle: 'italic' }}>
+                          {certificate.issuer?.licensed_operator || 'Al Shams Investment and Trade Company SPC'} (Licensed Operator)
+                        </div>
+                        <div style={{ color: DS.cyan, fontSize: 10, marginTop: 4, fontFamily: DS.mono }}>
+                          {certificate.issuer?.email || 'chams@preda-iot.com'} &nbsp;·&nbsp; {certificate.issuer?.domain || 'platform.preda-iot.com'}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ color: DS.dim, fontSize: 9, letterSpacing: '0.2em', fontWeight: 700, marginBottom: 8 }}>ISSUED TO</div>
+                        <div style={{ color: DS.text, fontSize: 13, fontWeight: 700, marginBottom: 3 }}>
+                          {certificate.recipient?.asset_name || certificate.asset_name}
+                        </div>
+                        <div style={{ color: DS.sub, fontSize: 10, lineHeight: 1.6 }}>
+                          {certificate.recipient?.company || 'Confidential — Available on Request'}
+                        </div>
+                        <div style={{ color: DS.sub, fontSize: 10, marginTop: 4 }}>
+                          {certificate.recipient?.location || 'Confidential — Available on Request'}
+                        </div>
+                      </div>
+                      <div style={{ gridColumn: '1 / span 2', borderTop: `1px solid ${DS.border}`, paddingTop: 10, display: 'flex', gap: 24, flexWrap: 'wrap', fontSize: 10 }}>
+                        <div>
+                          <span style={{ color: DS.dim, letterSpacing: '0.2em', fontWeight: 700 }}>AUDIT SCOPE&nbsp;&nbsp;</span>
+                          <span style={{ color: DS.text, fontFamily: DS.mono }}>
+                            {certificate.audit_scope?.asset_id || certificate.asset_name} · {certificate.audit_scope?.asset_type || certificate.asset_type} · {certificate.audit_scope?.period || certificate.audit_period}
+                          </span>
+                        </div>
+                        <div>
+                          <span style={{ color: DS.dim, letterSpacing: '0.2em', fontWeight: 700 }}>ISSUED&nbsp;&nbsp;</span>
+                          <span style={{ color: DS.text, fontFamily: DS.mono }}>{new Date(certificate.issued_at).toLocaleString()}</span>
+                        </div>
+                      </div>
                     </div>
 
                     {/* Rating + composite breakdown */}
