@@ -9,3 +9,17 @@ openpyxl
 pypdf
 reportlab
 rapidfuzz
+lxml
+# pyarrow is ~50MB — needed for .parquet uploads. If your Render plan is
+# size-constrained, remove this line and the .parquet path will return a
+# clear "install pyarrow" error rather than crashing at import.
+pyarrow
+# Real-time integrations — all lazy-imported. If a dep is missing the
+# corresponding endpoint returns 503 with a "pip install X" message
+# rather than crashing at boot, so you can trim these on a lean deploy.
+paho-mqtt
+pymodbus
+asyncua
+PyYAML
+# Rate limiting (safety hardening)
+slowapi

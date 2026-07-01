@@ -8,7 +8,7 @@ import urllib.request
 import urllib.error
 import pandas as pd
 from io import BytesIO, StringIO
-from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Body, Header, Depends, HTTPException
+from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Body, Header, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, Response
@@ -72,6 +72,25 @@ class TrialLead(Base):
     expires_at = Column(DateTime, nullable=False)
     audit_run_count = Column(Integer, default=0, nullable=False)
     crm_synced = Column(Boolean, default=False, nullable=False)
+
+
+class APIAccessLog(Base):
+    """
+    Forensic access log. One row per /api/v1/* request. Foundation for
+    "who accessed asset X and when" questions during pilot / procurement.
+    Not a full audit trail yet (no request/response bodies, no PII masking),
+    but a real starting point.
+    """
+    __tablename__ = "api_access_log"
+    id           = Column(Integer, primary_key=True, index=True)
+    timestamp    = Column(DateTime, default=datetime.utcnow, index=True, nullable=False)
+    trial_token  = Column(String, index=True, nullable=True)   # nullable for un-gated hits
+    method       = Column(String, nullable=False)
+    path         = Column(String, index=True, nullable=False)
+    status_code  = Column(Integer, nullable=False)
+    client_ip    = Column(String, nullable=True)
+    user_agent   = Column(String, nullable=True)
+    latency_ms   = Column(Integer, nullable=True)
 
 
 TRIAL_DURATION_DAYS = 7
@@ -399,14 +418,118 @@ def _bump_audit_count(token: str) -> None:
 
 
 # ==========================================
-# 3. FastAPI Setup  (UNCHANGED CORE)
+# 3. FastAPI Setup  (safety hardening applied)
 # ==========================================
+# Rate limiter — lazy-imported so a deploy without slowapi still boots and
+# the endpoints just aren't rate-limited (fail-open, not fail-closed —
+# availability > perfect throttling on a pre-seed platform).
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.errors import RateLimitExceeded
+    from slowapi.util import get_remote_address
+    _HAS_SLOWAPI = True
+except ImportError:
+    _HAS_SLOWAPI = False
+
+
+def _rate_limit_key(request) -> str:
+    """
+    Rate-limit key: prefer the trial token (per-user) with the client IP as
+    fallback (per-connection). Falls back to a stable string if the request
+    context is unusual so slowapi never explodes.
+    """
+    try:
+        token = request.headers.get("X-Trial-Token") if hasattr(request, "headers") else None
+        if token:
+            return f"tok:{token[:16]}"
+        return f"ip:{get_remote_address(request)}"
+    except Exception:
+        return "unknown"
+
+
 app = FastAPI(title="PREDAIOT Engine")
+
+if _HAS_SLOWAPI:
+    limiter = Limiter(key_func=_rate_limit_key)
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+else:
+    # Null-object shim so the @limiter.limit(...) decorators below are no-ops
+    # when slowapi isn't installed. Keeps the audit code path identical.
+    class _NullLimiter:
+        def limit(self, *_args, **_kwargs):
+            def _wrap(fn): return fn
+            return _wrap
+    limiter = _NullLimiter()
+
+
+# CORS — allow_origins is now an explicit list from ALLOWED_ORIGINS env
+# (comma-separated). Defaults cover the live domain + the Render subdomain.
+# Setting it to "*" is still possible via env override but no longer default.
+_ALLOWED_ORIGINS = [o.strip() for o in os.environ.get(
+    "ALLOWED_ORIGINS",
+    "https://platform.preda-iot.com,https://predaiot-platform.onrender.com,http://localhost:5173,http://localhost:8000"
+).split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"]
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
 )
+
+
+# Security headers — cheap browser-side hardening. HSTS assumes Render terminates
+# TLS in front of us (it does). X-Frame-Options DENY blocks clickjacking of the
+# audit UI. Referrer-Policy limits leakage of the trial token via HTTP referer.
+@app.middleware("http")
+async def _security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["X-Content-Type-Options"]    = "nosniff"
+    response.headers["X-Frame-Options"]           = "DENY"
+    response.headers["Referrer-Policy"]           = "same-origin"
+    response.headers["Permissions-Policy"]        = "geolocation=(), microphone=(), camera=()"
+    return response
+
+
+# API access log middleware — writes one row per /api/v1/* request to
+# api_access_log for forensic follow-up. Best-effort: a DB failure never
+# breaks the response, it just prints and moves on.
+@app.middleware("http")
+async def _api_access_log(request, call_next):
+    import time as _t
+    started = _t.perf_counter()
+    response = await call_next(request)
+    try:
+        path = request.url.path or ""
+        if path.startswith("/api/v1/"):
+            latency_ms = int((_t.perf_counter() - started) * 1000)
+            token = request.headers.get("X-Trial-Token")
+            client_ip = None
+            try:
+                client_ip = request.client.host if request.client else None
+            except Exception:
+                pass
+            db = SessionLocal()
+            try:
+                db.add(APIAccessLog(
+                    timestamp=datetime.utcnow(),
+                    trial_token=token,
+                    method=request.method,
+                    path=path,
+                    status_code=response.status_code,
+                    client_ip=client_ip,
+                    user_agent=request.headers.get("user-agent"),
+                    latency_ms=latency_ms,
+                ))
+                db.commit()
+            finally:
+                db.close()
+    except Exception as e:
+        print(f"[access-log] non-fatal: {type(e).__name__}: {e}")
+    return response
 
 @app.on_event("startup")
 async def init_database_tables():
@@ -425,9 +548,15 @@ async def init_database_tables():
             print("[startup] App is live. DB-dependent endpoints may fail until DB is reachable.")
     await asyncio.to_thread(_create_tables)
 
-latest_live_result = {
+# Per-trial-token cache for the most recent audit each trial ran. Replaces
+# the process-global `latest_live_result` which leaked between trial holders
+# (any caller could see whichever audit ran most recently). Now indexed by
+# lead.token so /api/latest, /api/v1/certificate, /api/v1/audit/pdf/latest
+# only return the caller's own data.
+_latest_by_token: Dict[str, dict] = {}
+_EMPTY_LATEST = {
     "edv_optimal_total": 0, "edv_actual_total": 0,
-    "dq_score": 0, "total_gap_usd": 0, "decision_log": []
+    "dq_score": 0, "total_gap_usd": 0, "decision_log": [],
 }
 shared_audits = {}
 
@@ -1104,7 +1233,12 @@ def _risk_level(dq: float) -> str:
 # 6. Central Calculation Engine  (CORE UNCHANGED + EDA LAYER)
 # ==========================================
 def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: bool = True):
-    global latest_live_result
+    """
+    Runs the MILP + EDV + EDA pipeline. Does NOT touch the per-token cache —
+    the endpoint handler is responsible for caching the result under its
+    trial token. Keeping the tenant-scoping outside this function preserves
+    it as a pure calc engine (no auth coupling).
+    """
     optimal_actions = run_optimizer(asset, time_series_list)
     total_edv_opt, total_edv_act = 0.0, 0.0
     decision_log = []
@@ -1244,7 +1378,6 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
         client_name=asset.client_name,
         client_company=asset.client_company,
     )
-    latest_live_result = result
     return result
 
 # ==========================================
@@ -1255,7 +1388,8 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
 from fastapi import BackgroundTasks  # local import keeps the imports block tidy
 
 @app.post("/api/v1/trial/start", response_model=TrialStartResponse)
-async def start_trial(req: TrialStartRequest, background: BackgroundTasks):
+@limiter.limit("5/hour")
+async def start_trial(request: Request, req: TrialStartRequest, background: BackgroundTasks):
     """
     Start a 7-day free diagnostic. Returns a trial_token that the frontend
     sends as X-Trial-Token on subsequent /api/v1/audit calls.
@@ -1286,12 +1420,15 @@ async def trial_status(lead: TrialLead = Depends(require_trial_token)):
 
 # ---- Audit endpoints (gated by trial token) --------------------------------
 @app.post("/api/v1/audit", response_model=AuditResponse)
+@limiter.limit("10/minute")
 async def calculate_gap(
-    request: AuditRequest,
+    request: Request,   # noqa: ARG001 — used by rate limiter
+    audit_req: AuditRequest,
     background: BackgroundTasks,
     lead: TrialLead = Depends(require_trial_token),
 ):
-    result = process_calculation(request.asset, [ts.dict() for ts in request.time_series])
+    result = process_calculation(audit_req.asset, [ts.dict() for ts in audit_req.time_series])
+    _latest_by_token[lead.token] = result.dict()   # per-tenant cache — no cross-leak
     background.add_task(_bump_audit_count, lead.token)
     return result
 
@@ -1595,17 +1732,193 @@ def _detect_excel_serial_timestamps(df: pd.DataFrame) -> tuple:
     """
     Excel-saved CSVs often serialise timestamps as float days-since-1899-12-30.
     Detection: the timestamp column is entirely numeric and falls in the plausible
-    Excel-date range (40000..60000 covers 2009 through 2064). If so, replace with
-    an ordered index — the audit engine only needs ordering, not wall-clock time.
+    Excel-date range (40000..60000 covers 2009 through 2064). If so, convert to
+    real datetime — the resolution detector downstream can then work on it.
     """
     corrections = []
     if "hour" not in df.columns:
         return df, corrections
     series = pd.to_numeric(df["hour"], errors="coerce")
     if series.notna().all() and 40000 < float(series.min()) and float(series.max()) < 60000:
-        df["hour"] = list(range(len(df)))
-        corrections.append("hour column looked like Excel serial timestamps; replaced with a 0..N-1 ordered index.")
+        df["hour"] = pd.to_datetime(series, unit="D", origin="1899-12-30")
+        corrections.append("hour column looked like Excel serial timestamps; parsed as datetime.")
     return df, corrections
+
+
+# Order matters: try the strictest / most-informative parses first. ISO 8601
+# (including Z-suffixed and offset-suffixed variants) parses cleanly with just
+# `utc=True`; only fall through to Gulf/US slash-date if ISO fails.
+_TIMESTAMP_FORMAT_ATTEMPTS = [
+    # (label, pandas args to try in `pd.to_datetime(series, **kw)`)
+    ("ISO 8601",                    dict(utc=True)),
+    ("DD/MM/YYYY (Gulf default)",   dict(dayfirst=True)),
+    ("MM/DD/YYYY (US)",             dict(dayfirst=False)),
+]
+
+
+def _parse_timestamps(df: pd.DataFrame) -> tuple:
+    """
+    Best-effort timestamp parsing for the "hour" column.
+
+    Tries a fixed matrix of formats: ISO 8601 (Z, offset, space), Unix epoch
+    (seconds vs milliseconds), then DD/MM (Gulf convention) and MM/DD (US) for
+    ambiguous slash-separated dates. Assumes Gulf Standard Time (UTC+4) for
+    timezone-naive inputs since that's the sales target (Coverage Tasks 1.4).
+
+    Returns (df, notes). `notes` is a dict with `format_detected` (str or None)
+    and, if a datetime column was produced, `first_ts` / `last_ts` ISO strings.
+    """
+    notes = {"format_detected": None, "first_ts": None, "last_ts": None}
+    if "hour" not in df.columns:
+        return df, notes
+
+    col = df["hour"]
+
+    # Already datetime? Nothing to do.
+    if pd.api.types.is_datetime64_any_dtype(col):
+        notes["format_detected"] = "already datetime"
+        _fill_ts_bounds(col, notes)
+        return df, notes
+
+    # Try Unix epoch first (small integers won't collide with slash dates).
+    numeric = pd.to_numeric(col, errors="coerce")
+    if numeric.notna().all():
+        m = float(numeric.abs().max())
+        # Excel-serial range gets handled by _detect_excel_serial_timestamps; skip that here.
+        if 40000 < m < 60000:
+            pass  # Excel-serial branch owns this
+        elif 1e12 < m < 1e14:
+            df["hour"] = pd.to_datetime(numeric, unit="ms", utc=True)
+            notes["format_detected"] = "Unix epoch (ms)"
+            _fill_ts_bounds(df["hour"], notes)
+            return df, notes
+        elif 1e9 < m < 1e11:
+            df["hour"] = pd.to_datetime(numeric, unit="s", utc=True)
+            notes["format_detected"] = "Unix epoch (s)"
+            _fill_ts_bounds(df["hour"], notes)
+            return df, notes
+
+    # String-shaped: run through the format matrix. Accept `object` (legacy
+    # pandas) and `str` (pandas 2.1+) alike — the numeric path above handled
+    # anything else that could plausibly be a timestamp.
+    if not pd.api.types.is_numeric_dtype(col) and not pd.api.types.is_datetime64_any_dtype(col):
+        s = col.astype(str)
+        for label, kw in _TIMESTAMP_FORMAT_ATTEMPTS:
+            try:
+                parsed = pd.to_datetime(s, errors="coerce", **kw)
+            except (ValueError, TypeError):
+                continue
+            # Accept a format only if it parses (mostly) everything cleanly.
+            if parsed.notna().mean() >= 0.98:
+                suffix = ""
+                # Timezone-naive → assume Gulf Standard Time (UTC+4). Per brief
+                # 1.4: sales target is Oman/GCC, so the local wall-clock reading
+                # is what the operator meant when they omitted the tz.
+                if parsed.dt.tz is None:
+                    parsed = parsed.dt.tz_localize("Asia/Muscat", nonexistent="shift_forward", ambiguous="NaT")
+                    suffix = " (Gulf tz assumed)"
+                df["hour"] = parsed
+                notes["format_detected"] = label + suffix
+                _fill_ts_bounds(parsed, notes)
+                return df, notes
+
+    return df, notes
+
+
+def _fill_ts_bounds(series, notes: dict) -> None:
+    try:
+        notes["first_ts"] = pd.Timestamp(series.iloc[0]).isoformat()
+        notes["last_ts"]  = pd.Timestamp(series.iloc[-1]).isoformat()
+    except Exception:
+        pass
+
+
+# Standard energy-market resolutions we snap to (seconds)
+_STANDARD_INTERVALS = [60, 300, 900, 1800, 3600]  # 1min, 5min, 15min, 30min, 60min
+
+
+def _detect_and_resample(df: pd.DataFrame) -> tuple:
+    """
+    If the "hour" column is a real datetime, compute the median inter-step delta,
+    snap it to the nearest standard interval, and resample:
+      - forward-fill  operational fields (actual_discharge, actual_charge,
+        soc, curtailment_mw, operator_override) — these persist between reads
+      - linear-interp continuous fields (price, forecast_price) — these vary smoothly
+
+    Skips resampling (with a warning) if more than 20% of the expected steps
+    would be missing — better to audit what the operator actually gave us than
+    fabricate 20% of the data. Also converts "hour" to an ordered int index at
+    the end so process_calculation sees the shape it expects.
+
+    Returns (df, notes). Notes shape:
+      { detected_resolution_sec, expected_steps, actual_steps,
+        resampled, missing_pct, warning (if any) }
+    """
+    notes = {
+        "detected_resolution_sec": None,
+        "detected_resolution_label": None,
+        "expected_steps": None,
+        "actual_steps": int(len(df)),
+        "resampled": False,
+        "missing_pct": None,
+        "warning": None,
+    }
+    if "hour" not in df.columns or not pd.api.types.is_datetime64_any_dtype(df["hour"]):
+        return df, notes
+
+    ts = df["hour"]
+    if len(ts) < 3:
+        return df, notes
+
+    deltas = ts.diff().dt.total_seconds().dropna()
+    median_delta = float(deltas.median())
+    if median_delta <= 0:
+        return df, notes
+
+    # Snap to the nearest standard interval by log-distance
+    import math
+    snapped = min(_STANDARD_INTERVALS, key=lambda x: abs(math.log(x) - math.log(median_delta)))
+    notes["detected_resolution_sec"] = snapped
+    notes["detected_resolution_label"] = {
+        60: "1-minute", 300: "5-minute", 900: "15-minute",
+        1800: "30-minute", 3600: "60-minute",
+    }[snapped]
+
+    span_sec = (ts.iloc[-1] - ts.iloc[0]).total_seconds()
+    expected = int(span_sec / snapped) + 1
+    notes["expected_steps"] = expected
+    missing_pct = max(0.0, (expected - len(df)) / max(1, expected) * 100)
+    notes["missing_pct"] = round(missing_pct, 2)
+
+    if missing_pct >= 20.0:
+        notes["warning"] = (
+            f"Data has {missing_pct:.1f}% missing steps at the detected {notes['detected_resolution_label']} "
+            "resolution. Skipping resample — audit uses steps as-provided."
+        )
+        return df, notes
+
+    # Resample. Set the datetime as index, apply per-column policy, reset.
+    df = df.set_index("hour").sort_index()
+    op_cols  = [c for c in ("actual_discharge", "actual_charge", "soc",
+                            "curtailment_mw", "operator_override") if c in df.columns]
+    con_cols = [c for c in ("price", "forecast_price") if c in df.columns]
+    rule = f"{snapped}s"
+
+    parts = []
+    if op_cols:
+        parts.append(df[op_cols].resample(rule).ffill())
+    if con_cols:
+        # numeric only — linear interp
+        parts.append(df[con_cols].apply(pd.to_numeric, errors="coerce").resample(rule).mean().interpolate("linear"))
+    # Pass-through anything else (grid_demand etc.) with ffill
+    other = [c for c in df.columns if c not in op_cols + con_cols]
+    if other:
+        parts.append(df[other].resample(rule).ffill())
+
+    df = pd.concat(parts, axis=1).reset_index()
+    notes["resampled"] = True
+    notes["actual_steps"] = int(len(df))
+    return df, notes
 
 
 def _parse_file_bytes(contents: bytes, filename: str) -> pd.DataFrame:
@@ -1652,6 +1965,39 @@ def _parse_file_bytes(contents: bytes, filename: str) -> pd.DataFrame:
             "JSON must be an array of records, a wrapper like {\"data\": [...]}, "
             "or a column-oriented dict of same-length arrays."
         )
+
+    # ── XML ────────────────────────────────────────────────────────────────────
+    # Common in EMS / SCADA historian exports (OSIsoft PI XML, various DCS).
+    # pandas.read_xml handles the standard "list of rows" shape without much
+    # coaxing. Lazy import so the app boots without lxml installed.
+    if fname.endswith(".xml"):
+        try:
+            # pandas' read_xml uses lxml under the hood; give a clear error if
+            # the operator hasn't installed it (this file path is opt-in).
+            return pd.read_xml(BytesIO(contents))
+        except ImportError:
+            raise ValueError(
+                "XML upload requires the 'lxml' package. Install with "
+                "`pip install lxml` (already declared in requirements.txt)."
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Could not parse XML: {e}. Common shape: a root element with "
+                "repeated child rows, each row containing scalar fields."
+            ) from e
+
+    # ── Parquet ────────────────────────────────────────────────────────────────
+    # Data-lake exports. Lazy import — pyarrow is ~50MB, opt-in per deployment.
+    if fname.endswith(".parquet"):
+        try:
+            return pd.read_parquet(BytesIO(contents))
+        except ImportError:
+            raise ValueError(
+                "Parquet upload requires the 'pyarrow' package (~50MB). Install "
+                "with `pip install pyarrow` if your deploy environment can afford it."
+            )
+        except Exception as e:
+            raise ValueError(f"Could not parse Parquet: {e}") from e
 
     # Separator heuristic
     sep = "\t" if fname.endswith(".tsv") else ","
@@ -1735,7 +2081,9 @@ def _parse_file_bytes(contents: bytes, filename: str) -> pd.DataFrame:
 
 
 @app.post("/api/v1/audit/file", response_model=AuditResponse)
+@limiter.limit("10/minute")
 async def audit_from_file(
+    request: Request,   # noqa: ARG001 — used by rate limiter
     background: BackgroundTasks,
     file: UploadFile = File(...),
     lead: TrialLead = Depends(require_trial_token),
@@ -1780,11 +2128,14 @@ async def audit_from_file(
             if col not in df.columns:
                 df[col] = default
 
-        # Excel-serial timestamp recovery (before we blast hour with range())
+        # Excel-serial timestamp recovery, then full timestamp matrix.
         df, ts_corrections = _detect_excel_serial_timestamps(df)
+        df, ts_format = _parse_timestamps(df)
 
-        # Fill hour index if still missing / all-null
-        if df['hour'].isnull().all():
+        # If we still have no usable "hour", fall back to a 0..N-1 index. The
+        # audit engine only needs ordering; wall-clock time is a nice-to-have
+        # for the resolution detector.
+        if 'hour' not in df.columns or df['hour'].isnull().all():
             df['hour'] = range(len(df))
 
         df = df.fillna({'actual_discharge': 0.0, 'actual_charge': 0.0, 'curtailment_mw': 0.0})
@@ -1799,6 +2150,14 @@ async def audit_from_file(
 
         # Unit auto-detection (kW→MW, $/kWh→$/MWh)
         df, unit_corrections = _detect_and_apply_units(df)
+
+        # Time-resolution auto-detect + optional resample (only when hour is a
+        # real datetime, so this is a no-op for CSV/JSON without a timestamp).
+        df, resolution_notes = _detect_and_resample(df)
+
+        # Collapse "hour" back to an ordered integer for the audit engine
+        if 'hour' in df.columns and pd.api.types.is_datetime64_any_dtype(df['hour']):
+            df['hour'] = range(len(df))
 
         # Asset specs from meta-columns (first row)
         asset_kwargs = {}
@@ -1815,15 +2174,23 @@ async def audit_from_file(
         ]].to_dict('records')
 
         result = process_calculation(asset, time_series)
+        _latest_by_token[lead.token] = result.dict()   # per-tenant cache — no cross-leak
         background.add_task(_bump_audit_count, lead.token)
+
         # Non-fatal ingestion notes — surfaced on the response for the frontend
         # to display "we auto-corrected X, confirm before quoting the audit."
-        if unit_corrections or ts_corrections or col_info["fuzzy_scores"]:
+        has_notes = (
+            unit_corrections or ts_corrections or col_info["fuzzy_scores"]
+            or ts_format.get("format_detected") or resolution_notes.get("detected_resolution_sec")
+        )
+        if has_notes:
             result_dict = result.dict()
             result_dict["ingestion_notes"] = {
                 "unit_corrections":       unit_corrections,
                 "timestamp_corrections":  ts_corrections,
                 "fuzzy_column_matches":   col_info["fuzzy_scores"],
+                "timestamp_format":       ts_format,
+                "time_resolution":        resolution_notes,
             }
             return JSONResponse(content=result_dict)
         return result
@@ -1865,7 +2232,9 @@ async def inspect_file(file: UploadFile = File(...)):
                     errors='coerce'
                 ).fillna(0.0)
         preview, ts_corrections = _detect_excel_serial_timestamps(preview) if "hour" in preview.columns else (preview, [])
+        preview, ts_format = _parse_timestamps(preview)
         preview, unit_corrections = _detect_and_apply_units(preview)
+        preview, resolution_notes = _detect_and_resample(preview)
 
         # Warnings for missing optional fields
         expected_optional = ["actual_charge", "soc", "curtailment_mw", "forecast_price",
@@ -1887,6 +2256,8 @@ async def inspect_file(file: UploadFile = File(...)):
             "unresolved_columns":   [c for c in df.columns if c not in col_map.values()],
             "unit_corrections":     unit_corrections,
             "timestamp_corrections": ts_corrections,
+            "timestamp_format":     ts_format,
+            "time_resolution":      resolution_notes,
             "field_warnings":       field_warnings,
             "will_succeed":         "price" in col_map and "actual_discharge" in col_map,
             "sample_row":           df.iloc[0].to_dict() if len(df) > 0 else {},
@@ -1925,8 +2296,13 @@ async def get_shared_audit(token: str):
     return JSONResponse(status_code=404, content={"detail": "Report link expired or not found"})
 
 @app.get("/api/latest")
-async def get_latest_live_data():
-    return latest_live_result
+async def get_latest_live_data(lead: TrialLead = Depends(require_trial_token)):
+    """
+    Returns the caller's most recent audit result. Gated on the trial token
+    per the tenant-isolation fix — previously this endpoint returned the
+    process-global `latest_live_result` and leaked between callers.
+    """
+    return _latest_by_token.get(lead.token, _EMPTY_LATEST)
 
 # ==========================================
 # NEW: EDA Credit Rating
@@ -2161,6 +2537,153 @@ async def live_step(data: Dict[str, Any] = Body(...)):
 
 
 # ==========================================
+# NEW: Real-time MQTT bridge (Coverage Tasks Area 3.3)
+# ==========================================
+# Topic structure (per brief 3.3):
+#   {prefix}/{asset_id}/telemetry       ← we subscribe here
+#   {prefix}/{asset_id}/recommendation  ← we publish per-step decisions
+#   {prefix}/{asset_id}/audit           ← reserved for completed audit results
+#
+# Env config (all optional — bridge stays offline if MQTT_BROKER_HOST unset):
+#   MQTT_BROKER_HOST     e.g. mqtt.hivemq.cloud
+#   MQTT_BROKER_PORT     default 8883 (TLS) or 1883 (plain)
+#   MQTT_USE_TLS         "1" enables TLS
+#   MQTT_USERNAME        broker auth
+#   MQTT_PASSWORD        broker auth
+#   MQTT_TOPIC_PREFIX    default "predaiot"
+#   MQTT_QOS             default 1 (at-least-once, per brief 3.3)
+#
+# Client-cert auth is NOT implemented here — that's a follow-up; needs cert-
+# issuance infra that doesn't exist yet. Username+password + TLS is the
+# realistic first pilot posture. Broker choice deferred to deployment.
+
+_mqtt_client = None
+_mqtt_state = {
+    "connected": False, "broker": None, "topic_prefix": None,
+    "messages_received": 0, "messages_published": 0, "last_error": None,
+}
+
+
+def _start_mqtt_bridge() -> None:
+    """Kick off the MQTT bridge if env is configured. Idempotent, safe if
+    paho-mqtt isn't installed (logs and moves on)."""
+    global _mqtt_client
+    host = os.environ.get("MQTT_BROKER_HOST")
+    if not host:
+        return  # bridge stays offline — normal for local dev
+    if _mqtt_client is not None:
+        return  # already running
+
+    try:
+        import paho.mqtt.client as mqtt
+    except ImportError:
+        _mqtt_state["last_error"] = "paho-mqtt not installed"
+        print("[mqtt] paho-mqtt not installed — MQTT bridge disabled")
+        return
+
+    port         = int(os.environ.get("MQTT_BROKER_PORT", "8883"))
+    use_tls      = os.environ.get("MQTT_USE_TLS", "1") == "1"
+    username     = os.environ.get("MQTT_USERNAME")
+    password     = os.environ.get("MQTT_PASSWORD")
+    topic_prefix = os.environ.get("MQTT_TOPIC_PREFIX", "predaiot")
+    qos          = int(os.environ.get("MQTT_QOS", "1"))
+
+    client = mqtt.Client(client_id=f"predaiot-bridge-{uuid.uuid4().hex[:8]}", clean_session=True)
+    if username:
+        client.username_pw_set(username, password or "")
+    if use_tls:
+        client.tls_set()  # default: system CA, TLS 1.2+, verify hostname
+
+    def on_connect(c, _u, _f, rc):
+        if rc == 0:
+            _mqtt_state["connected"] = True
+            _mqtt_state["broker"] = f"{host}:{port}"
+            _mqtt_state["topic_prefix"] = topic_prefix
+            sub_topic = f"{topic_prefix}/+/telemetry"
+            c.subscribe(sub_topic, qos=qos)
+            print(f"[mqtt] connected to {host}:{port}, subscribed to {sub_topic} (QoS {qos})")
+        else:
+            _mqtt_state["last_error"] = f"connect failed rc={rc}"
+            print(f"[mqtt] connect failed rc={rc}")
+
+    def on_disconnect(_c, _u, rc):
+        _mqtt_state["connected"] = False
+        if rc != 0:
+            _mqtt_state["last_error"] = f"disconnected rc={rc}"
+            print(f"[mqtt] unexpected disconnect rc={rc}")
+
+    def on_message(c, _u, msg):
+        """Feed each telemetry message through _live_decision_core, publish
+        the recommendation back to {prefix}/{asset_id}/recommendation."""
+        _mqtt_state["messages_received"] += 1
+        try:
+            payload = json.loads(msg.payload.decode("utf-8"))
+        except Exception as e:
+            print(f"[mqtt] non-json payload on {msg.topic}: {e}")
+            return
+
+        # asset_id from topic: {prefix}/{asset_id}/telemetry
+        parts = msg.topic.split("/")
+        asset_id = parts[1] if len(parts) >= 3 else payload.get("asset_id") or "unknown"
+        payload.setdefault("asset_id", asset_id)
+
+        try:
+            result = _live_decision_core(payload)
+        except Exception as e:
+            _mqtt_state["last_error"] = f"decision core: {e}"
+            print(f"[mqtt] decision-core error for {asset_id}: {e}")
+            return
+
+        pub_topic = f"{topic_prefix}/{asset_id}/recommendation"
+        try:
+            c.publish(pub_topic, json.dumps(result), qos=qos, retain=False)
+            _mqtt_state["messages_published"] += 1
+        except Exception as e:
+            _mqtt_state["last_error"] = f"publish: {e}"
+            print(f"[mqtt] publish error to {pub_topic}: {e}")
+
+    client.on_connect    = on_connect
+    client.on_disconnect = on_disconnect
+    client.on_message    = on_message
+
+    try:
+        client.connect_async(host, port, keepalive=60)
+        client.loop_start()  # background thread — non-blocking
+        _mqtt_client = client
+    except Exception as e:
+        _mqtt_state["last_error"] = f"connect_async: {e}"
+        print(f"[mqtt] connect_async failed: {e}")
+
+
+def _stop_mqtt_bridge() -> None:
+    global _mqtt_client
+    if _mqtt_client is not None:
+        try:
+            _mqtt_client.loop_stop()
+            _mqtt_client.disconnect()
+        except Exception:
+            pass
+        _mqtt_client = None
+        _mqtt_state["connected"] = False
+
+
+@app.on_event("startup")
+async def _mqtt_startup():
+    _start_mqtt_bridge()
+
+
+@app.on_event("shutdown")
+async def _mqtt_shutdown():
+    _stop_mqtt_bridge()
+
+
+@app.get("/api/v1/integrations/mqtt/status")
+async def mqtt_status(lead: TrialLead = Depends(require_trial_token)):
+    """Bridge status. Gated on trial token so a stranger can't probe our broker."""
+    return dict(_mqtt_state, has_paho=True if _mqtt_client is not None else _mqtt_state.get("last_error") != "paho-mqtt not installed")
+
+
+# ==========================================
 # NEW: Economic Decision Certificate
 # ==========================================
 def _build_certificate(data: dict) -> dict:
@@ -2270,16 +2793,15 @@ def _build_certificate(data: dict) -> dict:
 
 
 @app.get("/api/v1/certificate")
-async def get_certificate_for_latest():
-    """Returns an Economic Decision Certificate for the most recent audit."""
-    global latest_live_result
-    data = latest_live_result
-    if isinstance(data, dict):
-        if data.get("dq_score", 0) == 0:
-            return JSONResponse(status_code=404, content={"detail": "No audit has been run yet."})
-        return _build_certificate(data)
-    # AuditResponse pydantic object
-    return _build_certificate(data.dict())
+async def get_certificate_for_latest(lead: TrialLead = Depends(require_trial_token)):
+    """
+    Returns an Economic Decision Certificate for the caller's most recent
+    audit. Gated on the trial token per the tenant-isolation fix.
+    """
+    data = _latest_by_token.get(lead.token)
+    if not data or not data.get("dq_score"):
+        return JSONResponse(status_code=404, content={"detail": "No audit has been run yet."})
+    return _build_certificate(data)
 
 
 @app.post("/api/v1/certificate")
@@ -2548,7 +3070,9 @@ def _build_audit_pdf(audit: dict) -> bytes:
 
 
 @app.post("/api/v1/audit/pdf")
+@limiter.limit("20/minute")
 async def generate_audit_pdf(
+    request: Request,   # noqa: ARG001 — used by rate limiter
     data: AuditResponse,
     lead: TrialLead = Depends(require_trial_token),
 ):
@@ -2568,9 +3092,8 @@ async def generate_audit_pdf(
 
 @app.get("/api/v1/audit/pdf/latest")
 async def get_latest_audit_pdf(lead: TrialLead = Depends(require_trial_token)):
-    """Convenience: PDF for the most recent audit on the server."""
-    global latest_live_result
-    data = latest_live_result if isinstance(latest_live_result, dict) else latest_live_result.dict()
+    """PDF for the caller's most recent audit. Per-tenant cache, no cross-leak."""
+    data = _latest_by_token.get(lead.token)
     if not data or not data.get("dq_score"):
         return JSONResponse(status_code=404, content={"detail": "No audit has been run yet."})
     pdf_bytes = _build_audit_pdf(data)
@@ -2615,8 +3138,16 @@ async def ai_enhance(request: Dict[str, Any] = Body(...)):
 
 
 # ==========================================
-# 8. Serve Frontend  (logic unchanged — now logs clearly instead of failing silently)
+# 8. Serve Frontend  (must come LAST — StaticFiles at "/" is a catch-all
+# that intercepts anything not matched by an earlier route.)
 # ==========================================
+
+# Register /health FIRST so it isn't shadowed by the static mount below.
+@app.get("/health")
+def health():
+    return {"ok": True}
+
+
 try:
     frontend_path = os.path.abspath("../frontend/dist")
     if os.path.exists(frontend_path):
@@ -2628,8 +3159,3 @@ try:
         print("[startup] Fix: ensure your Render Build Command runs 'npm run build' inside frontend/ before starting uvicorn.")
 except Exception as e:
     print(f"[startup] ERROR mounting frontend: {e}")
-
-
-@app.get("/health")
-def health():
-    return {"ok": True}
