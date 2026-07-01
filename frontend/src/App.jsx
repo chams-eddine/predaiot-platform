@@ -44,6 +44,30 @@ axios.interceptors.response.use(
 );
 
 // ══════════════════════════════════════════════════════════════════════
+// RESPONSIVE — viewport hook shared across the app
+// ══════════════════════════════════════════════════════════════════════
+// 720px is the "phone-portrait or narrow tablet" breakpoint. Below this,
+// the sidebar collapses to a hamburger drawer and the header buttons
+// wrap onto multiple rows.
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 720px)').matches
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mql = window.matchMedia('(max-width: 720px)');
+    const onChange = (e) => setIsMobile(e.matches);
+    if (mql.addEventListener) mql.addEventListener('change', onChange);
+    else mql.addListener(onChange);  // older Safari
+    return () => {
+      if (mql.removeEventListener) mql.removeEventListener('change', onChange);
+      else mql.removeListener(onChange);
+    };
+  }, []);
+  return isMobile;
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // DESIGN SYSTEM — PREDAIOT Economic Decision Audit™
 // ══════════════════════════════════════════════════════════════════════
 const DS = {
@@ -105,7 +129,10 @@ const Label = ({ children, style }) => (
 );
 
 const BigNum = ({ v, color, size = 26 }) => (
-  <div style={{ color: color || DS.text, fontSize: size, fontWeight: 700, fontFamily: DS.mono, lineHeight: 1.1 }}>{v}</div>
+  <div style={{
+    color: color || DS.text, fontSize: size, fontWeight: 700, fontFamily: DS.mono,
+    lineHeight: 1.1, whiteSpace: 'nowrap',
+  }}>{v}</div>
 );
 
 const Pill = ({ label, color }) => (
@@ -391,6 +418,29 @@ const SIM_PROFILES = {
       };
     },
   },
+  h2: {
+    label: 'H₂ · 20 MW electrolyzer',
+    asset_id: 'DEMO_H2_20MW',
+    p_max: 20, deg_cost: 3,
+    init: (ref) => { ref.step = 0; },
+    tick: (ref) => {
+      ref.step += 1;
+      const t = ref.step;
+      // Diurnal price shape — the electrolyzer wants the trough
+      const price = Math.max(4, 45 + 40 * Math.sin((t - 18) * Math.PI / 36) + (Math.random() - 0.5) * 14);
+      // Naive operator: run baseload 24/7 regardless of price, meets target
+      // by brute force. Optimal would concentrate consumption in the trough.
+      const actual_charge = 12 + Math.round((Math.random() - 0.5) * 6);
+      return {
+        market_price: Math.round(price * 100) / 100,
+        actual_discharge: 0, actual_charge,
+        p_max: 20, e_max: 0,
+        deg_cost: 3, curtailment: 0,
+        forecast_price: Math.round(price * (0.9 + Math.random() * 0.2) * 100) / 100,
+        grid_limit: 20,
+      };
+    },
+  },
 };
 
 const EMPTY = {
@@ -582,6 +632,86 @@ function SessionBadge({ liveMode, simRunning, dataSource }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// INGESTION NOTES BANNER — shown after an upload when the pipeline made
+// auto-corrections (units, timestamps, or fuzzy column matches). Lets the
+// operator see "here's what we assumed" before they quote the audit to
+// their boss. Dismissible.
+// ══════════════════════════════════════════════════════════════════════
+function IngestionNotesBanner({ notes, onDismiss }) {
+  const units      = notes.unit_corrections || [];
+  const timestamps = notes.timestamp_corrections || [];
+  const fuzzy      = notes.fuzzy_column_matches || {};
+  const fuzzyList  = Object.entries(fuzzy);
+  if (units.length === 0 && timestamps.length === 0 && fuzzyList.length === 0) return null;
+
+  return (
+    <div style={{
+      background: `linear-gradient(135deg, ${DS.cyan}12, ${DS.blue}08)`,
+      border: `1px solid ${DS.cyan}35`,
+      borderRadius: DS.r12,
+      padding: '14px 18px',
+      marginBottom: 18,
+      position: 'relative',
+    }}>
+      <button
+        onClick={onDismiss}
+        aria-label="Dismiss ingestion notes"
+        style={{
+          position: 'absolute', top: 8, right: 10,
+          background: 'transparent', border: 'none', color: DS.dim,
+          cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 6,
+        }}
+      >
+        ✕
+      </button>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <span style={{ fontSize: 14 }}>🧭</span>
+        <div style={{ color: DS.cyan, fontSize: 10, fontWeight: 700, letterSpacing: '0.15em' }}>
+          INGESTION AUTO-CORRECTIONS APPLIED
+        </div>
+      </div>
+      <div style={{ color: DS.sub, fontSize: 11, marginBottom: 10, lineHeight: 1.5 }}>
+        The audit engine made the following assumptions about your file. Review before quoting the audit externally.
+      </div>
+
+      {units.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ color: DS.warning, fontSize: 10, letterSpacing: '0.1em', fontWeight: 700, marginBottom: 4 }}>UNIT CONVERSIONS</div>
+          {units.map((line, i) => (
+            <div key={i} style={{ color: DS.text, fontSize: 11, marginBottom: 3, paddingLeft: 12 }}>
+              • {line}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {timestamps.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ color: DS.warning, fontSize: 10, letterSpacing: '0.1em', fontWeight: 700, marginBottom: 4 }}>TIMESTAMP RECOVERY</div>
+          {timestamps.map((line, i) => (
+            <div key={i} style={{ color: DS.text, fontSize: 11, marginBottom: 3, paddingLeft: 12 }}>
+              • {line}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {fuzzyList.length > 0 && (
+        <div>
+          <div style={{ color: DS.warning, fontSize: 10, letterSpacing: '0.1em', fontWeight: 700, marginBottom: 4 }}>FUZZY COLUMN MATCHES</div>
+          {fuzzyList.map(([internal, info]) => (
+            <div key={internal} style={{ color: DS.text, fontSize: 11, marginBottom: 3, paddingLeft: 12, fontFamily: DS.mono }}>
+              • <span style={{ color: DS.cyan }}>{info.from_col}</span> → <span style={{ color: DS.optimal }}>{internal}</span>{' '}
+              <span style={{ color: DS.dim }}>({info.score}% match to “{info.matched_alias}”)</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // MAIN APP
 // ══════════════════════════════════════════════════════════════════════
 export default function App() {
@@ -591,6 +721,17 @@ export default function App() {
   const [shareLink, setShareLink]         = useState('');
   const [activeSection, setActiveSection] = useState('exec');
   const [showMethodology, setShowMethodology] = useState(false);
+
+  // ── Mobile responsive state ────────────────────────────────────────
+  const isMobile = useIsMobile();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  useEffect(() => {
+    // Close the drawer if the viewport transitions back to desktop
+    if (!isMobile && sidebarOpen) setSidebarOpen(false);
+  }, [isMobile, sidebarOpen]);
+
+  // ── Ingestion notes from the upload pipeline ───────────────────────
+  const [ingestionNotes, setIngestionNotes] = useState(null);
   const [showUpload, setShowUpload]       = useState(false);
   const [aiLoading, setAiLoading]         = useState(false);
   const [aiText, setAiText]               = useState('');
@@ -713,6 +854,7 @@ export default function App() {
       setData(r.data);
       setDataSource('demo');
       setAiText('');
+      setIngestionNotes(null);  // demo data is synthetic; no ingestion notes
       setActiveSection('exec');
     } catch (e) { console.error(e); }
     setLoading(false);
@@ -730,6 +872,10 @@ export default function App() {
       setData(r.data);
       setDataSource('upload');
       setAiText('');
+      // ingestion_notes is appended by the backend when auto-corrections fire
+      // (unit / timestamp / fuzzy column). Surface them so operators see
+      // exactly what the pipeline did before quoting the audit.
+      setIngestionNotes(r.data?.ingestion_notes || null);
       setActiveSection('exec');
     } catch (err) {
       const detail = err?.response?.data?.detail || '';
@@ -921,17 +1067,35 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
       {/* ── TOP BAR ──────────────────────────────────────────────── */}
       <header style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        padding: '13px 28px', borderBottom: `1px solid ${DS.border}`,
+        padding: isMobile ? '11px 14px' : '13px 28px',
+        borderBottom: `1px solid ${DS.border}`,
         position: 'sticky', top: 0, backgroundColor: `${DS.bg}f0`, backdropFilter: 'blur(12px)',
-        zIndex: 100,
+        zIndex: 100, gap: 8,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <img src="/logo.jpeg" alt="PREDAIOT" style={{ height: 36, objectFit: 'contain' }} />
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: '0.18em', color: DS.text }}>PREDAIOT</div>
-            <div style={{ fontSize: 9, letterSpacing: '0.2em', color: DS.dim }}>ECONOMIC DECISION AUDIT™</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 14, minWidth: 0, flex: '0 1 auto' }}>
+          {isMobile && (
+            <button
+              onClick={() => setSidebarOpen((v) => !v)}
+              aria-label={sidebarOpen ? 'Close navigation' : 'Open navigation'}
+              style={{
+                background: 'none', border: `1px solid ${DS.border}`,
+                color: DS.text, cursor: 'pointer',
+                minWidth: 44, minHeight: 44, borderRadius: DS.r8,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 18, lineHeight: 1,
+              }}
+            >
+              {sidebarOpen ? '✕' : '☰'}
+            </button>
+          )}
+          <img src="/logo.jpeg" alt="PREDAIOT" style={{ height: isMobile ? 28 : 36, objectFit: 'contain' }} />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: isMobile ? 12 : 14, fontWeight: 700, letterSpacing: '0.18em', color: DS.text }}>PREDAIOT</div>
+            {!isMobile && (
+              <div style={{ fontSize: 9, letterSpacing: '0.2em', color: DS.dim }}>ECONOMIC DECISION AUDIT™</div>
+            )}
           </div>
-          {hasData && (
+          {hasData && !isMobile && (
             <div style={{ marginLeft: 16, display: 'flex', gap: 8, alignItems: 'center' }}>
               <span style={{ fontSize: 11, color: DS.sub }}>{data.asset_name}</span>
               <Pill label={data.risk_level || 'Moderate'} color={riskColor(data.risk_level)} />
@@ -940,18 +1104,22 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
         </div>
 
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: isMobile ? 6 : 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <BtnOutline color={DS.cyan} onClick={runDemo} disabled={loading || uploading}>
-            {loading ? 'OPTIMIZING…' : 'RUN DEMO'}
+            {loading ? 'OPTIMIZING…' : (isMobile ? 'DEMO' : 'RUN DEMO')}
           </BtnOutline>
           <BtnOutline color={DS.optimal} onClick={() => setShowUpload(!showUpload)} disabled={uploading}>
-            {uploading ? 'PARSING…' : 'UPLOAD DATA'}
+            {uploading ? 'PARSING…' : (isMobile ? 'UPLOAD' : 'UPLOAD DATA')}
           </BtnOutline>
-          <BtnOutline color={DS.warning} onClick={handleShare}>SHARE REPORT</BtnOutline>
+          {!isMobile && (
+            <BtnOutline color={DS.warning} onClick={handleShare}>SHARE REPORT</BtnOutline>
+          )}
           <BtnOutline color={DS.purple} onClick={downloadPdf} disabled={pdfLoading || !data.dq_score}>
-            {pdfLoading ? 'BUILDING PDF…' : '⬇ DOWNLOAD PDF'}
+            {pdfLoading ? 'PDF…' : (isMobile ? '⬇ PDF' : '⬇ DOWNLOAD PDF')}
           </BtnOutline>
-          <BtnOutline color={DS.dim} onClick={() => setShowMethodology(true)}>METHODOLOGY</BtnOutline>
+          {!isMobile && (
+            <BtnOutline color={DS.dim} onClick={() => setShowMethodology(true)}>METHODOLOGY</BtnOutline>
+          )}
           <SessionBadge liveMode={liveMode} simRunning={simRunning} dataSource={dataSource} />
         </div>
       </header>
@@ -970,8 +1138,24 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
       )}
 
       <div style={{ display: 'flex' }}>
-        {/* ── SIDEBAR ───────────────────────────────────────────── */}
-        <nav style={{
+        {/* ── SIDEBAR — persistent on desktop, drawer on mobile ── */}
+        {isMobile && sidebarOpen && (
+          <div
+            onClick={() => setSidebarOpen(false)}
+            style={{
+              position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+              zIndex: 99, backdropFilter: 'blur(2px)',
+            }}
+            aria-label="Close navigation"
+          />
+        )}
+        <nav style={isMobile ? {
+          position: 'fixed', left: sidebarOpen ? 0 : -272, top: 0, bottom: 0,
+          width: 272, padding: '76px 0 20px 0', background: DS.bgRaised,
+          borderRight: `1px solid ${DS.borderHi}`,
+          transition: 'left 0.24s ease', overflowY: 'auto',
+          zIndex: 100, boxShadow: sidebarOpen ? '4px 0 30px rgba(0,0,0,0.5)' : 'none',
+        } : {
           width: 210, minWidth: 210, padding: '20px 0',
           borderRight: `1px solid ${DS.border}`,
           position: 'sticky', top: 67, height: 'calc(100vh - 67px)', overflowY: 'auto',
@@ -979,15 +1163,25 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {navItems.map((n) => {
             const active = activeSection === n.id;
             return (
-              <button key={n.id} onClick={() => setActiveSection(n.id)} style={{
-                display: 'block', width: '100%', textAlign: 'left',
-                padding: '9px 20px', fontSize: 11, background: 'none', border: 'none',
-                cursor: 'pointer', letterSpacing: '0.04em',
-                color: active ? DS.cyan : DS.sub,
-                borderLeft: `2px solid ${active ? DS.cyan : 'transparent'}`,
-                transition: 'all 0.12s',
-              }}>
-                <span style={{ fontFamily: DS.mono, fontSize: 9, color: DS.dim, marginRight: 8 }}>{n.tag}</span>
+              <button
+                key={n.id}
+                onClick={() => {
+                  setActiveSection(n.id);
+                  if (isMobile) setSidebarOpen(false);
+                }}
+                style={{
+                  display: 'block', width: '100%', textAlign: 'left',
+                  padding: isMobile ? '14px 22px' : '9px 20px',
+                  minHeight: isMobile ? 44 : undefined,  // Apple HIG / Material touch target
+                  fontSize: isMobile ? 13 : 11,
+                  background: 'none', border: 'none', cursor: 'pointer',
+                  letterSpacing: '0.04em',
+                  color: active ? DS.cyan : DS.sub,
+                  borderLeft: `2px solid ${active ? DS.cyan : 'transparent'}`,
+                  transition: 'all 0.12s',
+                }}
+              >
+                <span style={{ fontFamily: DS.mono, fontSize: isMobile ? 10 : 9, color: DS.dim, marginRight: 8 }}>{n.tag}</span>
                 {n.label}
               </button>
             );
@@ -995,7 +1189,11 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
         </nav>
 
         {/* ── MAIN CONTENT ──────────────────────────────────────── */}
-        <main style={{ flex: 1, padding: '28px 32px', maxWidth: 'calc(100vw - 242px)', overflowX: 'hidden' }}>
+        <main style={{
+          flex: 1, minWidth: 0,
+          padding: isMobile ? '18px 14px' : '28px 32px',
+          overflowX: 'hidden',
+        }}>
 
           {/* Welcome / empty state — only shown when on a data-dependent section
               with no audit loaded. Skipped for live/appendix/govern which work
@@ -1038,12 +1236,22 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
             <div>
               <SectionHeader tag="01" title="Executive Summary" />
 
+              {/* Ingestion auto-corrections banner — shown when the /audit/file
+                  pipeline made assumptions the operator should confirm. */}
+              {ingestionNotes && (
+                <IngestionNotesBanner
+                  notes={ingestionNotes}
+                  onDismiss={() => setIngestionNotes(null)}
+                />
+              )}
+
+
               {/* KPI shock panel */}
               <div style={{
                 background: `linear-gradient(135deg, rgba(75,191,255,0.07) 0%, rgba(0,230,118,0.05) 100%)`,
                 border: `1px solid ${DS.blue}25`, borderRadius: DS.r16, padding: 28, marginBottom: 20,
               }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 24 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 24 }}>
                   {[
                     { label: 'Asset', value: data.asset_name || '—', color: DS.text, mono: false },
                     { label: 'Audit Period', value: data.audit_period_label || '—', color: DS.cyan, mono: true },
@@ -1059,7 +1267,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
 
                 <Divider />
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 24 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 24 }}>
                   {[
                     { label: 'Destroyed Value', value: fmtUSD(data.total_gap_usd), color: DS.loss },
                     { label: 'DQ Score', value: hasData ? `${((data.dq_score || 0) * 100).toFixed(1)} / 100` : '—', color: qualColor(captureRate) },
@@ -1073,6 +1281,95 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   ))}
                 </div>
               </div>
+
+              {/* ── Before / After PREDAIOT — value visualization (Area 2) ─── */}
+              {log.length > 0 && (
+                <Card style={{ marginBottom: 20 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
+                    <div>
+                      <Label style={{ marginBottom: 2 }}>Optimal vs Actual Dispatch — Economic Value per Step</Label>
+                      <div style={{ color: DS.dim, fontSize: 10, letterSpacing: '0.08em' }}>
+                        SHADED AREA = ECONOMIC GAP RECOVERABLE WITH PREDAIOT
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 14, fontSize: 10, color: DS.sub }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ width: 10, height: 3, background: DS.optimal, borderRadius: 2 }} />
+                        With PREDAIOT (optimal)
+                      </span>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ width: 10, height: 3, background: DS.orange, borderRadius: 2 }} />
+                        Without PREDAIOT (actual)
+                      </span>
+                    </div>
+                  </div>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <AreaChart data={log} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="gExecOpt" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor={DS.optimal} stopOpacity={0.28} />
+                          <stop offset="100%" stopColor={DS.optimal} stopOpacity={0} />
+                        </linearGradient>
+                        <linearGradient id="gExecAct" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor={DS.orange} stopOpacity={0.24} />
+                          <stop offset="100%" stopColor={DS.orange} stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke={DS.border} />
+                      <XAxis dataKey="hour" stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} />
+                      <YAxis stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} tickFormatter={(v) => `$${v}`} />
+                      <Tooltip
+                        contentStyle={{ background: '#0f1318', border: `1px solid ${DS.border}`, borderRadius: 8, fontSize: 11 }}
+                        formatter={(v, name) => [`$${(v || 0).toFixed(2)}`, name]}
+                        labelFormatter={(h) => `Step ${h}`}
+                      />
+                      <Area type="monotone" dataKey="edv_optimal_step" name="With PREDAIOT" stroke={DS.optimal} fill="url(#gExecOpt)" strokeWidth={2} dot={false} />
+                      <Area type="monotone" dataKey="edv_actual_step" name="Without PREDAIOT" stroke={DS.orange} fill="url(#gExecAct)" strokeWidth={2} dot={false} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </Card>
+              )}
+
+              {/* ── Value Waterfall — Potential → Captured → Destroyed ─── */}
+              {hasData && (() => {
+                const pot = data.edv_optimal_total || 0;
+                const act = data.edv_actual_total || 0;
+                const gap = data.total_gap_usd || 0;
+                const maxV = Math.max(pot, 1);
+                const rows = [
+                  { label: 'Economic Potential',   sub: 'MILP counterfactual', value: pot, color: DS.optimal, pct: 100 },
+                  { label: 'Captured Value',       sub: 'What actually happened', value: act, color: DS.blue,   pct: Math.min(100, (act / maxV) * 100) },
+                  { label: 'Destroyed Value',      sub: 'Recoverable with PREDAIOT', value: gap, color: DS.loss, pct: Math.min(100, (gap / maxV) * 100) },
+                ];
+                return (
+                  <Card style={{ marginBottom: 20 }}>
+                    <Label style={{ marginBottom: 14 }}>Value Waterfall — Where Every Dollar Went</Label>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                      {rows.map((r) => (
+                        <div key={r.label}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 5, fontSize: 12 }}>
+                            <span>
+                              <span style={{ color: DS.text, fontWeight: 700 }}>{r.label}</span>
+                              <span style={{ color: DS.dim, fontSize: 10, marginLeft: 8, letterSpacing: '0.05em' }}>{r.sub}</span>
+                            </span>
+                            <span style={{ color: r.color, fontFamily: DS.mono, fontWeight: 700 }}>{fmtUSD(r.value)}</span>
+                          </div>
+                          <div style={{ height: 10, background: `${DS.border}88`, borderRadius: 5, overflow: 'hidden' }}>
+                            <div style={{
+                              width: `${r.pct}%`, height: '100%',
+                              background: `linear-gradient(90deg, ${r.color} 0%, ${r.color}bb 100%)`,
+                              boxShadow: `0 0 12px ${r.color}55`,
+                            }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${DS.border}`, fontSize: 10, color: DS.dim, letterSpacing: '0.06em' }}>
+                      The <span style={{ color: DS.loss, fontWeight: 700 }}>{fmtUSD(gap)}</span> destroyed-value bar is the number PREDAIOT&rsquo;s Economic Action Plan is designed to recover.
+                    </div>
+                  </Card>
+                );
+              })()}
 
               {/* Risk banner */}
               {hasData && (
@@ -1098,7 +1395,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
 
               {/* EIS gauge (circular text display) */}
               {m && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 20 }}>
                   <Card>
                     <Label>Economic Intelligence Score</Label>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginTop: 8 }}>
@@ -1420,7 +1717,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {hasData && activeSection === 'leakage' && (
             <div>
               <SectionHeader tag="07" title="Financial Value Leakage" />
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 20 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 16, marginBottom: 20 }}>
                 {[
                   { label: '24-Hour', value: fmtUSD(data.total_gap_usd), color: DS.loss },
                   { label: '7-Day (Est.)', value: data.total_gap_usd > 0 ? fmtUSD(data.total_gap_usd * 7) : '—', color: DS.orange },
@@ -2125,10 +2422,54 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                     boxShadow: `0 0 80px ${certificate.rating_color}14`,
                   }}>
                     {/* Header */}
-                    <div style={{ textAlign: 'center', marginBottom: 36 }}>
+                    <div style={{ textAlign: 'center', marginBottom: 28 }}>
                       <div style={{ color: DS.dim, fontSize: 9, letterSpacing: '0.4em', marginBottom: 10 }}>PREDAIOT ECONOMIC DECISION PERFORMANCE CERTIFICATE™</div>
                       <div style={{ color: DS.text, fontSize: 24, fontWeight: 900, letterSpacing: '0.06em', marginBottom: 4 }}>EDPC</div>
                       <div style={{ color: DS.dim, fontSize: 10, letterSpacing: '0.25em' }}>{certificate.standard}</div>
+                    </div>
+
+                    {/* ISSUED BY / ISSUED TO / AUDIT SCOPE — engagement-letter framing */}
+                    <div style={{
+                      display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24,
+                      padding: '18px 20px', marginBottom: 28,
+                      background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: DS.r12,
+                    }}>
+                      <div>
+                        <div style={{ color: DS.dim, fontSize: 9, letterSpacing: '0.2em', fontWeight: 700, marginBottom: 8 }}>ISSUED BY</div>
+                        <div style={{ color: DS.text, fontSize: 13, fontWeight: 700, marginBottom: 3 }}>
+                          {certificate.issuer?.organization || 'PREDAIOT Economic Decision Intelligence'}
+                        </div>
+                        <div style={{ color: DS.sub, fontSize: 10, lineHeight: 1.6, fontStyle: 'italic' }}>
+                          {certificate.issuer?.licensed_operator || 'Al Shams Investment and Trade Company SPC'} (Licensed Operator)
+                        </div>
+                        <div style={{ color: DS.cyan, fontSize: 10, marginTop: 4, fontFamily: DS.mono }}>
+                          {certificate.issuer?.email || 'chams@preda-iot.com'} &nbsp;·&nbsp; {certificate.issuer?.domain || 'platform.preda-iot.com'}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ color: DS.dim, fontSize: 9, letterSpacing: '0.2em', fontWeight: 700, marginBottom: 8 }}>ISSUED TO</div>
+                        <div style={{ color: DS.text, fontSize: 13, fontWeight: 700, marginBottom: 3 }}>
+                          {certificate.recipient?.asset_name || certificate.asset_name}
+                        </div>
+                        <div style={{ color: DS.sub, fontSize: 10, lineHeight: 1.6 }}>
+                          {certificate.recipient?.company || 'Confidential — Available on Request'}
+                        </div>
+                        <div style={{ color: DS.sub, fontSize: 10, marginTop: 4 }}>
+                          {certificate.recipient?.location || 'Confidential — Available on Request'}
+                        </div>
+                      </div>
+                      <div style={{ gridColumn: '1 / span 2', borderTop: `1px solid ${DS.border}`, paddingTop: 10, display: 'flex', gap: 24, flexWrap: 'wrap', fontSize: 10 }}>
+                        <div>
+                          <span style={{ color: DS.dim, letterSpacing: '0.2em', fontWeight: 700 }}>AUDIT SCOPE&nbsp;&nbsp;</span>
+                          <span style={{ color: DS.text, fontFamily: DS.mono }}>
+                            {certificate.audit_scope?.asset_id || certificate.asset_name} · {certificate.audit_scope?.asset_type || certificate.asset_type} · {certificate.audit_scope?.period || certificate.audit_period}
+                          </span>
+                        </div>
+                        <div>
+                          <span style={{ color: DS.dim, letterSpacing: '0.2em', fontWeight: 700 }}>ISSUED&nbsp;&nbsp;</span>
+                          <span style={{ color: DS.text, fontFamily: DS.mono }}>{new Date(certificate.issued_at).toLocaleString()}</span>
+                        </div>
+                      </div>
                     </div>
 
                     {/* Rating + composite breakdown */}

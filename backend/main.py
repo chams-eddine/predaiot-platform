@@ -99,6 +99,10 @@ class AssetSpecs(BaseModel):
     eta_ch:     float = 0.95
     eta_dis:    float = 0.95
     deg_cost:   float = 5.0
+    # Cert "ISSUED TO" fields (Coverage Tasks Fix B). Optional — default falls
+    # back to "Confidential — Available on Request" in _build_certificate.
+    client_name:    Optional[str] = None
+    client_company: Optional[str] = None
 
 class TimeStepData(BaseModel):
     hour: int
@@ -205,6 +209,13 @@ class AuditResponse(BaseModel):
     financial_leakage: Optional[FinancialLeakage] = None
     ai_commentary: Optional[str] = None
     counterfactual_summary: Optional[str] = None
+    # ISSUED TO block (Coverage Tasks Fix B) — echoed from AssetSpecs so the
+    # certificate + PDF can render engagement-letter-style header without a
+    # second round-trip.
+    asset_id: Optional[str] = None
+    asset_location: Optional[str] = None
+    client_name: Optional[str] = None
+    client_company: Optional[str] = None
 
 class HistoricalResponse(BaseModel):
     history_log: List[DecisionRecord]
@@ -512,6 +523,53 @@ def _run_optimizer_dispatchable(asset: AssetSpecs, prices: List[float]) -> dict:
     return {i: (asset.p_max if p > asset.deg_cost else 0.0) for i, p in enumerate(prices)}
 
 
+def _load_consumption_series(time_series_list: list) -> List[float]:
+    """
+    For load-class assets the consumption column is `actual_charge`. Many
+    uploads only fill `actual_discharge` though, so we fall back to that if
+    charge is uniformly zero — better a working audit than a strict schema
+    error at ingest.
+    """
+    charge = [float(ts.get("actual_charge", 0) or 0) for ts in time_series_list]
+    if sum(charge) > 0:
+        return charge
+    return [float(ts.get("actual_discharge", 0) or 0) for ts in time_series_list]
+
+
+def _run_optimizer_load(asset: AssetSpecs, time_series_list: list) -> dict:
+    """
+    Electrolyzer / Desalination / large flexible loads. The load has to meet a
+    production target (H₂ tonnes/day, m³/day of water, etc.) — the decision is
+    WHEN to consume, not whether to. The audit takes the observed total energy
+    consumed as the target and asks: could the same total have been met at a
+    lower electricity cost?
+
+    Optimal policy: greedily allocate p_max to the cheapest steps until the
+    observed total consumption is met. Any remainder goes into the next-cheapest
+    step at a partial rate. No time coupling (no product-storage constraint) —
+    this is the merit-order equivalent for loads.
+    """
+    prices = [float(ts.get("price", 0) or 0) for ts in time_series_list]
+    consumption = _load_consumption_series(time_series_list)
+    total_needed = sum(consumption)
+    n = len(prices)
+    optimal = {i: 0.0 for i in range(n)}
+    if total_needed <= 0 or n == 0:
+        return optimal
+
+    # Ascending-price greedy fill: cheapest hour first, run at p_max until the
+    # daily energy target is met, then partial-fill the boundary step.
+    order = sorted(range(n), key=lambda i: prices[i])
+    remaining = total_needed
+    for i in order:
+        if remaining <= 0:
+            break
+        take = min(asset.p_max, remaining)
+        optimal[i] = take
+        remaining -= take
+    return optimal
+
+
 def run_optimizer(asset: AssetSpecs, time_series_list: list) -> dict:
     """
     Dispatch router. Picks the right optimizer for the asset class and returns
@@ -521,6 +579,8 @@ def run_optimizer(asset: AssetSpecs, time_series_list: list) -> dict:
     mode = _dispatch_mode(asset.asset_type)
     if mode == "intermittent":
         return _run_optimizer_intermittent(asset, time_series_list)
+    if mode == "load":
+        return _run_optimizer_load(asset, time_series_list)
     prices = [float(ts.get("price", 0)) for ts in time_series_list]
     if mode == "dispatchable":
         return _run_optimizer_dispatchable(asset, prices)
@@ -544,7 +604,24 @@ def _classify_decision(opt: float, act: float, price: float, threshold: float = 
         return "Partial Capture", 0.78
     return "Sub-optimal Dispatch", 0.70
 
-def _build_root_causes(decision_log: List[DecisionRecord], total_gap: float) -> List[RootCauseItem]:
+def _build_root_causes(
+    decision_log: List[DecisionRecord],
+    total_gap: float,
+    total_edv_opt: float,
+) -> List[RootCauseItem]:
+    """
+    Attribute the Economic Gap to category-level root causes.
+
+    Denominator note (P0 fix — Coverage Tasks v1): contribution_pct expresses
+    each category as a fraction of TOTAL ECONOMIC POTENTIAL (EDV_optimal), not
+    of total_gap. Using total_gap was a real bug: total_gap = Σ gap_step sums
+    both positive AND negative step-gaps (operator-override steps that beat
+    the MILP contribute negative), while category loss sums only positives —
+    the ratio could exceed 100% (observed: "Missed Arbitrage 152.2%"). Using
+    total_edv_opt guarantees ≤ 100% because Σ positive_gap ≤ Σ optimal_edv.
+    We also min(100, …) as belt-and-suspenders. Curtailment attribution is
+    a secondary tag (double-counts by design — flagged for a follow-up).
+    """
     cats = {
         "Missed Arbitrage":     0.0,
         "Schedule-based Dispatch": 0.0,
@@ -569,151 +646,276 @@ def _build_root_causes(decision_log: List[DecisionRecord], total_gap: float) -> 
         if (rec.curtailment_mw or 0) > 0:
             cats["Curtailment"] += gap * 0.15
 
+    denom = total_edv_opt if total_edv_opt and total_edv_opt > 0 else 0.0
     result = []
     for cat, loss in cats.items():
-        if loss > 0 and total_gap > 0:
+        if loss > 0 and denom > 0:
+            pct = min(100.0, (loss / denom) * 100.0)
             result.append(RootCauseItem(
                 category=cat,
-                contribution_pct=round((loss / total_gap) * 100, 1),
-                loss_usd=round(loss, 2)
+                contribution_pct=round(pct, 1),
+                loss_usd=round(loss, 2),
             ))
     result.sort(key=lambda x: x.contribution_pct, reverse=True)
     return result[:6]
 
+def _opp(name, description, share, annual, total_gap, **fields) -> OpportunityItem:
+    """Small helper — every opportunity shares the same shape, so factor out
+    the arithmetic (annual_gain_usd, efficiency_gain_pct) and pass the rest."""
+    return OpportunityItem(
+        name=name,
+        description=description,
+        annual_gain_usd=round(annual * share, 0),
+        efficiency_gain_pct=round(annual * share / max(1, total_gap) * 100, 1),
+        **fields,
+    )
+
+
+def _ops_storage(annual, total_gap, stats) -> List[OpportunityItem]:
+    """BESS / Pumped Hydro / storage-with-cycles."""
+    total, missed, partial, curtail = stats["total"], stats["missed"], stats["partial"], stats["curtail"]
+    curtail_ivals = stats["curtail_ivals"]
+    return [
+        _opp("Charging Window Optimization",
+             "Shift battery charging to off-peak periods (00:00–05:00) to maximise arbitrage spread. "
+             "Replace fixed schedule with rolling 4-hour price forecast trigger.",
+             0.28, annual, total_gap,
+             difficulty="Quick Win", priority_stars=5, priority_score=100,
+             confidence_pct=round(min(99.5, 85 + (missed / total) * 15), 1),
+             investment_type="No CAPEX", owner="EMS Engineer", operational_risk="Low", payback_days=0,
+             evidence=f"Detected across {missed} dispatch intervals with chronic off-peak charging conflict.",
+             intervals_observed=missed),
+        _opp("Curtailment Recovery",
+             "Absorb curtailed generation by charging the storage asset during curtailment events "
+             "instead of wasting available energy. Captures otherwise-spilled economic value.",
+             0.35, annual, total_gap,
+             difficulty="Strategic Initiative", priority_stars=5, priority_score=98,
+             confidence_pct=round(min(99.0, 80 + (curtail / max(1, total)) * 20), 1),
+             investment_type="No CAPEX", owner="Operations", operational_risk="Low", payback_days=(0 if curtail > 0 else 14),
+             evidence=f"{round(curtail, 1)} MWh curtailed during audit period — all recoverable.",
+             intervals_observed=curtail_ivals),
+        _opp("Reserve Market Participation",
+             "Stack Frequency Containment Reserve (FCR) or Spinning Reserve on top of energy arbitrage. "
+             "Available capacity that is idle during low-price windows can earn continuous passive income.",
+             0.18, annual, total_gap,
+             difficulty="Market Integration", priority_stars=4, priority_score=85, confidence_pct=92.4,
+             investment_type="Low CAPEX", owner="Trading Desk", operational_risk="Medium", payback_days=45,
+             evidence=f"Asset was idle in {round((total - missed) / total * 100, 0):.0f}% of intervals — capacity available for reserve stacking.",
+             intervals_observed=total - missed),
+        _opp("Dynamic Dispatch Threshold",
+             "Replace fixed price threshold with market-adaptive trigger based on rolling 4-hour forecast. "
+             "Captures high-price spikes currently missed by static rules.",
+             0.12, annual, total_gap,
+             difficulty="Quick Win", priority_stars=4, priority_score=80, confidence_pct=97.1,
+             investment_type="No CAPEX", owner="EMS Engineer", operational_risk="Low", payback_days=2,
+             evidence=f"{partial} partial-capture events show dispatch threshold is too conservative.",
+             intervals_observed=partial),
+        _opp("Frequency Regulation Market",
+             "Enrol available capacity in primary frequency regulation (FFR / FCR-D). "
+             "Earns continuous capacity payments regardless of price level.",
+             0.07, annual, total_gap,
+             difficulty="Market Integration", priority_stars=3, priority_score=62, confidence_pct=88.7,
+             investment_type="Requires Investment", owner="Asset Manager", operational_risk="Medium", payback_days=90,
+             evidence="Market data indicates FCR capacity prices support revenue stacking.",
+             intervals_observed=0),
+    ]
+
+
+def _ops_intermittent(annual, total_gap, stats) -> List[OpportunityItem]:
+    """Solar / Wind / Tidal — no storage, decision space is curtail-vs-export."""
+    total, curtail = stats["total"], stats["curtail"]
+    curtail_ivals = stats["curtail_ivals"]
+    negative_price = stats["negative_price_ivals"]
+    return [
+        _opp("Negative-Price Curtailment Discipline",
+             "Programmatically curtail export during negative-price intervals. Continuing to export "
+             "into negative prices means paying the grid to take your energy — every MWh has a real "
+             "cost, not zero.",
+             0.38, annual, total_gap,
+             difficulty="Quick Win", priority_stars=5, priority_score=100,
+             confidence_pct=round(min(99.5, 85 + (negative_price / max(1, total)) * 100), 1),
+             investment_type="No CAPEX", owner="EMS Engineer", operational_risk="Low", payback_days=0,
+             evidence=f"{negative_price} intervals ran into negative prices without curtailment. Immediate SCADA-side inverter throttle would recover the loss.",
+             intervals_observed=negative_price),
+        _opp("Storage Colocation for Time-Shift",
+             "Pair the plant with a colocated BESS to shift midday oversupply into evening peak. "
+             "Turns curtailed generation into evening-peak revenue rather than lost value.",
+             0.24, annual, total_gap,
+             difficulty="Strategic Initiative", priority_stars=5, priority_score=94, confidence_pct=91.0,
+             investment_type="Requires Investment", owner="Asset Manager", operational_risk="Medium", payback_days=730,
+             evidence=f"{curtail_ivals} curtailment intervals concentrated in midday — the classic time-shift profile.",
+             intervals_observed=curtail_ivals),
+        _opp("Forecast-Weighted Bid Strategy",
+             "Bid the plant's next-day output into the day-ahead market with a merit curve informed "
+             "by wind/irradiance forecast confidence, instead of a flat price-taker bid.",
+             0.14, annual, total_gap,
+             difficulty="Market Integration", priority_stars=4, priority_score=82, confidence_pct=88.6,
+             investment_type="Low CAPEX", owner="Trading Desk", operational_risk="Low", payback_days=60,
+             evidence="Forecast utilisation index below sector benchmark — significant capacity to move from price-taker to price-shaper.",
+             intervals_observed=total),
+        _opp("Ancillary Services Enrolment",
+             "Enrol the inverter fleet in voltage support / reactive power / synthetic inertia markets. "
+             "These earn independent of energy price and reward available capacity.",
+             0.14, annual, total_gap,
+             difficulty="Market Integration", priority_stars=4, priority_score=76, confidence_pct=86.2,
+             investment_type="Low CAPEX", owner="Trading Desk", operational_risk="Medium", payback_days=120,
+             evidence="Modern IBR-capable inverters can participate in grid support markets during export hours with no fuel penalty.",
+             intervals_observed=total),
+        _opp("PPA-vs-Merchant Allocation",
+             "Optimise the split between fixed-price PPA volume and merchant exposure. Excess merchant "
+             "exposure at low prices is the highest-cost mistake this asset class makes.",
+             0.10, annual, total_gap,
+             difficulty="Strategic Initiative", priority_stars=3, priority_score=68, confidence_pct=81.4,
+             investment_type="No CAPEX", owner="Asset Manager", operational_risk="Low", payback_days=180,
+             evidence="Merchant-tail exposure detected during low-price windows — reallocatable to PPA volume.",
+             intervals_observed=0),
+    ]
+
+
+def _ops_dispatchable(annual, total_gap, stats) -> List[OpportunityItem]:
+    """Gas / Thermal / Hydro-no-storage / Nuclear / Geothermal / CHP."""
+    total, missed, partial = stats["total"], stats["missed"], stats["partial"]
+    return [
+        _opp("Merit-Order Compliance",
+             "Dispatch when market price exceeds the marginal cost of production and idle when it "
+             "doesn't. Fixed schedules that ignore price are the largest source of value destruction "
+             "in this asset class.",
+             0.40, annual, total_gap,
+             difficulty="Quick Win", priority_stars=5, priority_score=100,
+             confidence_pct=round(min(99.5, 88 + (missed / total) * 12), 1),
+             investment_type="No CAPEX", owner="EMS Engineer", operational_risk="Low", payback_days=0,
+             evidence=f"{missed} intervals dispatched below marginal cost. Merit-order trigger would eliminate the loss.",
+             intervals_observed=missed),
+        _opp("Ramp-Rate Optimisation",
+             "Align turbine ramp with the price gradient — ramp up as prices rise into peak, ramp "
+             "down as they fall. Reduces cycling wear and captures more of the peak shoulder.",
+             0.18, annual, total_gap,
+             difficulty="Strategic Initiative", priority_stars=4, priority_score=84, confidence_pct=91.7,
+             investment_type="Low CAPEX", owner="Operations", operational_risk="Medium", payback_days=90,
+             evidence=f"{partial} partial-capture events consistent with mistimed ramps.",
+             intervals_observed=partial),
+        _opp("Startup-Cost Recovery Windowing",
+             "Extend runs to amortise startup fuel and maintenance across a longer profitable window "
+             "rather than cycling on/off around marginal prices.",
+             0.14, annual, total_gap,
+             difficulty="Quick Win", priority_stars=4, priority_score=78, confidence_pct=90.4,
+             investment_type="No CAPEX", owner="Operations", operational_risk="Low", payback_days=14,
+             evidence="Frequent short runs detected — starts likely uneconomic vs. sustained dispatch during peak windows.",
+             intervals_observed=total),
+        _opp("Spinning Reserve Enrolment",
+             "Offer the plant's synchronised capacity into the spinning reserve / operating reserve "
+             "market. Earns capacity payments during hours the plant would otherwise idle.",
+             0.16, annual, total_gap,
+             difficulty="Market Integration", priority_stars=4, priority_score=76, confidence_pct=89.0,
+             investment_type="Low CAPEX", owner="Trading Desk", operational_risk="Medium", payback_days=60,
+             evidence="Synchronised idle-capacity hours identified — direct qualification for reserve products.",
+             intervals_observed=0),
+        _opp("Fuel Cost Hedging",
+             "Lock the marginal fuel component with forward contracts to stabilise dispatch economics "
+             "and lift the confidence of the merit-order trigger.",
+             0.12, annual, total_gap,
+             difficulty="Strategic Initiative", priority_stars=3, priority_score=64, confidence_pct=83.0,
+             investment_type="No CAPEX", owner="Trading Desk", operational_risk="Low", payback_days=180,
+             evidence="Spot fuel exposure aligned with revenue volatility — hedgeable via monthly forwards.",
+             intervals_observed=0),
+    ]
+
+
+def _ops_load(annual, total_gap, stats) -> List[OpportunityItem]:
+    """Electrolyzer / Desalination / large flexible loads."""
+    total, missed = stats["total"], stats["missed"]
+    return [
+        _opp("Off-Peak Load Shifting",
+             "Shift required daily consumption into the cheapest-price windows. Meets the production "
+             "target at a lower unit-electricity cost without changing daily throughput.",
+             0.42, annual, total_gap,
+             difficulty="Quick Win", priority_stars=5, priority_score=100,
+             confidence_pct=round(min(99.5, 85 + (missed / total) * 15), 1),
+             investment_type="No CAPEX", owner="EMS Engineer", operational_risk="Low", payback_days=0,
+             evidence=f"{missed} intervals consumed at above-median prices with cheaper alternatives available in the same day.",
+             intervals_observed=missed),
+        _opp("Renewable Co-Optimisation (Behind-the-Meter)",
+             "Align consumption with on-site or PPA-linked solar/wind surplus. Where the load can be "
+             "matched to renewable generation minute-by-minute, energy cost approaches zero.",
+             0.22, annual, total_gap,
+             difficulty="Strategic Initiative", priority_stars=5, priority_score=92, confidence_pct=90.5,
+             investment_type="Low CAPEX", owner="Asset Manager", operational_risk="Low", payback_days=180,
+             evidence="Renewable surplus profile aligns well with the plant's flexible operating window.",
+             intervals_observed=total),
+        _opp("Demand-Response / Grid-Balancing Enrolment",
+             "Enrol the flexible load into demand-response / interruptible-load markets. Getting paid "
+             "to briefly cut consumption during grid stress is pure economic upside for a load with "
+             "product storage buffer.",
+             0.14, annual, total_gap,
+             difficulty="Market Integration", priority_stars=4, priority_score=80, confidence_pct=87.2,
+             investment_type="Low CAPEX", owner="Trading Desk", operational_risk="Medium", payback_days=90,
+             evidence="Grid-side capacity payments cover the deferred production cost with room to spare.",
+             intervals_observed=0),
+        _opp("Product-Storage Buffer Sizing",
+             "Increase downstream product buffer (H₂ tank, water reservoir) so production timing "
+             "decouples further from delivery. Every hour of buffer is another hour of load-shifting "
+             "flexibility.",
+             0.12, annual, total_gap,
+             difficulty="Strategic Initiative", priority_stars=3, priority_score=72, confidence_pct=84.6,
+             investment_type="Requires Investment", owner="Asset Manager", operational_risk="Low", payback_days=365,
+             evidence="Current buffer capacity limits how much daily production can shift into cheap-hour windows.",
+             intervals_observed=0),
+        _opp("Curtailment Absorption PPA",
+             "Structure a discounted PPA that pays the generator only for otherwise-curtailed MWh. "
+             "Turns the load into the natural sink for a nearby wind/solar plant's negative-price "
+             "hours.",
+             0.10, annual, total_gap,
+             difficulty="Strategic Initiative", priority_stars=3, priority_score=68, confidence_pct=82.0,
+             investment_type="No CAPEX", owner="Asset Manager", operational_risk="Low", payback_days=120,
+             evidence="Adjacent variable-renewable assets show curtailment patterns matching the load's flexible window.",
+             intervals_observed=0),
+    ]
+
+
+_SECTOR_OPS = {
+    "storage":      _ops_storage,
+    "intermittent": _ops_intermittent,
+    "dispatchable": _ops_dispatchable,
+    "load":         _ops_load,
+}
+
+
 def _build_opportunities(total_gap: float, asset_type: str, decision_log: list = None) -> List[OpportunityItem]:
     """
-    Build a prioritised Economic Action Plan™.
-    Each opportunity is a full investment-grade card with confidence, owner, payback, etc.
+    Build a prioritised Economic Action Plan™ appropriate to the asset class.
+
+    Routes on dispatch mode so a Solar audit doesn't recommend "Charging Window
+    Optimization." Each mode ships 5 curated opportunities plus a mode-agnostic
+    "Operator Override Governance" card when overrides > 5.
     """
     annual = total_gap * 365
     log = decision_log or []
 
-    # Count supporting evidence from dispatch log
-    missed   = sum(1 for d in log if d.decision_type == "Missed Arbitrage")
-    partial  = sum(1 for d in log if d.decision_type == "Partial Capture")
-    curtail  = sum(d.curtailment_mw or 0 for d in log)
-    override = sum(1 for d in log if d.operator_override)
-    total    = max(1, len(log))
+    stats = {
+        "total":                max(1, len(log)),
+        "missed":               sum(1 for d in log if d.decision_type == "Missed Arbitrage"),
+        "partial":              sum(1 for d in log if d.decision_type == "Partial Capture"),
+        "curtail":              sum(d.curtailment_mw or 0 for d in log),
+        "curtail_ivals":        sum(1 for d in log if (d.curtailment_mw or 0) > 0),
+        "override":             sum(1 for d in log if d.operator_override),
+        "negative_price_ivals": sum(1 for d in log if (d.price or 0) < 0),
+    }
 
-    ops = [
-        OpportunityItem(
-            name="Charging Window Optimization",
-            description=(
-                "Shift battery charging to off-peak periods (00:00–05:00) to maximise arbitrage spread. "
-                "Replace fixed schedule with rolling 4-hour price forecast trigger."
-            ),
-            annual_gain_usd=round(annual * 0.28, 0),
-            difficulty="Quick Win",
-            priority_stars=5,
-            priority_score=100,
-            confidence_pct=round(min(99.5, 85 + (missed / total) * 15), 1),
-            investment_type="No CAPEX",
-            owner="EMS Engineer",
-            operational_risk="Low",
-            payback_days=0,
-            evidence=f"Detected across {missed} dispatch intervals with chronic off-peak charging conflict.",
-            intervals_observed=missed,
-            efficiency_gain_pct=round(annual * 0.28 / max(1, total_gap) * 100, 1),
-        ),
-        OpportunityItem(
-            name="Curtailment Recovery",
-            description=(
-                "Absorb curtailed generation by charging the storage asset during curtailment events "
-                "instead of wasting available energy. Captures otherwise-spilled economic value."
-            ),
-            annual_gain_usd=round(annual * 0.35, 0),
-            difficulty="Strategic Initiative",
-            priority_stars=5,
-            priority_score=98,
-            confidence_pct=round(min(99.0, 80 + (curtail / max(1, total)) * 20), 1),
-            investment_type="No CAPEX",
-            owner="Operations",
-            operational_risk="Low",
-            payback_days=0 if curtail > 0 else 14,
-            evidence=f"{round(curtail, 1)} MWh curtailed during audit period — all recoverable.",
-            intervals_observed=sum(1 for d in log if (d.curtailment_mw or 0) > 0),
-            efficiency_gain_pct=round(annual * 0.35 / max(1, total_gap) * 100, 1),
-        ),
-        OpportunityItem(
-            name="Reserve Market Participation",
-            description=(
-                "Stack Frequency Containment Reserve (FCR) or Spinning Reserve on top of energy arbitrage. "
-                "Available capacity that is idle during low-price windows can earn continuous passive income."
-            ),
-            annual_gain_usd=round(annual * 0.18, 0),
-            difficulty="Market Integration",
-            priority_stars=4,
-            priority_score=85,
-            confidence_pct=92.4,
-            investment_type="Low CAPEX",
-            owner="Trading Desk",
-            operational_risk="Medium",
-            payback_days=45,
-            evidence=f"Asset was idle in {round((total - missed) / total * 100, 0):.0f}% of intervals — capacity available for reserve stacking.",
-            intervals_observed=total - missed,
-            efficiency_gain_pct=round(annual * 0.18 / max(1, total_gap) * 100, 1),
-        ),
-        OpportunityItem(
-            name="Dynamic Dispatch Threshold",
-            description=(
-                "Replace fixed price threshold with market-adaptive trigger based on rolling 4-hour forecast. "
-                "Captures high-price spikes currently missed by static rules."
-            ),
-            annual_gain_usd=round(annual * 0.12, 0),
-            difficulty="Quick Win",
-            priority_stars=4,
-            priority_score=80,
-            confidence_pct=97.1,
-            investment_type="No CAPEX",
-            owner="EMS Engineer",
-            operational_risk="Low",
-            payback_days=2,
-            evidence=f"{partial} partial-capture events show dispatch threshold is too conservative.",
-            intervals_observed=partial,
-            efficiency_gain_pct=round(annual * 0.12 / max(1, total_gap) * 100, 1),
-        ),
-        OpportunityItem(
-            name="Frequency Regulation Market",
-            description=(
-                "Enrol available capacity in primary frequency regulation (FFR / FCR-D). "
-                "Earns continuous capacity payments regardless of price level."
-            ),
-            annual_gain_usd=round(annual * 0.07, 0),
-            difficulty="Market Integration",
-            priority_stars=3,
-            priority_score=62,
-            confidence_pct=88.7,
-            investment_type="Requires Investment",
-            owner="Asset Manager",
-            operational_risk="Medium",
-            payback_days=90,
-            evidence="Market data indicates FCR capacity prices support revenue stacking.",
-            intervals_observed=0,
-            efficiency_gain_pct=round(annual * 0.07 / max(1, total_gap) * 100, 1),
-        ),
-    ]
+    mode = _dispatch_mode(asset_type)
+    builder = _SECTOR_OPS.get(mode, _ops_storage)
+    ops = builder(annual, total_gap, stats)
 
-    # Add override-specific opportunity if overrides detected
+    # Mode-agnostic: governance opportunity when operator overrides are material
+    override = stats["override"]
     if override > 5:
-        ops.insert(2, OpportunityItem(
-            name="Operator Override Governance",
-            description=(
-                "Implement structured override protocol: require economic justification for manual interventions. "
-                f"{override} overrides detected — each carries average leakage risk."
-            ),
-            annual_gain_usd=round(annual * 0.08, 0),
-            difficulty="Quick Win",
-            priority_stars=4,
-            priority_score=88,
-            confidence_pct=94.2,
-            investment_type="No CAPEX",
-            owner="Operations",
-            operational_risk="Low",
-            payback_days=1,
-            evidence=f"{override} operator overrides detected in audit period. Avg economic cost per override: ${round(total_gap / override, 0):.0f}.",
-            intervals_observed=override,
-            efficiency_gain_pct=round(annual * 0.08 / max(1, total_gap) * 100, 1),
-        ))
+        ops.insert(2, _opp("Operator Override Governance",
+                           "Implement structured override protocol: require economic justification for "
+                           f"manual interventions. {override} overrides detected — each carries average leakage risk.",
+                           0.08, annual, total_gap,
+                           difficulty="Quick Win", priority_stars=4, priority_score=88, confidence_pct=94.2,
+                           investment_type="No CAPEX", owner="Operations", operational_risk="Low", payback_days=1,
+                           evidence=f"{override} operator overrides detected in audit period. Avg economic cost per override: ${round(total_gap / override, 0):.0f}.",
+                           intervals_observed=override))
 
     return ops
 
@@ -908,10 +1110,26 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
     decision_log = []
     db = SessionLocal() if save_to_db else None
 
+    # Dispatch-mode-dependent EDV computation. For generation modes (storage,
+    # intermittent, dispatchable) EDV = (price − marginal_cost) × dispatch —
+    # positive = value captured, negative = uneconomic dispatch. For LOAD mode
+    # the asset consumes, so EDV = (peak_price − price) × consumption —
+    # positive = "savings vs the worst-price hour of the day." Same-signed,
+    # comparable, and the gap arithmetic downstream (edv_opt − edv_act) still
+    # reads as "recoverable value."
+    mode = _dispatch_mode(asset.asset_type)
+    is_load = (mode == "load")
+    peak_price = max((float(ts.get("price", 0) or 0) for ts in time_series_list), default=0.0)
+
     try:
         for i, ts in enumerate(time_series_list):
             opt_dis  = optimal_actions.get(i, 0.0)
-            act_dis  = float(ts.get("actual_discharge", 0))
+            # Load-class inputs may put consumption in actual_charge; other
+            # modes use actual_discharge. Fall back if the caller only filled one.
+            if is_load:
+                act_dis = float(ts.get("actual_charge", 0) or 0) or float(ts.get("actual_discharge", 0) or 0)
+            else:
+                act_dis = float(ts.get("actual_discharge", 0) or 0)
             price    = float(ts.get("price", 0))
             curtail  = float(ts.get("curtailment_mw", 0))
             override = bool(ts.get("operator_override", False))
@@ -919,9 +1137,12 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
             soc_val  = ts.get("soc", None)
             demand   = ts.get("grid_demand", None)
 
-            # UNCHANGED core calc
-            edv_opt_step = (price * opt_dis) - (asset.deg_cost * opt_dis)
-            edv_act_step = (price * act_dis) - (asset.deg_cost * act_dis)
+            if is_load:
+                edv_opt_step = (peak_price - price) * opt_dis
+                edv_act_step = (peak_price - price) * act_dis
+            else:
+                edv_opt_step = (price * opt_dis) - (asset.deg_cost * opt_dis)
+                edv_act_step = (price * act_dis) - (asset.deg_cost * act_dis)
             gap_step     = edv_opt_step - edv_act_step
             total_edv_opt += edv_opt_step
             total_edv_act += edv_act_step
@@ -975,7 +1196,7 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
 
     # Build EDA intelligence layers
     eda_metrics  = _build_eda_metrics(decision_log, total_edv_opt, total_edv_act, asset.asset_type)
-    root_causes  = _build_root_causes(decision_log, total_gap)
+    root_causes  = _build_root_causes(decision_log, total_gap, total_edv_opt)
     opportunities = _build_opportunities(total_gap, asset.asset_type, decision_log)
     heat_map     = _build_heat_map(decision_log)
     ai_commentary = _build_ai_commentary(
@@ -1016,7 +1237,12 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
             f"${total_edv_opt:,.2f} vs actual ${total_edv_act:,.2f}. "
             f"The counterfactual gap of ${total_gap:,.2f} represents decisions that "
             f"were physically feasible but economically sub-optimal."
-        )
+        ),
+        # Echo ISSUED TO fields from AssetSpecs
+        asset_id=asset.asset_id,
+        asset_location=asset.location,
+        client_name=asset.client_name,
+        client_company=asset.client_company,
     )
     latest_live_result = result
     return result
@@ -1228,19 +1454,158 @@ ASSET_META_ALIASES = {
     "deg_cost": ["deg_cost", "degradation_cost", "wear_cost"],
 }
 
-def _resolve_columns(df_cols: list) -> dict:
+def _normalise_col(name: str) -> str:
     """
-    Returns a mapping {internal_name: actual_col_name} for every alias match found.
-    Normalises column names before matching.
+    Lowercase and strip punctuation for alias matching.
+    Currency symbols, brackets, units-in-parens all get stripped so that
+    "Spot Price ($/MWh)" → "spot_price_mwh" and lines up with the "spot_price"
+    or "price" aliases (fuzzy tier fills in the rest).
     """
-    normalised = {c: c.lower().strip().replace(" ", "_").replace("-", "_").replace("(", "").replace(")", "").replace("/", "_") for c in df_cols}
+    n = (name or "").lower().strip()
+    # Drop stuff that adds no semantic value for matching
+    for ch in "()[]{}$€£¥%,;:'\"":
+        n = n.replace(ch, "")
+    # Whitespace + dashes + slashes normalise to underscore
+    for ch in " -/\\":
+        n = n.replace(ch, "_")
+    # Collapse repeats
+    while "__" in n:
+        n = n.replace("__", "_")
+    return n.strip("_")
+
+
+_FUZZY_THRESHOLD = 80  # rapidfuzz token_sort_ratio out of 100
+
+
+def _resolve_columns_verbose(df_cols: list) -> dict:
+    """
+    Two-tier column resolution.
+
+    Tier 1 — exact alias match against the manually-curated COLUMN_ALIASES /
+    ASSET_META_ALIASES tables. Fast, deterministic, unchanged behaviour.
+
+    Tier 2 — fuzzy match (rapidfuzz.token_sort_ratio ≥ 80) for any internal
+    field the exact tier didn't resolve. Handles the "close enough" cases:
+    "Discharge_MW_avg" → actual_discharge, "PriceUSDperMWh" → price, etc.
+    Silently falls back to exact-only if rapidfuzz isn't installed.
+
+    Returns {resolved, match_type, fuzzy_scores} for diagnostics.
+    """
+    normalised = {c: _normalise_col(c) for c in df_cols}
+    all_aliases = {**COLUMN_ALIASES, **ASSET_META_ALIASES}
+
     resolved = {}
-    for internal, aliases in {**COLUMN_ALIASES, **ASSET_META_ALIASES}.items():
+    match_type = {}         # internal → "exact" | "fuzzy"
+    fuzzy_scores = {}       # internal → {matched_alias, score, from_col}
+
+    # Tier 1: exact alias match
+    for internal, aliases in all_aliases.items():
         for original, norm in normalised.items():
             if norm in aliases and internal not in resolved:
                 resolved[internal] = original
+                match_type[internal] = "exact"
                 break
-    return resolved
+
+    # Tier 2: fuzzy match for the remainder
+    try:
+        from rapidfuzz import fuzz, process as fz_process
+    except ImportError:
+        fuzz = None
+        fz_process = None
+
+    if fuzz is not None:
+        used_cols = set(resolved.values())
+        candidates = [(orig, norm) for orig, norm in normalised.items() if orig not in used_cols]
+        for internal, aliases in all_aliases.items():
+            if internal in resolved:
+                continue
+            best_col, best_score, best_alias = None, 0, None
+            for orig, norm in candidates:
+                match = fz_process.extractOne(norm, aliases, scorer=fuzz.token_sort_ratio)
+                if match is None:
+                    continue
+                alias, score = match[0], match[1]
+                if score > best_score:
+                    best_col, best_score, best_alias = orig, score, alias
+            if best_score >= _FUZZY_THRESHOLD and best_col is not None:
+                resolved[internal] = best_col
+                match_type[internal] = "fuzzy"
+                fuzzy_scores[internal] = {
+                    "matched_alias": best_alias,
+                    "score": round(float(best_score), 1),
+                    "from_col": best_col,
+                }
+                candidates = [(o, n) for o, n in candidates if o != best_col]
+
+    return {"resolved": resolved, "match_type": match_type, "fuzzy_scores": fuzzy_scores}
+
+
+def _resolve_columns(df_cols: list) -> dict:
+    """Back-compat wrapper — same shape as before (internal_name → actual_col_name)."""
+    return _resolve_columns_verbose(df_cols)["resolved"]
+
+
+# Suggested fallbacks for missing fields — used in the inspect response so
+# users know exactly what will happen if they proceed without a given column.
+_MISSING_FIELD_FALLBACKS = {
+    "actual_charge":     "assumed 0 MW throughout — charging events won't be detected.",
+    "soc":               "not required for the audit; SOC constraints won't gate the optimiser.",
+    "curtailment_mw":    "assumed 0 MW — curtailment recovery attribution will be zero.",
+    "forecast_price":    "not required; forecast-utilisation score defaults to 0%.",
+    "operator_override": "assumed False — override-governance opportunity won't fire.",
+    "grid_demand":       "advisory only; the audit engine doesn't use it.",
+    "hour":              "auto-generated as 0..N-1 ordered index.",
+}
+
+
+def _detect_and_apply_units(df: pd.DataFrame) -> tuple:
+    """
+    Heuristic unit correction per Coverage Tasks 1.5.
+
+    Power kW → MW: max(actual_discharge) > 500 → treat as kW, divide by 1000.
+    Price $/kWh → $/MWh: max(price) < 1.0 → treat as $/kWh, multiply by 1000.
+
+    Returns (df_corrected, corrections_list). Corrections is a plain string list
+    to surface in the inspect response so the operator can confirm or override.
+    """
+    corrections = []
+
+    for col, label in (("actual_discharge", "actual_discharge"),
+                       ("actual_charge",    "actual_charge")):
+        if col in df.columns:
+            series = pd.to_numeric(df[col], errors="coerce")
+            m = series.abs().max()
+            if pd.notna(m) and m > 500:
+                df[col] = series / 1000.0
+                corrections.append(f"{label} looked like kW (max {m:.0f}); converted to MW.")
+
+    if "price" in df.columns:
+        series = pd.to_numeric(df["price"], errors="coerce")
+        m = series.abs().max()
+        # Only auto-scale up when max is clearly sub-dollar. > $1 could still be a
+        # fair $/MWh price in emerging markets, so don't touch it.
+        if pd.notna(m) and 0 < m < 1.0:
+            df["price"] = series * 1000.0
+            corrections.append(f"price looked like $/kWh (max {m:.3f}); converted to $/MWh.")
+
+    return df, corrections
+
+
+def _detect_excel_serial_timestamps(df: pd.DataFrame) -> tuple:
+    """
+    Excel-saved CSVs often serialise timestamps as float days-since-1899-12-30.
+    Detection: the timestamp column is entirely numeric and falls in the plausible
+    Excel-date range (40000..60000 covers 2009 through 2064). If so, replace with
+    an ordered index — the audit engine only needs ordering, not wall-clock time.
+    """
+    corrections = []
+    if "hour" not in df.columns:
+        return df, corrections
+    series = pd.to_numeric(df["hour"], errors="coerce")
+    if series.notna().all() and 40000 < float(series.min()) and float(series.max()) < 60000:
+        df["hour"] = list(range(len(df)))
+        corrections.append("hour column looked like Excel serial timestamps; replaced with a 0..N-1 ordered index.")
+    return df, corrections
 
 
 def _parse_file_bytes(contents: bytes, filename: str) -> pd.DataFrame:
@@ -1257,8 +1622,36 @@ def _parse_file_bytes(contents: bytes, filename: str) -> pd.DataFrame:
     fname = (filename or "").lower()
 
     # ── Excel ──────────────────────────────────────────────────────────────────
-    if fname.endswith((".xlsx", ".xls")):
+    if fname.endswith((".xlsx", ".xls", ".xlsm")):
         return pd.read_excel(BytesIO(contents))
+
+    # ── JSON ───────────────────────────────────────────────────────────────────
+    # Accepts:
+    #   1) Flat array of records:      [{"time": ..., "price": ...}, ...]
+    #   2) Wrapper with a data array:  {"data": [...]}
+    #      or {"timeseries": [...]}, {"time_series": [...]}, {"records": [...]},
+    #      {"rows": [...]}, {"items": [...]}
+    #   3) Column-oriented dict:       {"time": [...], "price": [...]}
+    if fname.endswith(".json"):
+        try:
+            payload = json.loads(contents.decode("utf-8", errors="replace"))
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON: {e.msg} at line {e.lineno}") from e
+        if isinstance(payload, list):
+            return pd.DataFrame(payload)
+        if isinstance(payload, dict):
+            for key in ("data", "timeseries", "time_series", "records", "rows", "items", "values"):
+                inner = payload.get(key)
+                if isinstance(inner, list):
+                    return pd.DataFrame(inner)
+            # Column-oriented — every value is a list of the same length
+            list_cols = {k: v for k, v in payload.items() if isinstance(v, list)}
+            if list_cols and len({len(v) for v in list_cols.values()}) == 1:
+                return pd.DataFrame(list_cols)
+        raise ValueError(
+            "JSON must be an array of records, a wrapper like {\"data\": [...]}, "
+            "or a column-oriented dict of same-length arrays."
+        )
 
     # Separator heuristic
     sep = "\t" if fname.endswith(".tsv") else ","
@@ -1348,37 +1741,28 @@ async def audit_from_file(
     lead: TrialLead = Depends(require_trial_token),
 ):
     """
-    Universal file ingestion — accepts CSV or Excel with ANY column naming convention.
+    Universal file ingestion. Accepts real-world exports from any SCADA / EMS /
+    historian with a two-tier column resolver, JSON support, unit auto-detection,
+    and Excel-serial timestamp recovery.
 
-    The engine auto-resolves column names via an alias map covering 80+ variants.
-
-    The only hard requirement is ONE column that looks like a price and ONE that
-    looks like a power output / discharge. Everything else is optional.
-
-    Accepted file formats: .csv  .xlsx  .xls
+    Accepted formats: .csv  .tsv  .txt  .xlsx  .xls  .xlsm  .json
     """
     try:
         contents = await file.read()
         df = _parse_file_bytes(contents, file.filename or "")
 
-        # Resolve column aliases
-        col_map = _resolve_columns(list(df.columns))
+        # Resolve column aliases (exact → fuzzy)
+        col_info = _resolve_columns_verbose(list(df.columns))
+        col_map = col_info["resolved"]
 
         # Check required fields resolved
-        missing_internal = []
-        for req in ("price", "actual_discharge"):
-            if req not in col_map:
-                missing_internal.append(req)
-
+        missing_internal = [r for r in ("price", "actual_discharge") if r not in col_map]
         if missing_internal:
-            # Build a helpful error listing what the file actually has
             return JSONResponse(status_code=400, content={
                 "detail": (
                     f"Could not find required column(s): {missing_internal}. "
                     f"Your file has columns: {list(df.columns)}. "
-                    f"Use /api/v1/audit/inspect to see the full mapping attempt. "
-                    f"Accepted price aliases include: spot_price, lmp, market_price, energy_price, omr_mwh … "
-                    f"Accepted discharge aliases include: generation, actual_power, output_mw, p_actual, gen_mw …"
+                    f"Use /api/v1/audit/inspect to see the full mapping attempt."
                 )
             })
 
@@ -1396,13 +1780,16 @@ async def audit_from_file(
             if col not in df.columns:
                 df[col] = default
 
-        # Fill hour index if missing or all-null
+        # Excel-serial timestamp recovery (before we blast hour with range())
+        df, ts_corrections = _detect_excel_serial_timestamps(df)
+
+        # Fill hour index if still missing / all-null
         if df['hour'].isnull().all():
             df['hour'] = range(len(df))
 
         df = df.fillna({'actual_discharge': 0.0, 'actual_charge': 0.0, 'curtailment_mw': 0.0})
 
-        # Coerce numeric columns — tolerates strings like "12.5 MW" by stripping non-numeric chars
+        # Coerce numeric columns — tolerates strings like "12.5 MW"
         for col in ('price', 'actual_discharge', 'actual_charge', 'curtailment_mw'):
             if col in df.columns:
                 df[col] = pd.to_numeric(
@@ -1410,14 +1797,16 @@ async def audit_from_file(
                     errors='coerce'
                 ).fillna(0.0)
 
-        # Asset specs from meta-columns (first row), fallback to defaults
+        # Unit auto-detection (kW→MW, $/kWh→$/MWh)
+        df, unit_corrections = _detect_and_apply_units(df)
+
+        # Asset specs from meta-columns (first row)
         asset_kwargs = {}
         for key in ASSET_META_ALIASES:
             if key in df.columns:
                 val = df[key].iloc[0]
                 if pd.notna(val):
                     asset_kwargs[key] = val
-
         asset = AssetSpecs(**asset_kwargs)
 
         time_series = df[[
@@ -1427,6 +1816,16 @@ async def audit_from_file(
 
         result = process_calculation(asset, time_series)
         background.add_task(_bump_audit_count, lead.token)
+        # Non-fatal ingestion notes — surfaced on the response for the frontend
+        # to display "we auto-corrected X, confirm before quoting the audit."
+        if unit_corrections or ts_corrections or col_info["fuzzy_scores"]:
+            result_dict = result.dict()
+            result_dict["ingestion_notes"] = {
+                "unit_corrections":       unit_corrections,
+                "timestamp_corrections":  ts_corrections,
+                "fuzzy_column_matches":   col_info["fuzzy_scores"],
+            }
+            return JSONResponse(content=result_dict)
         return result
 
     except Exception as e:
@@ -1436,21 +1835,61 @@ async def audit_from_file(
 @app.post("/api/v1/audit/inspect")
 async def inspect_file(file: UploadFile = File(...)):
     """
-    Debug endpoint — returns the column mapping the engine would apply to your file,
-    without running the full audit. Use this to diagnose upload failures.
+    Pre-audit preview per Coverage Tasks 1.6. Returns everything the engine
+    would apply if the operator hits "run audit," without spending CPU on MILP.
+
+    Response includes:
+      - file_columns, rows, sample_row
+      - resolved_mapping   internal → column, from exact + fuzzy tiers
+      - fuzzy_column_matches (with score) — anything not exact
+      - unresolved_columns — columns we couldn't map, worth manual review
+      - unit_corrections   — kW→MW, $/kWh→$/MWh auto-fixes
+      - timestamp_corrections — Excel-serial recovery
+      - field_warnings     — per missing optional field, the fallback we'd apply
+      - will_succeed       — the "safe to proceed" flag
     """
     try:
         contents = await file.read()
         df = _parse_file_bytes(contents, file.filename or "")
-        col_map = _resolve_columns(list(df.columns))
-        unresolved = [c for c in df.columns if c not in col_map.values()]
+        col_info = _resolve_columns_verbose(list(df.columns))
+        col_map = col_info["resolved"]
+
+        # Simulate the pre-audit normalisation to preview corrections
+        preview = df.copy()
+        rename_map = {v: k for k, v in col_map.items() if v in preview.columns}
+        preview = preview.rename(columns=rename_map)
+        for col in ('price', 'actual_discharge', 'actual_charge', 'curtailment_mw'):
+            if col in preview.columns:
+                preview[col] = pd.to_numeric(
+                    preview[col].astype(str).str.replace(r'[^\d.\-]', '', regex=True),
+                    errors='coerce'
+                ).fillna(0.0)
+        preview, ts_corrections = _detect_excel_serial_timestamps(preview) if "hour" in preview.columns else (preview, [])
+        preview, unit_corrections = _detect_and_apply_units(preview)
+
+        # Warnings for missing optional fields
+        expected_optional = ["actual_charge", "soc", "curtailment_mw", "forecast_price",
+                             "operator_override", "grid_demand", "hour"]
+        field_warnings = []
+        for f in expected_optional:
+            if f not in col_map:
+                field_warnings.append({
+                    "field":    f,
+                    "status":   "missing",
+                    "fallback": _MISSING_FIELD_FALLBACKS.get(f, "safe default applied."),
+                })
+
         return {
-            "file_columns": list(df.columns),
-            "rows": len(df),
-            "resolved_mapping": col_map,          # internal_name → your_col_name
-            "unresolved_columns": unresolved,      # columns we couldn't map
-            "will_succeed": "price" in col_map and "actual_discharge" in col_map,
-            "sample_row": df.iloc[0].to_dict() if len(df) > 0 else {},
+            "file_columns":         list(df.columns),
+            "rows":                 len(df),
+            "resolved_mapping":     col_map,
+            "fuzzy_column_matches": col_info["fuzzy_scores"],
+            "unresolved_columns":   [c for c in df.columns if c not in col_map.values()],
+            "unit_corrections":     unit_corrections,
+            "timestamp_corrections": ts_corrections,
+            "field_warnings":       field_warnings,
+            "will_succeed":         "price" in col_map and "actual_discharge" in col_map,
+            "sample_row":           df.iloc[0].to_dict() if len(df) > 0 else {},
         }
     except Exception as e:
         return JSONResponse(status_code=500, content={"detail": str(e)})
@@ -1766,9 +2205,36 @@ def _build_certificate(data: dict) -> dict:
             "Immediate operational review and EMS reconfiguration required."
         )
 
+    # ── ISSUED BY / ISSUED TO / AUDIT SCOPE (Coverage Tasks Fix B) ─────
+    # Big-4-style engagement-letter framing. The letterhead's company name
+    # ("Al Shams Investment and Trade Company SPC") is the licensed operator
+    # behind PREDAIOT, NOT the audit issuer — so we make that explicit and
+    # separate the recipient block cleanly.
+    CONFIDENTIAL = "Confidential — Available on Request"
+    issuer = {
+        "organization":   "PREDAIOT Economic Decision Intelligence",
+        "licensed_operator": "Al Shams Investment and Trade Company SPC",
+        "email":          "chams@preda-iot.com",
+        "domain":         "platform.preda-iot.com",
+    }
+    recipient = {
+        "asset_name":     data.get("asset_name") or CONFIDENTIAL,
+        "company":        data.get("client_company") or CONFIDENTIAL,
+        "location":       data.get("asset_location") or CONFIDENTIAL,
+        "contact_name":   data.get("client_name") or CONFIDENTIAL,
+    }
+    audit_scope = {
+        "asset_id":       data.get("asset_id") or (data.get("asset_name") or CONFIDENTIAL),
+        "asset_type":     data.get("asset_type", "Generic"),
+        "period":         data.get("audit_period_label", "24h"),
+    }
+
     return {
         "certificate_id":       cert_id,
         "issued_at":            datetime.utcnow().isoformat() + "Z",
+        "issuer":               issuer,
+        "recipient":            recipient,
+        "audit_scope":          audit_scope,
         "asset_name":           data.get("asset_name", "Energy Asset"),
         "asset_type":           data.get("asset_type", "Generic"),
         "audit_period":         data.get("audit_period_label", "24h"),
@@ -1900,18 +2366,66 @@ def _build_audit_pdf(audit: dict) -> bytes:
     c.setFillColorRGB(0.4, 0.4, 0.4)
     c.drawString(60, 655, "Economic Decision Performance Certificate (EDPC) — PREDAIOT")
 
-    # ── Asset header ───────────────────────────────────────────────────
-    asset_name = audit.get("asset_name", "Energy Asset")
-    asset_type = audit.get("asset_type", "Generic")
-    period     = audit.get("audit_period_label", "—")
-    issued_at  = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    # ── Engagement-letter header (ISSUED BY / ISSUED TO / AUDIT SCOPE) ─
+    # Coverage Tasks Fix B. Reframes the letterhead so the audit reads as
+    # "PREDAIOT issued this to Client X" (Big-4 style) rather than looking
+    # like a self-report by the letterhead's legal entity.
+    CONFIDENTIAL = "Confidential — Available on Request"
+    asset_name    = audit.get("asset_name", "Energy Asset")
+    asset_type    = audit.get("asset_type", "Generic")
+    asset_id      = audit.get("asset_id") or asset_name
+    asset_loc     = audit.get("asset_location") or CONFIDENTIAL
+    client_comp   = audit.get("client_company") or CONFIDENTIAL
+    period        = audit.get("audit_period_label", "—")
+    issued_at     = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
 
-    c.setFillColorRGB(0.18, 0.18, 0.2)
-    c.setFont("Helvetica-Bold", 11)
-    c.drawString(60, 628, asset_name)
-    c.setFont("Helvetica", 10)
-    c.setFillColorRGB(0.35, 0.35, 0.4)
-    c.drawString(60, 613, f"{asset_type}   ·   {period}   ·   Issued {issued_at}")
+    LABEL_C = (0.34, 0.4, 0.5)
+    BODY_C  = (0.14, 0.16, 0.2)
+    MUTED_C = (0.42, 0.44, 0.48)
+    RULE_C  = (0.8, 0.8, 0.84)
+
+    # Two-column engagement-letter header. Left column carries the long
+    # legal-operator line and needs more room (LEFT_X to RIGHT_X-8).
+    LEFT_X, RIGHT_X, MAX_X = 60, 345, 535
+    y = 630
+    c.setFillColorRGB(*LABEL_C)
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(LEFT_X, y, "ISSUED BY")
+    c.drawString(RIGHT_X, y, "ISSUED TO")
+
+    y -= 13
+    c.setFillColorRGB(*BODY_C)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(LEFT_X, y, "PREDAIOT Economic Decision Intelligence")
+    c.drawString(RIGHT_X, y, asset_name[:34])
+
+    y -= 12
+    c.setFont("Helvetica-Oblique", 8)  # 8pt italic so the long line fits under RIGHT_X
+    c.setFillColorRGB(*MUTED_C)
+    c.drawString(LEFT_X, y, "Al Shams Investment and Trade Company SPC (Licensed Operator)")
+    c.setFont("Helvetica", 9)
+    c.setFillColorRGB(0.34, 0.36, 0.4)
+    c.drawString(RIGHT_X, y, client_comp[:40])
+
+    y -= 12
+    c.drawString(LEFT_X, y, f"{_REPLACEMENT_EMAIL}  ·  platform.preda-iot.com")
+    c.drawString(RIGHT_X, y, asset_loc[:40])
+
+    # Divider + AUDIT SCOPE / ISSUED
+    y -= 12
+    c.setStrokeColorRGB(*RULE_C)
+    c.setLineWidth(0.5)
+    c.line(LEFT_X, y, 535, y)
+    y -= 12
+    c.setFillColorRGB(*LABEL_C)
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(LEFT_X, y, "AUDIT SCOPE")
+    c.drawString(RIGHT_X, y, "ISSUED")
+    y -= 11
+    c.setFillColorRGB(*BODY_C)
+    c.setFont("Helvetica", 9)
+    c.drawString(LEFT_X, y, f"{asset_id}  ·  {asset_type}  ·  {period}")
+    c.drawString(RIGHT_X, y, issued_at)
 
     # ── Executive Summary block ────────────────────────────────────────
     edv_opt = float(audit.get("edv_optimal_total", 0) or 0)
@@ -1920,7 +2434,7 @@ def _build_audit_pdf(audit: dict) -> bytes:
     dq_pct  = float(audit.get("dq_score", 0) or 0) * 100.0
     risk    = (audit.get("risk_level") or "Moderate")
 
-    y = 575
+    y = 540
     c.setFillColorRGB(0.04, 0.14, 0.22)
     c.setFont("Helvetica-Bold", 12)
     c.drawString(60, y, "EXECUTIVE SUMMARY")
