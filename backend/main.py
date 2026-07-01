@@ -1454,19 +1454,158 @@ ASSET_META_ALIASES = {
     "deg_cost": ["deg_cost", "degradation_cost", "wear_cost"],
 }
 
-def _resolve_columns(df_cols: list) -> dict:
+def _normalise_col(name: str) -> str:
     """
-    Returns a mapping {internal_name: actual_col_name} for every alias match found.
-    Normalises column names before matching.
+    Lowercase and strip punctuation for alias matching.
+    Currency symbols, brackets, units-in-parens all get stripped so that
+    "Spot Price ($/MWh)" → "spot_price_mwh" and lines up with the "spot_price"
+    or "price" aliases (fuzzy tier fills in the rest).
     """
-    normalised = {c: c.lower().strip().replace(" ", "_").replace("-", "_").replace("(", "").replace(")", "").replace("/", "_") for c in df_cols}
+    n = (name or "").lower().strip()
+    # Drop stuff that adds no semantic value for matching
+    for ch in "()[]{}$€£¥%,;:'\"":
+        n = n.replace(ch, "")
+    # Whitespace + dashes + slashes normalise to underscore
+    for ch in " -/\\":
+        n = n.replace(ch, "_")
+    # Collapse repeats
+    while "__" in n:
+        n = n.replace("__", "_")
+    return n.strip("_")
+
+
+_FUZZY_THRESHOLD = 80  # rapidfuzz token_sort_ratio out of 100
+
+
+def _resolve_columns_verbose(df_cols: list) -> dict:
+    """
+    Two-tier column resolution.
+
+    Tier 1 — exact alias match against the manually-curated COLUMN_ALIASES /
+    ASSET_META_ALIASES tables. Fast, deterministic, unchanged behaviour.
+
+    Tier 2 — fuzzy match (rapidfuzz.token_sort_ratio ≥ 80) for any internal
+    field the exact tier didn't resolve. Handles the "close enough" cases:
+    "Discharge_MW_avg" → actual_discharge, "PriceUSDperMWh" → price, etc.
+    Silently falls back to exact-only if rapidfuzz isn't installed.
+
+    Returns {resolved, match_type, fuzzy_scores} for diagnostics.
+    """
+    normalised = {c: _normalise_col(c) for c in df_cols}
+    all_aliases = {**COLUMN_ALIASES, **ASSET_META_ALIASES}
+
     resolved = {}
-    for internal, aliases in {**COLUMN_ALIASES, **ASSET_META_ALIASES}.items():
+    match_type = {}         # internal → "exact" | "fuzzy"
+    fuzzy_scores = {}       # internal → {matched_alias, score, from_col}
+
+    # Tier 1: exact alias match
+    for internal, aliases in all_aliases.items():
         for original, norm in normalised.items():
             if norm in aliases and internal not in resolved:
                 resolved[internal] = original
+                match_type[internal] = "exact"
                 break
-    return resolved
+
+    # Tier 2: fuzzy match for the remainder
+    try:
+        from rapidfuzz import fuzz, process as fz_process
+    except ImportError:
+        fuzz = None
+        fz_process = None
+
+    if fuzz is not None:
+        used_cols = set(resolved.values())
+        candidates = [(orig, norm) for orig, norm in normalised.items() if orig not in used_cols]
+        for internal, aliases in all_aliases.items():
+            if internal in resolved:
+                continue
+            best_col, best_score, best_alias = None, 0, None
+            for orig, norm in candidates:
+                match = fz_process.extractOne(norm, aliases, scorer=fuzz.token_sort_ratio)
+                if match is None:
+                    continue
+                alias, score = match[0], match[1]
+                if score > best_score:
+                    best_col, best_score, best_alias = orig, score, alias
+            if best_score >= _FUZZY_THRESHOLD and best_col is not None:
+                resolved[internal] = best_col
+                match_type[internal] = "fuzzy"
+                fuzzy_scores[internal] = {
+                    "matched_alias": best_alias,
+                    "score": round(float(best_score), 1),
+                    "from_col": best_col,
+                }
+                candidates = [(o, n) for o, n in candidates if o != best_col]
+
+    return {"resolved": resolved, "match_type": match_type, "fuzzy_scores": fuzzy_scores}
+
+
+def _resolve_columns(df_cols: list) -> dict:
+    """Back-compat wrapper — same shape as before (internal_name → actual_col_name)."""
+    return _resolve_columns_verbose(df_cols)["resolved"]
+
+
+# Suggested fallbacks for missing fields — used in the inspect response so
+# users know exactly what will happen if they proceed without a given column.
+_MISSING_FIELD_FALLBACKS = {
+    "actual_charge":     "assumed 0 MW throughout — charging events won't be detected.",
+    "soc":               "not required for the audit; SOC constraints won't gate the optimiser.",
+    "curtailment_mw":    "assumed 0 MW — curtailment recovery attribution will be zero.",
+    "forecast_price":    "not required; forecast-utilisation score defaults to 0%.",
+    "operator_override": "assumed False — override-governance opportunity won't fire.",
+    "grid_demand":       "advisory only; the audit engine doesn't use it.",
+    "hour":              "auto-generated as 0..N-1 ordered index.",
+}
+
+
+def _detect_and_apply_units(df: pd.DataFrame) -> tuple:
+    """
+    Heuristic unit correction per Coverage Tasks 1.5.
+
+    Power kW → MW: max(actual_discharge) > 500 → treat as kW, divide by 1000.
+    Price $/kWh → $/MWh: max(price) < 1.0 → treat as $/kWh, multiply by 1000.
+
+    Returns (df_corrected, corrections_list). Corrections is a plain string list
+    to surface in the inspect response so the operator can confirm or override.
+    """
+    corrections = []
+
+    for col, label in (("actual_discharge", "actual_discharge"),
+                       ("actual_charge",    "actual_charge")):
+        if col in df.columns:
+            series = pd.to_numeric(df[col], errors="coerce")
+            m = series.abs().max()
+            if pd.notna(m) and m > 500:
+                df[col] = series / 1000.0
+                corrections.append(f"{label} looked like kW (max {m:.0f}); converted to MW.")
+
+    if "price" in df.columns:
+        series = pd.to_numeric(df["price"], errors="coerce")
+        m = series.abs().max()
+        # Only auto-scale up when max is clearly sub-dollar. > $1 could still be a
+        # fair $/MWh price in emerging markets, so don't touch it.
+        if pd.notna(m) and 0 < m < 1.0:
+            df["price"] = series * 1000.0
+            corrections.append(f"price looked like $/kWh (max {m:.3f}); converted to $/MWh.")
+
+    return df, corrections
+
+
+def _detect_excel_serial_timestamps(df: pd.DataFrame) -> tuple:
+    """
+    Excel-saved CSVs often serialise timestamps as float days-since-1899-12-30.
+    Detection: the timestamp column is entirely numeric and falls in the plausible
+    Excel-date range (40000..60000 covers 2009 through 2064). If so, replace with
+    an ordered index — the audit engine only needs ordering, not wall-clock time.
+    """
+    corrections = []
+    if "hour" not in df.columns:
+        return df, corrections
+    series = pd.to_numeric(df["hour"], errors="coerce")
+    if series.notna().all() and 40000 < float(series.min()) and float(series.max()) < 60000:
+        df["hour"] = list(range(len(df)))
+        corrections.append("hour column looked like Excel serial timestamps; replaced with a 0..N-1 ordered index.")
+    return df, corrections
 
 
 def _parse_file_bytes(contents: bytes, filename: str) -> pd.DataFrame:
@@ -1483,8 +1622,36 @@ def _parse_file_bytes(contents: bytes, filename: str) -> pd.DataFrame:
     fname = (filename or "").lower()
 
     # ── Excel ──────────────────────────────────────────────────────────────────
-    if fname.endswith((".xlsx", ".xls")):
+    if fname.endswith((".xlsx", ".xls", ".xlsm")):
         return pd.read_excel(BytesIO(contents))
+
+    # ── JSON ───────────────────────────────────────────────────────────────────
+    # Accepts:
+    #   1) Flat array of records:      [{"time": ..., "price": ...}, ...]
+    #   2) Wrapper with a data array:  {"data": [...]}
+    #      or {"timeseries": [...]}, {"time_series": [...]}, {"records": [...]},
+    #      {"rows": [...]}, {"items": [...]}
+    #   3) Column-oriented dict:       {"time": [...], "price": [...]}
+    if fname.endswith(".json"):
+        try:
+            payload = json.loads(contents.decode("utf-8", errors="replace"))
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON: {e.msg} at line {e.lineno}") from e
+        if isinstance(payload, list):
+            return pd.DataFrame(payload)
+        if isinstance(payload, dict):
+            for key in ("data", "timeseries", "time_series", "records", "rows", "items", "values"):
+                inner = payload.get(key)
+                if isinstance(inner, list):
+                    return pd.DataFrame(inner)
+            # Column-oriented — every value is a list of the same length
+            list_cols = {k: v for k, v in payload.items() if isinstance(v, list)}
+            if list_cols and len({len(v) for v in list_cols.values()}) == 1:
+                return pd.DataFrame(list_cols)
+        raise ValueError(
+            "JSON must be an array of records, a wrapper like {\"data\": [...]}, "
+            "or a column-oriented dict of same-length arrays."
+        )
 
     # Separator heuristic
     sep = "\t" if fname.endswith(".tsv") else ","
@@ -1574,37 +1741,28 @@ async def audit_from_file(
     lead: TrialLead = Depends(require_trial_token),
 ):
     """
-    Universal file ingestion — accepts CSV or Excel with ANY column naming convention.
+    Universal file ingestion. Accepts real-world exports from any SCADA / EMS /
+    historian with a two-tier column resolver, JSON support, unit auto-detection,
+    and Excel-serial timestamp recovery.
 
-    The engine auto-resolves column names via an alias map covering 80+ variants.
-
-    The only hard requirement is ONE column that looks like a price and ONE that
-    looks like a power output / discharge. Everything else is optional.
-
-    Accepted file formats: .csv  .xlsx  .xls
+    Accepted formats: .csv  .tsv  .txt  .xlsx  .xls  .xlsm  .json
     """
     try:
         contents = await file.read()
         df = _parse_file_bytes(contents, file.filename or "")
 
-        # Resolve column aliases
-        col_map = _resolve_columns(list(df.columns))
+        # Resolve column aliases (exact → fuzzy)
+        col_info = _resolve_columns_verbose(list(df.columns))
+        col_map = col_info["resolved"]
 
         # Check required fields resolved
-        missing_internal = []
-        for req in ("price", "actual_discharge"):
-            if req not in col_map:
-                missing_internal.append(req)
-
+        missing_internal = [r for r in ("price", "actual_discharge") if r not in col_map]
         if missing_internal:
-            # Build a helpful error listing what the file actually has
             return JSONResponse(status_code=400, content={
                 "detail": (
                     f"Could not find required column(s): {missing_internal}. "
                     f"Your file has columns: {list(df.columns)}. "
-                    f"Use /api/v1/audit/inspect to see the full mapping attempt. "
-                    f"Accepted price aliases include: spot_price, lmp, market_price, energy_price, omr_mwh … "
-                    f"Accepted discharge aliases include: generation, actual_power, output_mw, p_actual, gen_mw …"
+                    f"Use /api/v1/audit/inspect to see the full mapping attempt."
                 )
             })
 
@@ -1622,13 +1780,16 @@ async def audit_from_file(
             if col not in df.columns:
                 df[col] = default
 
-        # Fill hour index if missing or all-null
+        # Excel-serial timestamp recovery (before we blast hour with range())
+        df, ts_corrections = _detect_excel_serial_timestamps(df)
+
+        # Fill hour index if still missing / all-null
         if df['hour'].isnull().all():
             df['hour'] = range(len(df))
 
         df = df.fillna({'actual_discharge': 0.0, 'actual_charge': 0.0, 'curtailment_mw': 0.0})
 
-        # Coerce numeric columns — tolerates strings like "12.5 MW" by stripping non-numeric chars
+        # Coerce numeric columns — tolerates strings like "12.5 MW"
         for col in ('price', 'actual_discharge', 'actual_charge', 'curtailment_mw'):
             if col in df.columns:
                 df[col] = pd.to_numeric(
@@ -1636,14 +1797,16 @@ async def audit_from_file(
                     errors='coerce'
                 ).fillna(0.0)
 
-        # Asset specs from meta-columns (first row), fallback to defaults
+        # Unit auto-detection (kW→MW, $/kWh→$/MWh)
+        df, unit_corrections = _detect_and_apply_units(df)
+
+        # Asset specs from meta-columns (first row)
         asset_kwargs = {}
         for key in ASSET_META_ALIASES:
             if key in df.columns:
                 val = df[key].iloc[0]
                 if pd.notna(val):
                     asset_kwargs[key] = val
-
         asset = AssetSpecs(**asset_kwargs)
 
         time_series = df[[
@@ -1653,6 +1816,16 @@ async def audit_from_file(
 
         result = process_calculation(asset, time_series)
         background.add_task(_bump_audit_count, lead.token)
+        # Non-fatal ingestion notes — surfaced on the response for the frontend
+        # to display "we auto-corrected X, confirm before quoting the audit."
+        if unit_corrections or ts_corrections or col_info["fuzzy_scores"]:
+            result_dict = result.dict()
+            result_dict["ingestion_notes"] = {
+                "unit_corrections":       unit_corrections,
+                "timestamp_corrections":  ts_corrections,
+                "fuzzy_column_matches":   col_info["fuzzy_scores"],
+            }
+            return JSONResponse(content=result_dict)
         return result
 
     except Exception as e:
@@ -1662,21 +1835,61 @@ async def audit_from_file(
 @app.post("/api/v1/audit/inspect")
 async def inspect_file(file: UploadFile = File(...)):
     """
-    Debug endpoint — returns the column mapping the engine would apply to your file,
-    without running the full audit. Use this to diagnose upload failures.
+    Pre-audit preview per Coverage Tasks 1.6. Returns everything the engine
+    would apply if the operator hits "run audit," without spending CPU on MILP.
+
+    Response includes:
+      - file_columns, rows, sample_row
+      - resolved_mapping   internal → column, from exact + fuzzy tiers
+      - fuzzy_column_matches (with score) — anything not exact
+      - unresolved_columns — columns we couldn't map, worth manual review
+      - unit_corrections   — kW→MW, $/kWh→$/MWh auto-fixes
+      - timestamp_corrections — Excel-serial recovery
+      - field_warnings     — per missing optional field, the fallback we'd apply
+      - will_succeed       — the "safe to proceed" flag
     """
     try:
         contents = await file.read()
         df = _parse_file_bytes(contents, file.filename or "")
-        col_map = _resolve_columns(list(df.columns))
-        unresolved = [c for c in df.columns if c not in col_map.values()]
+        col_info = _resolve_columns_verbose(list(df.columns))
+        col_map = col_info["resolved"]
+
+        # Simulate the pre-audit normalisation to preview corrections
+        preview = df.copy()
+        rename_map = {v: k for k, v in col_map.items() if v in preview.columns}
+        preview = preview.rename(columns=rename_map)
+        for col in ('price', 'actual_discharge', 'actual_charge', 'curtailment_mw'):
+            if col in preview.columns:
+                preview[col] = pd.to_numeric(
+                    preview[col].astype(str).str.replace(r'[^\d.\-]', '', regex=True),
+                    errors='coerce'
+                ).fillna(0.0)
+        preview, ts_corrections = _detect_excel_serial_timestamps(preview) if "hour" in preview.columns else (preview, [])
+        preview, unit_corrections = _detect_and_apply_units(preview)
+
+        # Warnings for missing optional fields
+        expected_optional = ["actual_charge", "soc", "curtailment_mw", "forecast_price",
+                             "operator_override", "grid_demand", "hour"]
+        field_warnings = []
+        for f in expected_optional:
+            if f not in col_map:
+                field_warnings.append({
+                    "field":    f,
+                    "status":   "missing",
+                    "fallback": _MISSING_FIELD_FALLBACKS.get(f, "safe default applied."),
+                })
+
         return {
-            "file_columns": list(df.columns),
-            "rows": len(df),
-            "resolved_mapping": col_map,          # internal_name → your_col_name
-            "unresolved_columns": unresolved,      # columns we couldn't map
-            "will_succeed": "price" in col_map and "actual_discharge" in col_map,
-            "sample_row": df.iloc[0].to_dict() if len(df) > 0 else {},
+            "file_columns":         list(df.columns),
+            "rows":                 len(df),
+            "resolved_mapping":     col_map,
+            "fuzzy_column_matches": col_info["fuzzy_scores"],
+            "unresolved_columns":   [c for c in df.columns if c not in col_map.values()],
+            "unit_corrections":     unit_corrections,
+            "timestamp_corrections": ts_corrections,
+            "field_warnings":       field_warnings,
+            "will_succeed":         "price" in col_map and "actual_discharge" in col_map,
+            "sample_row":           df.iloc[0].to_dict() if len(df) > 0 else {},
         }
     except Exception as e:
         return JSONResponse(status_code=500, content={"detail": str(e)})
