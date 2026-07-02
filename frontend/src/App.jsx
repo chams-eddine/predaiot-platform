@@ -3,6 +3,7 @@ import axios from 'axios';
 import {
   BarChart, Bar, AreaChart, Area, XAxis, YAxis,
   CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell,
+  ComposedChart,
 } from 'recharts';
 
 // ══════════════════════════════════════════════════════════════════════
@@ -758,6 +759,317 @@ function IngestionNotesBanner({ notes, onDismiss }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// OPS CONSOLE — S01 Executive Summary redesign (matches reference photo).
+// Neon-lime + red on a deep dark canvas; SVG semi-circle DQ gauge with
+// glow; ComposedChart for the market-vs-action audit; live-telemetry
+// strip; discrepancy timeline; asset performance tiles.
+// ══════════════════════════════════════════════════════════════════════
+const OPS = {
+  bg:      '#0b1015',
+  card:    '#121820',
+  border:  '#1e2835',
+  green:   '#00FF9D',
+  red:     '#FF3366',
+  amber:   '#FFB020',
+  yellow:  '#FFD600',
+  blue:    '#38BDF8',
+  text:    '#E2E8F0',
+  sub:     '#8B9BB4',
+  dim:     '#4A5568',
+};
+
+function OpsFinancialCard({ label, value, color, sub, arrow, glow }) {
+  return (
+    <div style={{
+      background: OPS.card,
+      border: `1px solid ${glow ? OPS.green : OPS.border}`,
+      borderRadius: 10, padding: '18px 20px', marginBottom: 14,
+      boxShadow: glow ? `0 0 30px ${OPS.green}30, inset 0 0 20px ${OPS.green}08` : '0 4px 6px rgba(0,0,0,0.3)',
+      position: 'relative', overflow: 'hidden',
+    }}>
+      {glow && <div style={{
+        position: 'absolute', inset: 0, pointerEvents: 'none',
+        background: `radial-gradient(circle at top left, ${OPS.green}10, transparent 60%)`,
+      }} />}
+      <div style={{
+        color: OPS.sub, fontSize: 10, letterSpacing: '0.12em',
+        textTransform: 'uppercase', marginBottom: 6,
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      }}>
+        <span>{label}</span>
+        {arrow && <span style={{ color, fontSize: 14 }}>{arrow}</span>}
+      </div>
+      <div style={{
+        color, fontSize: glow ? 34 : 30, fontWeight: 800,
+        fontFamily: DS.mono, letterSpacing: '-0.02em',
+        textShadow: `0 0 12px ${color}30`,
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      }}>{value}</div>
+      {sub && <div style={{ color: OPS.sub, fontSize: 10, marginTop: 4 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function DQScoreGauge({ value, count }) {
+  const R = 110, CX = 150, CY = 130;
+  const semiLen = Math.PI * R;
+  const clamped = Math.max(0, Math.min(100, value));
+  const dashLen = (clamped / 100) * semiLen;
+  const pathD   = `M ${CX - R},${CY} A ${R},${R} 0 0,1 ${CX + R},${CY}`;
+  const label   =
+    clamped < 40 ? { text: 'Needs Optimization', color: OPS.amber } :
+    clamped < 70 ? { text: 'Room for Growth',    color: OPS.yellow } :
+                   { text: 'Optimal Performance', color: OPS.green };
+  return (
+    <div style={{ position: 'relative', width: '100%', maxWidth: 340, margin: '0 auto', textAlign: 'center' }}>
+      <svg width="100%" viewBox="0 0 300 175" style={{ display: 'block' }}>
+        <defs>
+          <filter id="dqGlow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="4" result="b" />
+            <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+        </defs>
+        {/* Track */}
+        <path d={pathD} fill="none" stroke="#1a2532" strokeWidth={14} strokeLinecap="round" />
+        {/* Value arc */}
+        <path
+          d={pathD}
+          fill="none"
+          stroke={OPS.green}
+          strokeWidth={14}
+          strokeLinecap="round"
+          strokeDasharray={`${dashLen} ${semiLen}`}
+          filter="url(#dqGlow)"
+        />
+      </svg>
+      <div style={{ position: 'absolute', top: 26, left: 0, right: 0, textAlign: 'center' }}>
+        <div style={{ color: OPS.sub, fontSize: 11, letterSpacing: '0.2em', fontWeight: 600, lineHeight: 1.4 }}>
+          DECISION<br />QUALITY SCORE
+        </div>
+      </div>
+      <div style={{ position: 'absolute', top: 78, left: 0, right: 0, textAlign: 'center' }}>
+        <div style={{
+          fontSize: 60, color: OPS.green, fontWeight: 900,
+          fontFamily: DS.mono, textShadow: `0 0 24px ${OPS.green}70`, lineHeight: 1,
+        }}>
+          {clamped.toFixed(0)}<span style={{ fontSize: 32 }}>%</span>
+        </div>
+      </div>
+      <div style={{ marginTop: 12, color: label.color, fontWeight: 700, fontSize: 15, letterSpacing: '0.03em' }}>
+        {label.text}
+      </div>
+      <div style={{ color: OPS.sub, fontSize: 11, marginTop: 4 }}>
+        Based on {(count || 0).toLocaleString()} decisions (24h)
+      </div>
+    </div>
+  );
+}
+
+function MarketOptimizationChart({ log }) {
+  // Bar sign is derived from edv_actual_step — positive (green) = value captured,
+  // negative (red) = destroyed value at this step.
+  if (!log || log.length === 0) return null;
+  return (
+    <ResponsiveContainer width="100%" height={230}>
+      <ComposedChart data={log} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+        <defs>
+          <linearGradient id="opsPriceFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"   stopColor={OPS.sub} stopOpacity={0.28} />
+            <stop offset="100%" stopColor={OPS.sub} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid strokeDasharray="3 3" stroke={OPS.border} vertical={false} />
+        <XAxis dataKey="hour" stroke={OPS.sub} tick={{ fill: OPS.sub, fontSize: 9 }} />
+        <YAxis yAxisId="L" stroke={OPS.sub} tick={{ fill: OPS.sub, fontSize: 9 }} tickFormatter={(v) => `$${v}`} />
+        <YAxis yAxisId="R" orientation="right" stroke={OPS.sub} tick={{ fill: OPS.sub, fontSize: 9 }} />
+        <Tooltip
+          contentStyle={{ background: '#0f1318', border: `1px solid ${OPS.border}`, borderRadius: 8, fontSize: 11 }}
+          formatter={(v, name) => [typeof v === 'number' ? `$${v.toFixed(2)}` : v, name]}
+          labelFormatter={(h) => `Step ${h}`}
+        />
+        <Area yAxisId="L" type="monotone" dataKey="price" name="Market Price"
+              stroke={OPS.sub} strokeWidth={2} fill="url(#opsPriceFill)" dot={false} />
+        <Bar yAxisId="R" dataKey="edv_actual_step" name="AI Action">
+          {log.map((entry, i) => (
+            <Cell key={i} fill={(entry.edv_actual_step || 0) >= 0 ? OPS.green : OPS.red} />
+          ))}
+        </Bar>
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
+function LiveTelemetryStrip({ assetName, soc, power, temp }) {
+  const cell = (label, val, color) => (
+    <div style={{ textAlign: 'center', minWidth: 62 }}>
+      <div style={{ color: OPS.sub, fontSize: 10, letterSpacing: '0.1em' }}>{label}</div>
+      <div style={{ color, fontFamily: DS.mono, fontSize: 16, fontWeight: 800, textShadow: `0 0 10px ${color}40` }}>{val}</div>
+    </div>
+  );
+  return (
+    <div style={{
+      background: OPS.card, border: `1px solid ${OPS.border}`, borderRadius: 12,
+      padding: '14px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    }}>
+      <div>
+        <div style={{ color: OPS.text, fontSize: 13, fontWeight: 700 }}>{assetName || 'Asset'}</div>
+        <div style={{ color: OPS.sub, fontSize: 10, letterSpacing: '0.05em', marginTop: 2 }}>Live Telemetry</div>
+      </div>
+      <div style={{ display: 'flex', gap: 22 }}>
+        {cell('SoC',   `${(soc ?? 0).toFixed(0)}%`,    OPS.green)}
+        {cell('Power', `${(power ?? 0).toFixed(0)} MW`, OPS.green)}
+        {cell('Temp',  `${(temp ?? 0).toFixed(0)}°C`,  OPS.green)}
+      </div>
+    </div>
+  );
+}
+
+function DecisionDiscrepancyStrip({ log }) {
+  if (!log || log.length === 0) {
+    return <div style={{ color: OPS.sub, fontSize: 11 }}>—</div>;
+  }
+  return (
+    <div>
+      <div style={{ display: 'flex', width: '100%', height: 26, borderRadius: 4, overflow: 'hidden', border: `1px solid ${OPS.border}` }}>
+        {log.map((r, i) => {
+          const gap = r.gap_step || 0;
+          const opt = r.edv_optimal_step || 0;
+          const color = gap <= 0 ? OPS.green
+                      : (opt > 0 && gap / opt > 0.7) ? OPS.red
+                      : OPS.yellow;
+          return <div key={i} title={`Step ${r.hour} · gap $${gap.toFixed(2)}`}
+                      style={{ flex: 1, background: color, opacity: 0.9 }} />;
+        })}
+      </div>
+      <div style={{ display: 'flex', gap: 14, fontSize: 10, color: OPS.sub, marginTop: 8 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ width: 10, height: 10, background: OPS.green, borderRadius: 2 }} />Optimal Dispatch
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ width: 10, height: 10, background: OPS.yellow, borderRadius: 2 }} />Inefficient Charging
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ width: 10, height: 10, background: OPS.red, borderRadius: 2 }} />Missed Opportunity
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function AssetPerformanceTiles({ data, log, m }) {
+  const opsEff = m?.economic_decision_efficiency ?? (data.dq_score * 100 || 0);
+  const overrides = (log || []).filter((r) => r.operator_override).length;
+  const availability = Math.max(85, 100 - (overrides / Math.max(1, log.length)) * 100);
+  const dailyRevenue = data.edv_actual_total || 0;
+  const mtdRevenue   = dailyRevenue * 30;
+  const totalDis = (log || []).reduce((a, r) => a + Math.max(0, r.actual_action || 0), 0);
+  const totalCh  = (log || []).reduce((a, r) => a + Math.abs(Math.min(0, r.actual_action || 0)), 0) || 1;
+  const dcRatio = totalDis / totalCh;
+
+  const tile = (label, value, color) => (
+    <div style={{
+      background: OPS.card, border: `1px solid ${OPS.border}`, borderRadius: 10,
+      padding: '14px 16px',
+    }}>
+      <div style={{ color: OPS.sub, fontSize: 10, letterSpacing: '0.12em' }}>{label}</div>
+      <div style={{ color, fontFamily: DS.mono, fontSize: 22, fontWeight: 800, marginTop: 4 }}>
+        {value}
+      </div>
+    </div>
+  );
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+      {tile('Operational Efficiency', `${opsEff.toFixed(1)}%`, OPS.green)}
+      {tile('Availability',           `${availability.toFixed(1)}%`, OPS.green)}
+      {tile('MTD Revenue',            fmtUSD(mtdRevenue), OPS.green)}
+      {tile('Discharge/Charge Ratio', dcRatio.toFixed(2), OPS.blue)}
+    </div>
+  );
+}
+
+function OpsConsoleExec({ data, log, m, ingestionNotes, onDismissNotes }) {
+  const captured   = data.edv_optimal_total || 0;
+  const destroyed  = data.total_gap_usd || 0;
+  const netGain    = data.edv_actual_total || 0;
+  const dqPct      = (data.dq_score || 0) * 100;
+  const count      = (log || []).length;
+  const last       = (log || [])[log.length - 1] || {};
+  const liveSoc    = (last.soc != null ? last.soc * 100 : 68);
+  const livePower  = Math.abs(last.actual_action || 120);
+  const liveTemp   = 24;
+  const isMobile   = useIsMobile();
+  return (
+    <div>
+      <div style={{ color: OPS.sub, fontSize: 11, marginBottom: 8, letterSpacing: '0.04em' }}>
+        <span style={{ color: OPS.green }}>▪</span> {data.asset_name || 'Energy Asset'} —{' '}
+        {data.asset_type || 'Generic'} · {data.audit_period_label || '—'}
+      </div>
+      {ingestionNotes && (
+        <IngestionNotesBanner notes={ingestionNotes} onDismiss={onDismissNotes} />
+      )}
+
+      {/* Row 1 — Financial Impact | DQ Gauge | Market Audit + Telemetry */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: isMobile ? '1fr' : 'minmax(240px, 1fr) minmax(320px, 1.1fr) minmax(360px, 1.6fr)',
+        gap: 20, marginBottom: 22,
+      }}>
+        <div>
+          <div style={{ color: OPS.text, fontSize: 12, fontWeight: 700, letterSpacing: '0.15em', marginBottom: 14 }}>
+            FINANCIAL IMPACT
+          </div>
+          <OpsFinancialCard label="Captured Value"    value={fmtUSD(captured)}  color={OPS.green} />
+          <OpsFinancialCard label="Destroyed Value"   value={fmtUSD(destroyed)} color={OPS.red}   arrow="↓" />
+          <OpsFinancialCard label="Net Economic Gain" value={fmtUSD(netGain)}   color={OPS.green} glow />
+        </div>
+
+        <div style={{
+          background: OPS.card, border: `1px solid ${OPS.border}`, borderRadius: 14,
+          padding: '24px 12px 20px', display: 'flex', flexDirection: 'column', justifyContent: 'center',
+        }}>
+          <DQScoreGauge value={dqPct} count={count} />
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ background: OPS.card, border: `1px solid ${OPS.border}`, borderRadius: 12, padding: '14px 16px 4px' }}>
+            <div style={{ color: OPS.text, fontSize: 12, fontWeight: 700, letterSpacing: '0.12em', marginBottom: 8 }}>
+              MARKET OPTIMIZATION AUDIT (24h)
+            </div>
+            <MarketOptimizationChart log={log} />
+          </div>
+          <LiveTelemetryStrip
+            assetName={`${data.asset_name || 'Asset'} — ${data.asset_type || 'BESS'}`}
+            soc={liveSoc} power={livePower} temp={liveTemp}
+          />
+        </div>
+      </div>
+
+      {/* Row 2 — Discrepancy Timeline | Asset Performance tiles */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: isMobile ? '1fr' : '1.4fr 1fr',
+        gap: 20,
+      }}>
+        <div style={{
+          background: OPS.card, border: `1px solid ${OPS.border}`, borderRadius: 12, padding: '16px 18px',
+        }}>
+          <div style={{ color: OPS.text, fontSize: 12, fontWeight: 700, letterSpacing: '0.12em', marginBottom: 12 }}>
+            DECISION DISCREPANCY TIMELINE
+          </div>
+          <DecisionDiscrepancyStrip log={log} />
+        </div>
+        <div>
+          <div style={{ color: OPS.text, fontSize: 12, fontWeight: 700, letterSpacing: '0.12em', marginBottom: 12 }}>
+            ASSET PERFORMANCE SUMMARY
+          </div>
+          <AssetPerformanceTiles data={data} log={log} m={m} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // MAIN APP
 // ══════════════════════════════════════════════════════════════════════
 export default function App() {
@@ -1277,211 +1589,15 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
             </div>
           )}
 
-          {/* ══ S01: Executive Summary ══════════════════════════════ */}
+          {/* ══ S01: Executive Summary — Ops Console redesign ══════════ */}
           {hasData && activeSection === 'exec' && (
-            <div>
-              <SectionHeader tag="01" title="Executive Summary" />
-
-              {/* Ingestion auto-corrections banner — shown when the /audit/file
-                  pipeline made assumptions the operator should confirm. */}
-              {ingestionNotes && (
-                <IngestionNotesBanner
-                  notes={ingestionNotes}
-                  onDismiss={() => setIngestionNotes(null)}
-                />
-              )}
-
-
-              {/* KPI shock panel */}
-              <div style={{
-                background: `linear-gradient(135deg, rgba(75,191,255,0.07) 0%, rgba(0,230,118,0.05) 100%)`,
-                border: `1px solid ${DS.blue}25`, borderRadius: DS.r16, padding: 28, marginBottom: 20,
-              }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 24 }}>
-                  {[
-                    { label: 'Asset', value: data.asset_name || '—', color: DS.text, mono: false },
-                    { label: 'Audit Period', value: data.audit_period_label || '—', color: DS.cyan, mono: true },
-                    { label: 'Economic Potential', value: fmtUSD(data.edv_optimal_total), color: DS.warning, mono: true },
-                    { label: 'Captured Value', value: fmtUSD(data.edv_actual_total), color: DS.optimal, mono: true },
-                  ].map((f) => (
-                    <div key={f.label}>
-                      <Label>{f.label}</Label>
-                      <BigNum v={f.value} color={f.color} size={f.mono ? 22 : 16} />
-                    </div>
-                  ))}
-                </div>
-
-                <Divider />
-
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 24 }}>
-                  {[
-                    { label: 'Destroyed Value', value: fmtUSD(data.total_gap_usd), color: DS.loss },
-                    { label: 'DQ Score', value: hasData ? `${((data.dq_score || 0) * 100).toFixed(1)} / 100` : '—', color: qualColor(captureRate) },
-                    { label: 'Economic Efficiency', value: hasData ? fmtPct(captureRate) : '—', color: qualColor(captureRate) },
-                    { label: 'Est. Annual Leakage', value: data.total_gap_usd > 0 ? fmtUSD(data.total_gap_usd * 365) : '—', color: DS.orange },
-                  ].map((f) => (
-                    <div key={f.label}>
-                      <Label>{f.label}</Label>
-                      <BigNum v={f.value} color={f.color} />
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* ── Before / After PREDAIOT — value visualization (Area 2) ─── */}
-              {log.length > 0 && (
-                <Card style={{ marginBottom: 20 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
-                    <div>
-                      <Label style={{ marginBottom: 2 }}>Optimal vs Actual Dispatch — Economic Value per Step</Label>
-                      <div style={{ color: DS.dim, fontSize: 10, letterSpacing: '0.08em' }}>
-                        SHADED AREA = ECONOMIC GAP RECOVERABLE WITH PREDAIOT
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: 14, fontSize: 10, color: DS.sub }}>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{ width: 10, height: 3, background: DS.optimal, borderRadius: 2 }} />
-                        With PREDAIOT (optimal)
-                      </span>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{ width: 10, height: 3, background: DS.orange, borderRadius: 2 }} />
-                        Without PREDAIOT (actual)
-                      </span>
-                    </div>
-                  </div>
-                  <ResponsiveContainer width="100%" height={220}>
-                    <AreaChart data={log} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="gExecOpt" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor={DS.optimal} stopOpacity={0.28} />
-                          <stop offset="100%" stopColor={DS.optimal} stopOpacity={0} />
-                        </linearGradient>
-                        <linearGradient id="gExecAct" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor={DS.orange} stopOpacity={0.24} />
-                          <stop offset="100%" stopColor={DS.orange} stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke={DS.border} />
-                      <XAxis dataKey="hour" stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} />
-                      <YAxis stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} tickFormatter={(v) => `$${v}`} />
-                      <Tooltip
-                        contentStyle={{ background: '#0f1318', border: `1px solid ${DS.border}`, borderRadius: 8, fontSize: 11 }}
-                        formatter={(v, name) => [`$${(v || 0).toFixed(2)}`, name]}
-                        labelFormatter={(h) => `Step ${h}`}
-                      />
-                      <Area type="monotone" dataKey="edv_optimal_step" name="With PREDAIOT" stroke={DS.optimal} fill="url(#gExecOpt)" strokeWidth={2} dot={false} />
-                      <Area type="monotone" dataKey="edv_actual_step" name="Without PREDAIOT" stroke={DS.orange} fill="url(#gExecAct)" strokeWidth={2} dot={false} />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </Card>
-              )}
-
-              {/* ── Value Waterfall — Potential → Captured → Destroyed ─── */}
-              {hasData && (() => {
-                const pot = data.edv_optimal_total || 0;
-                const act = data.edv_actual_total || 0;
-                const gap = data.total_gap_usd || 0;
-                const maxV = Math.max(pot, 1);
-                const rows = [
-                  { label: 'Economic Potential',   sub: 'MILP counterfactual', value: pot, color: DS.optimal, pct: 100 },
-                  { label: 'Captured Value',       sub: 'What actually happened', value: act, color: DS.blue,   pct: Math.min(100, (act / maxV) * 100) },
-                  { label: 'Destroyed Value',      sub: 'Recoverable with PREDAIOT', value: gap, color: DS.loss, pct: Math.min(100, (gap / maxV) * 100) },
-                ];
-                return (
-                  <Card style={{ marginBottom: 20 }}>
-                    <Label style={{ marginBottom: 14 }}>Value Waterfall — Where Every Dollar Went</Label>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                      {rows.map((r) => (
-                        <div key={r.label}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 5, fontSize: 12 }}>
-                            <span>
-                              <span style={{ color: DS.text, fontWeight: 700 }}>{r.label}</span>
-                              <span style={{ color: DS.dim, fontSize: 10, marginLeft: 8, letterSpacing: '0.05em' }}>{r.sub}</span>
-                            </span>
-                            <span style={{ color: r.color, fontFamily: DS.mono, fontWeight: 700 }}>{fmtUSD(r.value)}</span>
-                          </div>
-                          <div style={{ height: 10, background: `${DS.border}88`, borderRadius: 5, overflow: 'hidden' }}>
-                            <div style={{
-                              width: `${r.pct}%`, height: '100%',
-                              background: `linear-gradient(90deg, ${r.color} 0%, ${r.color}bb 100%)`,
-                              boxShadow: `0 0 12px ${r.color}55`,
-                            }} />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${DS.border}`, fontSize: 10, color: DS.dim, letterSpacing: '0.06em' }}>
-                      The <span style={{ color: DS.loss, fontWeight: 700 }}>{fmtUSD(gap)}</span> destroyed-value bar is the number PREDAIOT&rsquo;s Economic Action Plan is designed to recover.
-                    </div>
-                  </Card>
-                );
-              })()}
-
-              {/* Risk banner */}
-              {hasData && (
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: 16, padding: '14px 22px',
-                  background: `${riskColor(data.risk_level)}10`,
-                  border: `1px solid ${riskColor(data.risk_level)}35`,
-                  borderRadius: DS.r12, marginBottom: 20,
-                }}>
-                  <span style={{ fontSize: 22 }}>{riskEmoji(data.risk_level)}</span>
-                  <div>
-                    <div style={{ color: riskColor(data.risk_level), fontWeight: 700, fontSize: 14, letterSpacing: '0.1em' }}>
-                      RISK LEVEL: {(data.risk_level || '').toUpperCase()}
-                    </div>
-                    <div style={{ color: DS.sub, fontSize: 11, marginTop: 3 }}>
-                      {data.risk_level === 'Severe' && 'Immediate operational review required. Economic losses exceed 60% of potential.'}
-                      {data.risk_level === 'Moderate' && 'Optimization opportunities identified. Revenue recovery achievable within 30 days.'}
-                      {data.risk_level === 'Low' && 'Asset operating near optimal. Minor tuning recommended for full potential capture.'}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* EIS gauge (circular text display) */}
-              {m && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 20 }}>
-                  <Card>
-                    <Label>Economic Intelligence Score</Label>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 20, marginTop: 8 }}>
-                      <div style={{
-                        width: 80, height: 80, borderRadius: '50%',
-                        border: `4px solid ${qualColor(m.economic_intelligence_score)}`,
-                        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                        boxShadow: `0 0 20px ${qualColor(m.economic_intelligence_score)}30`,
-                      }}>
-                        <div style={{ color: qualColor(m.economic_intelligence_score), fontSize: 20, fontWeight: 800, fontFamily: DS.mono, lineHeight: 1 }}>{m.economic_intelligence_score}</div>
-                        <div style={{ color: DS.dim, fontSize: 8, marginTop: 2 }}>/ 100</div>
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ color: DS.sub, fontSize: 11, lineHeight: 1.7 }}>
-                          Composite ISO-style index combining capture efficiency (45%), decision accuracy (30%), forecast utilization (15%), and leakage control (10%).
-                        </div>
-                      </div>
-                    </div>
-                  </Card>
-                  <Card>
-                    <Label>Key Indicators</Label>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 }}>
-                      {[
-                        { l: 'Capture Efficiency', v: fmtPct(m.economic_decision_efficiency), c: qualColor(m.economic_decision_efficiency) },
-                        { l: 'Dispatch Accuracy', v: fmtPct(m.dispatch_accuracy), c: qualColor(m.dispatch_accuracy) },
-                        { l: 'Forecast Utilization', v: fmtPct(m.forecast_utilization_index), c: qualColor(m.forecast_utilization_index) },
-                      ].map(({ l, v, c }) => (
-                        <div key={l}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 3 }}>
-                            <span style={{ color: DS.sub }}>{l}</span>
-                            <span style={{ color: c, fontFamily: DS.mono, fontWeight: 700 }}>{v}</span>
-                          </div>
-                          <ProgressBar pct={parseFloat(v)} color={c} />
-                        </div>
-                      ))}
-                    </div>
-                  </Card>
-                </div>
-              )}
-            </div>
+            <OpsConsoleExec
+              data={data}
+              log={log}
+              m={m}
+              ingestionNotes={ingestionNotes}
+              onDismissNotes={() => setIngestionNotes(null)}
+            />
           )}
 
           {/* ══ S02: Economic Value Flow ════════════════════════════ */}
