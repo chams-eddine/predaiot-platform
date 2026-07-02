@@ -19,6 +19,14 @@ from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime, 
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime, timedelta
 
+# ISO 27001 security layer — encryption + tamper-evident hash chain.
+# See backend/security.py for implementation. Import is at the top so
+# NameError surfaces immediately if the file is missing, but the
+# DataProtector itself is constructed lazily (see _get_protector below).
+from security import (
+    DataProtector, EnvSecretResolver, hash_chain_next, verify_hash_chain,
+)
+
 # ==========================================
 # 1. Database Setup  (CORE LOGIC UNCHANGED — connection made fault-tolerant)
 # ==========================================
@@ -62,16 +70,97 @@ class TrialLead(Base):
     endpoints and ties anonymous demo runs to a captured lead (email + asset).
     Real auth (Clerk + per-user workspaces) is deferred — this is the minimum
     needed to turn anonymous visitors into CRM leads.
+
+    email_ciphertext is the ISO-27001-track encryption-at-rest column. New
+    rows write there; the plaintext `email` column stays around for legacy
+    rows and for the index (encrypted values are index-useless anyway).
+    A helper `get_email()` reads the ciphertext-first, falls back to plain.
     """
     __tablename__ = "trial_leads"
     id = Column(Integer, primary_key=True, index=True)
     token = Column(String, unique=True, index=True, nullable=False)
-    email = Column(String, index=True, nullable=False)
+    email = Column(String, index=True, nullable=False)                 # legacy + fallback
+    email_ciphertext = Column(String, nullable=True)                   # Fernet-encrypted
     asset_name = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     expires_at = Column(DateTime, nullable=False)
     audit_run_count = Column(Integer, default=0, nullable=False)
     crm_synced = Column(Boolean, default=False, nullable=False)
+
+
+class SecurityAuditLog(Base):
+    """
+    Tamper-evident audit trail (ISO 27001 A.12.4). Hash-chained: each row
+    stores previous_hash (linking to the row before) and current_hash (a
+    SHA-256 of the row's canonical content + previous_hash). Mutating any
+    field after insertion breaks the chain and shows up in the verify
+    endpoint. Foundation for the "who did what and when" question during
+    ISO audits — real utility procurement will ask for this.
+
+    Volume: only material security events (trial start / audit run / PDF
+    export / admin action). The high-volume api_access_log stays separate
+    and unhashed — hash-chaining every request would add latency you can't
+    justify at pre-seed scale.
+    """
+    __tablename__ = "security_audit_log"
+    id            = Column(Integer, primary_key=True, index=True)
+    uid           = Column(String, unique=True, index=True, nullable=False)   # UUID-shaped
+    timestamp     = Column(DateTime, default=datetime.utcnow, index=True, nullable=False)
+    actor_kind    = Column(String, nullable=False)     # "trial" | "user" | "system"
+    actor_id      = Column(String, index=True, nullable=True)
+    action        = Column(String, index=True, nullable=False)  # e.g. "TRIAL_START", "AUDIT_RUN"
+    asset_id      = Column(String, index=True, nullable=True)
+    client_ip     = Column(String, nullable=True)
+    payload_summary = Column(String, nullable=True)    # short human-readable summary; no PII
+    previous_hash = Column(String, nullable=False)
+    current_hash  = Column(String, unique=True, nullable=False)
+
+    def canonical(self) -> str:
+        """
+        Stable string over all fields that must be tamper-evident. Uses the
+        row's uid + timestamp so a re-ordered chain breaks verification too.
+        Kept short — SHA-256 output is fixed 64 chars regardless.
+        """
+        ts = self.timestamp.isoformat() if self.timestamp else ""
+        return (
+            f"{self.uid}|{ts}|{self.actor_kind}|{self.actor_id or ''}|"
+            f"{self.action}|{self.asset_id or ''}|{self.client_ip or ''}|"
+            f"{self.payload_summary or ''}"
+        )
+
+
+class User(Base):
+    """
+    RBAC scaffolding — the shape a real Clerk / Auth0 / roll-your-own auth
+    layer will populate. Not enforced anywhere in the request path yet;
+    trial tokens continue to gate all endpoints. This table exists so the
+    seed-admin flow works and require_role() has something to check.
+    """
+    __tablename__ = "users"
+    id            = Column(Integer, primary_key=True, index=True)
+    email         = Column(String, unique=True, index=True, nullable=False)
+    role          = Column(String, nullable=False, default="viewer")   # viewer | analyst | admin | api_client
+    active        = Column(Boolean, nullable=False, default=True)
+    created_at    = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # Session token — replace with proper JWT once the auth-design call happens.
+    session_token = Column(String, unique=True, index=True, nullable=True)
+
+
+class Permission(Base):
+    """
+    Casbin-compatible policy row. Standard RBAC quadruple:
+      p, sub (role), obj (resource path), act (verb)
+    Loaded into memory at startup; small enough to fit for pre-seed scale.
+    Real Casbin migration is a direct import — this table matches its schema.
+    """
+    __tablename__ = "permissions"
+    id       = Column(Integer, primary_key=True)
+    role     = Column(String, nullable=False, index=True)
+    resource = Column(String, nullable=False)     # e.g. "/api/v1/security/audit/verify"
+    action   = Column(String, nullable=False)     # e.g. "read" | "write" | "admin"
+
+
+VALID_ROLES = ("viewer", "analyst", "admin", "api_client")
 
 
 class APIAccessLog(Base):
@@ -335,13 +424,23 @@ def _push_lead_to_airtable(token: str) -> bool:
 
 
 def _create_trial_lead(email: str, asset_name: Optional[str]) -> TrialLead:
-    """Persist a new trial token (does not push to Airtable — caller decides)."""
+    """
+    Persist a new trial token (does not push to Airtable — caller decides).
+    Email is stored encrypted-at-rest when DataProtector is available; the
+    plaintext `email` column stays populated for legacy Airtable sync and
+    for query-by-email lookups (which encrypted values can't satisfy).
+    """
     db = SessionLocal()
     try:
         now = datetime.utcnow()
+        normalised_email = email.strip().lower()
+        protector = _get_protector()
+        email_ciphertext = protector.encrypt(normalised_email) if protector else None
+
         lead = TrialLead(
             token=secrets.token_urlsafe(24),
-            email=email.strip().lower(),
+            email=normalised_email,
+            email_ciphertext=email_ciphertext,
             asset_name=(asset_name or "").strip() or None,
             created_at=now,
             expires_at=now + timedelta(days=TRIAL_DURATION_DAYS),
@@ -354,6 +453,22 @@ def _create_trial_lead(email: str, asset_name: Optional[str]) -> TrialLead:
         return lead
     finally:
         db.close()
+
+
+def trial_email(lead: TrialLead) -> Optional[str]:
+    """
+    Read the trial lead's email — encrypted-column-first, plaintext-fallback.
+    Migration path: any row without email_ciphertext is a legacy row from
+    before encryption was enabled; we keep serving it from plaintext so we
+    don't lose leads. New rows go through the encrypted path.
+    """
+    if getattr(lead, "email_ciphertext", None):
+        protector = _get_protector()
+        if protector is not None:
+            decrypted = protector.decrypt(lead.email_ciphertext)
+            if decrypted:
+                return decrypted
+    return lead.email  # fallback for legacy rows or when protector unavailable
 
 
 def require_trial_token(
@@ -415,6 +530,122 @@ def _bump_audit_count(token: str) -> None:
             db.commit()
     finally:
         db.close()
+
+
+# ==========================================
+# 2.6  Security layer — DataProtector + hash-chained security events + RBAC
+# ==========================================
+# Lazy singleton. Constructing DataProtector requires PREDAIOT_MASTER_KEY;
+# if it's unset the whole app would crash at import. Deferring construction
+# until first-use lets uvicorn boot, Render see the port, and the operator
+# get a clear runtime error later — never a silent deploy failure.
+_protector_instance = None
+_protector_error: Optional[str] = None
+
+
+def _get_protector() -> Optional[DataProtector]:
+    """
+    Lazily construct + cache the DataProtector. Returns None if the master
+    key isn't set — callers must handle that case (fall back to plaintext
+    with a warning, don't crash the request).
+    """
+    global _protector_instance, _protector_error
+    if _protector_instance is not None:
+        return _protector_instance
+    if _protector_error is not None:
+        return None
+    try:
+        _protector_instance = DataProtector(resolver=EnvSecretResolver())
+        return _protector_instance
+    except Exception as e:
+        _protector_error = str(e)
+        print(f"[security] DataProtector unavailable: {e}")
+        return None
+
+
+def _record_security_event(
+    action: str,
+    actor_kind: str,
+    actor_id: Optional[str],
+    asset_id: Optional[str] = None,
+    client_ip: Optional[str] = None,
+    payload_summary: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Append a tamper-evident row to security_audit_log. Fetches the previous
+    row's current_hash under a serialisable-ish transaction (SELECT ... then
+    INSERT) — for pre-seed scale this is fine; if two writes collide the
+    slower one gets a UNIQUE-violation and can retry.
+
+    Returns the new row's current_hash (which becomes the next row's
+    previous_hash). Returns None on unrecoverable DB error — a failed audit-
+    log write must NEVER block the request.
+
+    payload_summary is short human-readable text — deliberately not the raw
+    payload. No PII, no request/response bodies. That belongs in a separate
+    encrypted-payload store (deferred).
+    """
+    db = SessionLocal()
+    try:
+        last = (
+            db.query(SecurityAuditLog)
+              .order_by(SecurityAuditLog.id.desc())
+              .first()
+        )
+        prev_hash = last.current_hash if last else "GENESIS"
+
+        row = SecurityAuditLog(
+            uid=str(uuid.uuid4()),
+            timestamp=datetime.utcnow(),
+            actor_kind=actor_kind,
+            actor_id=actor_id,
+            action=action,
+            asset_id=asset_id,
+            client_ip=client_ip,
+            payload_summary=(payload_summary or "")[:240],  # bounded, never leak more
+            previous_hash=prev_hash,
+            current_hash="",  # placeholder — computed next
+        )
+        row.current_hash = hash_chain_next(prev_hash, row.canonical())
+        db.add(row)
+        db.commit()
+        return row.current_hash
+    except Exception as e:
+        print(f"[security-audit] non-fatal: {type(e).__name__}: {e}")
+        return None
+    finally:
+        db.close()
+
+
+def require_role(*allowed_roles: str):
+    """
+    FastAPI dependency factory. Enforces RBAC for logged-in User rows.
+
+    NOTE: this dep is currently additive scaffolding. Existing endpoints use
+    require_trial_token as before; only endpoints that explicitly wire this
+    dep (like /api/v1/security/audit/verify) require a User. That way the
+    trial gate keeps working while we build out real auth.
+    """
+    def _dep(x_session_token: Optional[str] = Header(default=None, alias="X-Session-Token")) -> User:
+        if not x_session_token:
+            raise HTTPException(status_code=401, detail={"code": "auth_required",
+                                                         "message": "Missing X-Session-Token header."})
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.session_token == x_session_token,
+                                         User.active == True).first()  # noqa: E712
+            if user is None:
+                raise HTTPException(status_code=401, detail={"code": "auth_invalid",
+                                                             "message": "Session unknown or inactive."})
+            if user.role not in allowed_roles:
+                raise HTTPException(status_code=403, detail={"code": "forbidden",
+                                                             "message": f"Role '{user.role}' cannot access this endpoint."})
+            # Detach so caller can use fields without DB session lifetime hassles
+            db.expunge(user)
+            return user
+        finally:
+            db.close()
+    return _dep
 
 
 # ==========================================
@@ -1415,6 +1646,15 @@ async def start_trial(request: Request, req: TrialStartRequest, background: Back
         raise HTTPException(status_code=400, detail="Please provide a valid work email.")
     lead = _create_trial_lead(email, req.asset_name)
     background.add_task(_push_lead_to_airtable, lead.token)
+    # Tamper-evident event — email domain only, never the full address
+    domain = email.split("@", 1)[1] if "@" in email else "?"
+    _record_security_event(
+        action="TRIAL_START",
+        actor_kind="trial",
+        actor_id=lead.token[:16],
+        client_ip=_client_ip(request),
+        payload_summary=f"domain={domain}",
+    )
     return TrialStartResponse(
         token=lead.token,
         expires_at=lead.expires_at.isoformat() + "Z",
@@ -1437,7 +1677,7 @@ async def trial_status(lead: TrialLead = Depends(require_trial_token)):
 @app.post("/api/v1/audit", response_model=AuditResponse)
 @limiter.limit("10/minute")
 async def calculate_gap(
-    request: Request,   # noqa: ARG001 — used by rate limiter
+    request: Request,   # used by rate limiter + client-ip lookup
     audit_req: AuditRequest,
     background: BackgroundTasks,
     lead: TrialLead = Depends(require_trial_token),
@@ -1445,6 +1685,15 @@ async def calculate_gap(
     result = process_calculation(audit_req.asset, [ts.dict() for ts in audit_req.time_series])
     _latest_by_token[lead.token] = result.dict()   # per-tenant cache — no cross-leak
     background.add_task(_bump_audit_count, lead.token)
+    background.add_task(
+        _record_security_event,
+        action="AUDIT_RUN",
+        actor_kind="trial",
+        actor_id=lead.token[:16],
+        asset_id=(audit_req.asset.asset_id or audit_req.asset.asset_name),
+        client_ip=_client_ip(request),
+        payload_summary=f"asset_type={audit_req.asset.asset_type} steps={len(audit_req.time_series)}",
+    )
     return result
 
 # ==========================================
@@ -2552,6 +2801,161 @@ async def live_step(data: Dict[str, Any] = Body(...)):
 
 
 # ==========================================
+# Security surface — ISO 27001 tamper-evidence + RBAC bootstrap
+# ==========================================
+class SeedAdminRequest(BaseModel):
+    email: str
+    setup_secret: str   # matches SEED_ADMIN_SECRET env, one-time bootstrap
+
+
+class SessionResponse(BaseModel):
+    email: str
+    role: str
+    session_token: str
+
+
+@app.post("/api/v1/security/users/seed-admin", response_model=SessionResponse)
+async def seed_admin(request: Request, req: SeedAdminRequest):
+    """
+    One-time (idempotent) bootstrap of the first admin user. Protected by the
+    SEED_ADMIN_SECRET env var — if the caller doesn't know the secret they
+    can't seed. Returns a session_token the caller can use as X-Session-Token
+    on admin-gated endpoints (e.g. /security/audit/verify).
+
+    Idempotent: calling again with the same email + secret returns the
+    existing user's session (rotates the session_token). Different email +
+    same secret creates another admin — that's on purpose (multi-admin
+    bootstrap is fine at this scale).
+    """
+    expected_secret = os.environ.get("SEED_ADMIN_SECRET", "")
+    if not expected_secret or len(expected_secret) < 16:
+        return JSONResponse(status_code=503, content={"detail": {
+            "code": "seed_admin_disabled",
+            "message": "SEED_ADMIN_SECRET is not set (or too short). Set a >=16-char "
+                       "random string in the env, then retry.",
+        }})
+    if not _hmac_equal(req.setup_secret, expected_secret):
+        _record_security_event(
+            action="ADMIN_SEED_DENIED",
+            actor_kind="anonymous",
+            actor_id=None,
+            client_ip=_client_ip(request),
+            payload_summary=f"attempted email={req.email[:80]}",
+        )
+        raise HTTPException(status_code=403, detail={"code": "bad_secret",
+                                                     "message": "Setup secret does not match."})
+
+    if not _EMAIL_SHAPE.match((req.email or "").strip().lower()):
+        raise HTTPException(status_code=400, detail="Provide a valid email.")
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == req.email.strip().lower()).first()
+        new_token = secrets.token_urlsafe(32)
+        if user is None:
+            user = User(
+                email=req.email.strip().lower(),
+                role="admin",
+                active=True,
+                session_token=new_token,
+            )
+            db.add(user)
+            db.commit()
+            _record_security_event(
+                action="ADMIN_SEEDED",
+                actor_kind="system",
+                actor_id=user.email,
+                client_ip=_client_ip(request),
+                payload_summary="first admin user created",
+            )
+        else:
+            user.session_token = new_token   # rotate
+            user.role = "admin"
+            user.active = True
+            db.commit()
+            _record_security_event(
+                action="ADMIN_SESSION_ROTATED",
+                actor_kind="system",
+                actor_id=user.email,
+                client_ip=_client_ip(request),
+                payload_summary="admin session token rotated",
+            )
+        return SessionResponse(email=user.email, role=user.role, session_token=new_token)
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/security/audit/verify")
+async def verify_security_audit(_admin: User = Depends(require_role("admin"))):
+    """
+    Walk the security_audit_log hash chain and report the first tamper point
+    (or "clean" if intact). This is the endpoint an ISO 27001 auditor calls
+    to prove your audit log is tamper-evident.
+
+    Admin-only. Uses the RBAC scaffolding — call seed-admin first to get a
+    session_token, then pass it in X-Session-Token header.
+    """
+    db = SessionLocal()
+    try:
+        rows = db.query(SecurityAuditLog).order_by(SecurityAuditLog.id.asc()).all()
+        ok, broken_idx, message = verify_hash_chain(rows)
+        return {
+            "total_rows":       len(rows),
+            "chain_intact":     ok,
+            "first_break_row":  broken_idx,
+            "message":          message,
+            "first_row_ts":     rows[0].timestamp.isoformat() + "Z" if rows else None,
+            "last_row_ts":      rows[-1].timestamp.isoformat() + "Z" if rows else None,
+        }
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/security/audit/tail")
+async def security_audit_tail(
+    limit: int = 50,
+    _admin: User = Depends(require_role("admin")),
+):
+    """
+    Return the most recent N security-audit rows (admin-only). Useful for
+    "show me the last hour" without dumping the whole chain.
+    Bounded to 500 rows to prevent accidental full-table dumps.
+    """
+    limit = max(1, min(500, int(limit or 50)))
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(SecurityAuditLog)
+              .order_by(SecurityAuditLog.id.desc())
+              .limit(limit).all()
+        )
+        return {
+            "count": len(rows),
+            "rows": [
+                {
+                    "uid":             r.uid,
+                    "timestamp":       r.timestamp.isoformat() + "Z",
+                    "actor_kind":      r.actor_kind,
+                    "actor_id":        r.actor_id,
+                    "action":          r.action,
+                    "asset_id":        r.asset_id,
+                    "client_ip":       r.client_ip,
+                    "payload_summary": r.payload_summary,
+                    "current_hash":    (r.current_hash or "")[:16] + "...",
+                } for r in rows
+            ],
+        }
+    finally:
+        db.close()
+
+
+def _hmac_equal(a: str, b: str) -> bool:
+    """Constant-time comparison for setup-secret checks."""
+    import hmac as _h
+    return _h.compare_digest((a or "").encode("utf-8"), (b or "").encode("utf-8"))
+
+
+# ==========================================
 # NEW: Real-time MQTT bridge (Coverage Tasks Area 3.3)
 # ==========================================
 # Topic structure (per brief 3.3):
@@ -3087,7 +3491,7 @@ def _build_audit_pdf(audit: dict) -> bytes:
 @app.post("/api/v1/audit/pdf")
 @limiter.limit("20/minute")
 async def generate_audit_pdf(
-    request: Request,   # noqa: ARG001 — used by rate limiter
+    request: Request,   # used by rate limiter + client-ip lookup
     data: AuditResponse,
     lead: TrialLead = Depends(require_trial_token),
 ):
@@ -3098,6 +3502,14 @@ async def generate_audit_pdf(
     pdf_bytes = _build_audit_pdf(data.dict())
     safe_asset = "".join(ch for ch in (data.asset_name or "audit") if ch.isalnum() or ch in "-_") or "audit"
     filename = f"PREDAIOT_Audit_{safe_asset}_{datetime.utcnow().strftime('%Y%m%d')}.pdf"
+    _record_security_event(
+        action="PDF_EXPORT",
+        actor_kind="trial",
+        actor_id=lead.token[:16],
+        asset_id=data.asset_id or data.asset_name,
+        client_ip=_client_ip(request),
+        payload_summary=f"size_bytes={len(pdf_bytes)}",
+    )
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

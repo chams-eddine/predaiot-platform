@@ -13,6 +13,8 @@ rapidfuzz
 # null-object shim if not installed, so removing this line makes the
 # rate-limit decorators no-ops without breaking the app.
 slowapi
+# ISO 27001 — encryption at rest + tamper-evident audit trail.
+cryptography
 # Optional integration deps — all lazy-imported. Uncomment to enable
 # the corresponding endpoints; without them the endpoints return 503
 # with a clear "pip install X" message. Kept commented to preserve the
