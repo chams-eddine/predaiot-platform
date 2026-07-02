@@ -7,8 +7,31 @@ import { motion } from 'framer-motion';
  * wordmarks paired with an abstract glyph, drawn as inline SVG so the page
  * has no image-asset dependency. Grayscale by default; brand color on hover.
  *
- * Replace `PLACEHOLDER_LOGOS` with real customer logos when you sign them.
- * Keep the count at 4–6 for social-proof density without visual noise.
+ * ══════════════════════════════════════════════════════════════════════
+ * ⚠  BEFORE THIS SECTION IS TRUSTWORTHY: SWAP REAL LOGOS.
+ *
+ *   Ethically, "Trusted by" with fake companies invites blowback the moment
+ *   a prospect Googles one. Options in increasing order of effort:
+ *
+ *   1. Delete this whole section until you have real design partners.
+ *   2. Replace the H2 with "Built to serve" and keep the placeholder marks
+ *      as aspirational branding (still borderline).
+ *   3. Replace `PLACEHOLDER_LOGOS` with real customer logos — either
+ *      inline SVG (best; scales cleanly, no image request) or import an
+ *      SVG file per company.
+ *
+ * To swap in real logos:
+ *
+ *   const PLACEHOLDER_LOGOS: CompanyLogo[] = [
+ *     { name: 'OQ Alternative Energy',
+ *       glyph: <path d="…real path from their brand guidelines…" /> },
+ *     …
+ *   ];
+ *
+ *   or replace the LogoBadge internals with:
+ *     <Image src="/logos/oq.svg" alt="OQ" width={120} height={40}
+ *            className="grayscale hover:grayscale-0 transition-all duration-500" />
+ * ══════════════════════════════════════════════════════════════════════
  */
 
 type Glyph = React.ReactNode;

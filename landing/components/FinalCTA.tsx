@@ -82,8 +82,13 @@ export default function FinalCTA() {
                 gap-4 justify-center items-center
               "
             >
+              {/* Secondary — "Run Demo Audit" button in the app runs the
+                  reference 500 MW BESS audit on click. Same landing page,
+                  same trial gate flow. */}
               <a
-                href="#demo"
+                href="https://predaiot-platform.onrender.com/"
+                target="_blank"
+                rel="noopener noreferrer"
                 className="
                   inline-flex items-center gap-3
                   ps-8 pe-8 py-4
@@ -97,8 +102,12 @@ export default function FinalCTA() {
                 <span>Run Demo Audit</span>
               </a>
 
+              {/* Primary — trial gate → upload flow. Same URL, different
+                  intent: user is ready to try their own data. */}
               <a
-                href="#upload"
+                href="https://predaiot-platform.onrender.com/"
+                target="_blank"
+                rel="noopener noreferrer"
                 className="
                   group inline-flex items-center gap-3
                   ps-8 pe-8 py-4

@@ -103,8 +103,12 @@ export default function HeroSection() {
           transition={{ duration: 0.9, delay: 0.5, ease: 'easeOut' }}
           className="flex flex-col sm:flex-row gap-4 justify-center items-center"
         >
+          {/* Primary CTA → live audit app on Render. Opens in new tab so
+              the landing stays open behind it (higher return-to-landing rate). */}
           <a
-            href="#start"
+            href="https://predaiot-platform.onrender.com/"
+            target="_blank"
+            rel="noopener noreferrer"
             className="
               group relative inline-flex items-center gap-3
               ps-8 pe-8 py-4
@@ -132,8 +136,10 @@ export default function HeroSection() {
             />
           </a>
 
+          {/* Secondary CTA — no demo video exists yet, so this is a mailto
+              rather than a link that scrolls to nothing. Honest > slick. */}
           <a
-            href="#demo"
+            href="mailto:chams@preda-iot.com?subject=PREDAIOT%20Demo%20Request&body=Hi%20Chams%2C%0A%0AI%27d%20like%20to%20see%20a%20live%20demo%20of%20PREDAIOT.%20My%20asset%20class%20is%3A%20%5BBESS%20%2F%20Solar%20%2F%20Wind%20%2F%20Gas%20%2F%20Hydro%20%2F%20other%5D."
             className="
               inline-flex items-center gap-3
               ps-8 pe-8 py-4
