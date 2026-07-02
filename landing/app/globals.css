@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    color-scheme: dark;
+  }
+  body {
+    background-color: #050505;
+    color: #ffffff;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background-color: rgba(0, 255, 255, 0.3);
+    color: #ffffff;
+  }
+}
+
+@layer utilities {
+  /* Text-gradient utility used across headlines */
+  .text-gradient-cyan {
+    background: linear-gradient(135deg, #ffffff 0%, #b3ffff 40%, #00ffff 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
+  .text-gradient-red {
+    background: linear-gradient(135deg, #ff3366 0%, #ff8a3d 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+  }
+  /* Full-bleed dot-grid, respects RTL naturally (symmetric pattern). */
+  .bg-dot-grid {
+    background-image: radial-gradient(rgba(0, 255, 255, 0.08) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+}
