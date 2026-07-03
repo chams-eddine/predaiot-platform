@@ -2,7 +2,8 @@
 
 import { motion } from "framer-motion";
 
-const APP_URL = "https://predaiot-platform.onrender.com/";
+// Official platform. Both FinalCTA buttons deep-link to the trial gate.
+const APP_URL = "https://platform.preda-iot.com/";
 
 export default function FinalCTASection() {
   return (
