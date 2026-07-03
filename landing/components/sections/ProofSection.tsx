@@ -2,19 +2,23 @@
 
 import dynamic from "next/dynamic";
 import { motion } from "framer-motion";
+import { useLanguage } from "@/lib/LanguageContext";
 
-// Client-only BESS visualisation. Fallback is a plain dark box so the layout
-// grid doesn't jump while the three.js chunk streams in.
+// Client-only BESS visualisation. Fallback keeps the layout grid stable
+// while three.js streams in.
 const BessModel3D = dynamic(() => import("../three/BessModel3D"), {
   ssr: false,
   loading: () => <div className="w-full h-full bg-[#050505]" />,
 });
 
-// Official platform — the "Explore Math Methodology" CTA opens the
-// audit app's Math Appendix section.
+// Official platform — "Explore Math Methodology" opens the audit app's
+// Math Appendix section.
 const APP_URL = "https://platform.preda-iot.com/";
 
 export default function ProofSection() {
+  const { t } = useLanguage();
+  const bullets = [t.proof.bullet1, t.proof.bullet2, t.proof.bullet3];
+
   return (
     <section className="relative w-full py-32 bg-[#050505] overflow-hidden">
       <div className="max-w-7xl mx-auto px-6 grid md:grid-cols-2 gap-16 items-center">
@@ -26,24 +30,19 @@ export default function ProofSection() {
           viewport={{ once: true, amount: 0.5 }}
         >
           <h2 className="text-4xl md:text-5xl font-extrabold text-white leading-tight mb-8">
-            See the Invisible
+            {t.proof.headlineLine1}
             <br />
             <span className="text-[#FF3366] drop-shadow-[0_0_15px_rgba(255,51,102,0.5)]">
-              Financial Leakage.
+              {t.proof.headlineLine2}
             </span>
           </h2>
 
           <p className="text-gray-400 text-lg mb-10 leading-relaxed">
-            Don&apos;t just monitor your assets. Audit every economic decision they
-            make in real-time.
+            {t.proof.subheadline}
           </p>
 
           <ul className="space-y-6">
-            {[
-              "Pinpoint the exact dispatch decision that cost you capital.",
-              "Counterfactual Simulation: See what optimal would have yielded.",
-              "Actionable Economic Plan to close the gap immediately.",
-            ].map((text, index) => (
+            {bullets.map((text, index) => (
               <motion.li
                 key={text}
                 initial={{ opacity: 0, x: -20 }}
@@ -68,11 +67,11 @@ export default function ProofSection() {
             rel="noopener noreferrer"
             className="inline-block mt-12 px-8 py-4 border border-gray-700 text-gray-300 font-medium rounded-lg hover:border-[#00FFFF] hover:text-[#00FFFF] transition-all duration-300"
           >
-            Explore the Math Methodology →
+            {t.proof.cta}
           </motion.a>
         </motion.div>
 
-        {/* RIGHT — 3D BESS asset with floating leakage tooltip overlay */}
+        {/* RIGHT — 3D BESS asset with floating leakage tooltip */}
         <motion.div
           initial={{ opacity: 0, scale: 0.8 }}
           whileInView={{ opacity: 1, scale: 1 }}
@@ -84,14 +83,18 @@ export default function ProofSection() {
             <BessModel3D />
           </div>
 
-          {/* Floating tooltip — pinned above the battery, animated in on scroll */}
+          {/* Floating tooltip — pinned above the battery */}
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             whileInView={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.8, duration: 0.5 }}
             viewport={{ once: true }}
             className="absolute top-[15%] left-1/2 -translate-x-1/2 z-10 pointer-events-none"
+            dir="ltr"
           >
+            {/* dir="ltr" on the tooltip so the currency figure never mirrors
+                — "-$1,205 / hour" must always render Latin-numerals + LTR
+                regardless of the surrounding page direction. */}
             <div className="bg-black/90 backdrop-blur-md border border-red-500/50 text-white px-5 py-3 rounded-xl whitespace-nowrap font-mono shadow-[0_0_25px_rgba(255,51,102,0.4)]">
               <div className="flex items-center gap-2 mb-1">
                 <span className="relative flex h-2.5 w-2.5">
@@ -99,12 +102,14 @@ export default function ProofSection() {
                   <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
                 </span>
                 <span className="text-red-400 text-xs font-sans uppercase tracking-widest">
-                  Live Leakage Detected
+                  {t.proof.leakageLabel}
                 </span>
               </div>
               <div className="text-2xl font-bold text-red-500">
                 -$1,205{" "}
-                <span className="text-sm text-gray-500 font-normal">/ hour</span>
+                <span className="text-sm text-gray-500 font-normal">
+                  {t.proof.leakagePerHour}
+                </span>
               </div>
             </div>
           </motion.div>

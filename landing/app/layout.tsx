@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { LanguageProvider } from "@/lib/LanguageContext";
 
 export const metadata: Metadata = {
   title: "PREDAIOT — Economic Decision Audit™ for Energy Assets",
@@ -37,10 +38,13 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  // dir/lang are dynamically updated by LanguageProvider on the client — the
+  // "en" / "ltr" values here are the deterministic first-paint defaults for
+  // static export, before hydration swaps them to the user's preference.
   return (
     <html lang="en" dir="ltr" className="dark">
       <body className="bg-[#050505] text-white antialiased overflow-x-hidden">
-        {children}
+        <LanguageProvider>{children}</LanguageProvider>
       </body>
     </html>
   );

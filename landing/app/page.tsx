@@ -2,20 +2,24 @@ import HeroSection from "@/components/sections/HeroSection";
 import ProofSection from "@/components/sections/ProofSection";
 import SocialProofSection from "@/components/sections/SocialProofSection";
 import FinalCTASection from "@/components/sections/FinalCTASection";
+import LanguageSwitcher from "@/components/LanguageSwitcher";
 
 export default function Home() {
   return (
     <main className="bg-[#050505]">
-      {/* 1. الخطاف والانبهار — Hook & Awe (3D Core + CTA) */}
+      {/* Floating EN / FR / AR pill — top-end corner, above every section */}
+      <LanguageSwitcher />
+
+      {/* 1. Hook & Awe — 3D Core + CTA */}
       <HeroSection />
 
-      {/* 2. الإثبات والصدمة المالية — Proof & Financial Shock (3D BESS + Leakage) */}
+      {/* 2. Proof & Financial Shock — 3D BESS + Leakage tooltip */}
       <ProofSection />
 
-      {/* 3. الثقة والشرعية — Trust & Legitimacy (Social Proof) */}
+      {/* 3. Trust & Legitimacy — Social Proof */}
       <SocialProofSection />
 
-      {/* 4. الدفع النهائي — Final Push (Final CTA) */}
+      {/* 4. Final Push — CTA card */}
       <FinalCTASection />
     </main>
   );

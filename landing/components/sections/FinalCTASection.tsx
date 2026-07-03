@@ -1,11 +1,13 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { useLanguage } from "@/lib/LanguageContext";
 
-// Official platform. Both FinalCTA buttons deep-link to the trial gate.
 const APP_URL = "https://platform.preda-iot.com/";
 
 export default function FinalCTASection() {
+  const { t } = useLanguage();
+
   return (
     <section className="w-full py-32 bg-[#050505] relative overflow-hidden">
       {/* Ambient radial glow behind the card */}
@@ -22,9 +24,9 @@ export default function FinalCTASection() {
               viewport={{ once: true }}
               className="text-3xl md:text-5xl font-extrabold text-white leading-tight mb-6"
             >
-              The Universal Economic Engine
+              {t.final.headlineLine1}
               <br />
-              <span className="text-glow-cyan">for Energy Infrastructure.</span>
+              <span className="text-glow-cyan">{t.final.headlineLine2}</span>
             </motion.h2>
 
             <motion.p
@@ -34,8 +36,7 @@ export default function FinalCTASection() {
               viewport={{ once: true }}
               className="text-gray-400 text-lg mb-10 max-w-2xl mx-auto"
             >
-              Stop guessing. Start auditing. Upload your data today and see the
-              financial gap in seconds.
+              {t.final.subheadline}
             </motion.p>
 
             <motion.div
@@ -51,7 +52,7 @@ export default function FinalCTASection() {
                 rel="noopener noreferrer"
                 className="px-8 py-4 border border-gray-600 text-white font-medium rounded-lg hover:border-white transition-all duration-300"
               >
-                Run Demo Audit
+                {t.final.ctaDemo}
               </a>
 
               <a
@@ -60,7 +61,7 @@ export default function FinalCTASection() {
                 rel="noopener noreferrer"
                 className="px-8 py-4 bg-[#00FFFF] text-black font-bold rounded-lg hover:bg-white transition-colors duration-300 shadow-[0_0_20px_rgba(0,255,255,0.4)]"
               >
-                Upload My Data
+                {t.final.ctaUpload}
               </a>
             </motion.div>
           </div>

@@ -1,9 +1,10 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { useLanguage } from "@/lib/LanguageContext";
 
-// Placeholder company names — no real customer logos yet. Replace this array
-// with signed customers before promoting the section on live media.
+// Placeholder company names — not translated (proper nouns). Replace with
+// signed customers before promoting the section on live media.
 const partners = [
   "Global Energy Co.",
   "TechWind Corp.",
@@ -13,6 +14,8 @@ const partners = [
 ];
 
 export default function SocialProofSection() {
+  const { t } = useLanguage();
+
   return (
     <section className="w-full py-20 bg-[#050505] border-t border-b border-gray-800/50">
       <div className="max-w-7xl mx-auto px-6">
@@ -23,7 +26,7 @@ export default function SocialProofSection() {
           viewport={{ once: true }}
           className="text-center text-gray-500 text-sm uppercase tracking-widest mb-10"
         >
-          Trusted by Energy Leaders &amp; Independent Power Producers
+          {t.social.title}
         </motion.p>
 
         <div className="flex flex-wrap justify-center items-center gap-x-12 gap-y-6">
