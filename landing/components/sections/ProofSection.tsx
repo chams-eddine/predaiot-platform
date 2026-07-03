@@ -10,7 +10,9 @@ const BessModel3D = dynamic(() => import("../three/BessModel3D"), {
   loading: () => <div className="w-full h-full bg-[#050505]" />,
 });
 
-const APP_URL = "https://predaiot-platform.onrender.com/";
+// Official platform — the "Explore Math Methodology" CTA opens the
+// audit app's Math Appendix section.
+const APP_URL = "https://platform.preda-iot.com/";
 
 export default function ProofSection() {
   return (

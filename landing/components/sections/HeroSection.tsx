@@ -10,9 +10,9 @@ const EconomicCore3D = dynamic(() => import("../three/EconomicCore3D"), {
   loading: () => <div className="w-full h-full bg-[#050505]" />,
 });
 
-// Prospect deep-link into the live audit app. Both hero CTAs target this
-// URL — the trial gate handles routing from there.
-const APP_URL = "https://predaiot-platform.onrender.com/";
+// Official platform URL — every non-mailto button on the landing goes
+// here. Trial gate + audit console lives at this domain.
+const APP_URL = "https://platform.preda-iot.com/";
 const DEMO_MAILTO =
   "mailto:chams@preda-iot.com?subject=PREDAIOT%20Demo%20Request&body=Hi%20Chams%2C%0A%0AI%27d%20like%20to%20see%20a%20live%20demo%20of%20PREDAIOT.%20My%20asset%20class%20is%3A%20%5BBESS%20%2F%20Solar%20%2F%20Wind%20%2F%20Gas%20%2F%20Hydro%20%2F%20other%5D.";
 
