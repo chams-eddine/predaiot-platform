@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-primary: #050505;
+  --accent-cyan: #00FFFF;
+  --accent-red: #FF3366;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    color-scheme: dark;
+  }
+  body {
+    background-color: var(--bg-primary);
+    color: white;
+    font-family: system-ui, -apple-system, 'Segoe UI', 'Cairo', sans-serif;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    background-color: rgba(0, 255, 255, 0.3);
+    color: #ffffff;
+  }
+}
+
+@layer utilities {
+  /* Neon cyan text with double-layer glow — used across all headlines. */
+  .text-glow-cyan {
+    color: var(--accent-cyan);
+    text-shadow:
+      0 0 15px rgba(0, 255, 255, 0.8),
+      0 0 30px rgba(0, 255, 255, 0.4);
+  }
+}
