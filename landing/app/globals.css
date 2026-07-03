@@ -2,17 +2,23 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --bg-primary: #050505;
+  --accent-cyan: #00FFFF;
+  --accent-red: #FF3366;
+}
+
 @layer base {
   html {
     scroll-behavior: smooth;
     color-scheme: dark;
   }
   body {
-    background-color: #050505;
-    color: #ffffff;
+    background-color: var(--bg-primary);
+    color: white;
+    font-family: system-ui, -apple-system, 'Segoe UI', 'Cairo', sans-serif;
+    overflow-x: hidden;
     -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    text-rendering: optimizeLegibility;
   }
   ::selection {
     background-color: rgba(0, 255, 255, 0.3);
@@ -21,24 +27,11 @@
 }
 
 @layer utilities {
-  /* Text-gradient utility used across headlines */
-  .text-gradient-cyan {
-    background: linear-gradient(135deg, #ffffff 0%, #b3ffff 40%, #00ffff 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    color: transparent;
-  }
-  .text-gradient-red {
-    background: linear-gradient(135deg, #ff3366 0%, #ff8a3d 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    color: transparent;
-  }
-  /* Full-bleed dot-grid, respects RTL naturally (symmetric pattern). */
-  .bg-dot-grid {
-    background-image: radial-gradient(rgba(0, 255, 255, 0.08) 1px, transparent 1px);
-    background-size: 32px 32px;
+  /* Neon cyan text with double-layer glow — used across all headlines. */
+  .text-glow-cyan {
+    color: var(--accent-cyan);
+    text-shadow:
+      0 0 15px rgba(0, 255, 255, 0.8),
+      0 0 30px rgba(0, 255, 255, 0.4);
   }
 }

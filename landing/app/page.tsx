@@ -1,31 +1,22 @@
-import HeroSection from '@/components/HeroSection';
-import TrustBanner from '@/components/TrustBanner';
-import ProofSection from '@/components/ProofSection';
-import SocialProof from '@/components/SocialProof';
-import FinalCTA from '@/components/FinalCTA';
+import HeroSection from "@/components/sections/HeroSection";
+import ProofSection from "@/components/sections/ProofSection";
+import SocialProofSection from "@/components/sections/SocialProofSection";
+import FinalCTASection from "@/components/sections/FinalCTASection";
 
-export default function LandingPage() {
+export default function Home() {
   return (
-    <main className="relative bg-canvas text-white min-h-screen">
+    <main className="bg-[#050505]">
+      {/* 1. الخطاف والانبهار — Hook & Awe (3D Core + CTA) */}
       <HeroSection />
-      <TrustBanner />
+
+      {/* 2. الإثبات والصدمة المالية — Proof & Financial Shock (3D BESS + Leakage) */}
       <ProofSection />
-      <SocialProof />
-      <FinalCTA />
-      <footer className="border-t border-canvas-hairline ps-6 pe-6 py-8">
-        <div className="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4 text-xs text-white/40">
-          <div>
-            © {new Date().getFullYear()} PREDAIOT — Economic Decision Intelligence.
-          </div>
-          <div className="flex items-center gap-6">
-            <a href="#" className="hover:text-white transition-colors">Privacy</a>
-            <a href="#" className="hover:text-white transition-colors">Security</a>
-            <a href="mailto:chams@preda-iot.com" className="hover:text-white transition-colors">
-              chams@preda-iot.com
-            </a>
-          </div>
-        </div>
-      </footer>
+
+      {/* 3. الثقة والشرعية — Trust & Legitimacy (Social Proof) */}
+      <SocialProofSection />
+
+      {/* 4. الدفع النهائي — Final Push (Final CTA) */}
+      <FinalCTASection />
     </main>
   );
 }
