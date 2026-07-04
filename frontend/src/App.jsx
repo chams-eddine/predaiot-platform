@@ -104,6 +104,13 @@ const fmtUSD = (n) => {
   if (abs >= 1e3) return `$${(n / 1e3).toFixed(1)}k`;
   return `$${n.toFixed(2)}`;
 };
+
+// Currency-aware money: "$1.2k" for USD, "1.2k OMR" for detected currencies.
+const fmtMoney = (n, cur) => {
+  const s = fmtUSD(n);
+  if (!cur || cur === 'USD' || s === '—') return s;
+  return `${s.slice(1)} ${cur}`;
+};
 const fmtPct = (n, decimals = 1) => n == null ? '—' : `${Number(n).toFixed(decimals)}%`;
 const riskColor = (r) => r === 'Low' ? DS.optimal : r === 'Moderate' ? DS.warning : DS.loss;
 const riskEmoji = (r) => r === 'Low' ? '🟢' : r === 'Moderate' ? '🟡' : '🔴';
@@ -1031,13 +1038,19 @@ function AssetPerformanceTiles({ data, log, m }) {
 }
 
 function OpsConsoleExec({ data, log, m, ingestionNotes, onDismissNotes }) {
-  const captured   = data.edv_optimal_total || 0;
+  // Ref. Manual semantics — potential (ETL) / captured (actual) / destroyed
+  // (gap). These were previously mislabeled: the "Captured Value" tile showed
+  // the OPTIMAL total, which misstates the audit to the customer.
+  const potential  = data.edv_optimal_total || 0;
+  const captured   = data.edv_actual_total || 0;
   const destroyed  = data.total_gap_usd || 0;
-  const netGain    = data.edv_actual_total || 0;
+  const cur        = data.currency;
   const dqPct      = (data.dq_score || 0) * 100;
   const count      = (log || []).length;
   const last       = (log || [])[log.length - 1] || {};
-  const liveSoc    = (last.soc != null ? last.soc * 100 : 68);
+  // SoC arrives as 0–1 fraction from some feeds and 0–100 percent from
+  // others (real SCADA exports use percent) — normalise by magnitude.
+  const liveSoc    = last.soc != null ? (last.soc > 1.5 ? last.soc : last.soc * 100) : 68;
   const livePower  = Math.abs(last.actual_action || 120);
   const liveTemp   = 24;
   const isMobile   = useIsMobile();
@@ -1061,9 +1074,9 @@ function OpsConsoleExec({ data, log, m, ingestionNotes, onDismissNotes }) {
           <div style={{ color: OPS.text, fontSize: 12, fontWeight: 700, letterSpacing: '0.15em', marginBottom: 14 }}>
             FINANCIAL IMPACT
           </div>
-          <OpsFinancialCard label="Captured Value"    value={fmtUSD(captured)}  color={OPS.green} />
-          <OpsFinancialCard label="Destroyed Value"   value={fmtUSD(destroyed)} color={OPS.red}   arrow="↓" />
-          <OpsFinancialCard label="Net Economic Gain" value={fmtUSD(netGain)}   color={OPS.green} glow />
+          <OpsFinancialCard label="Economic Potential" value={fmtMoney(potential, cur)} color={OPS.green} />
+          <OpsFinancialCard label="Captured Value"     value={fmtMoney(captured, cur)}  color={captured >= 0 ? OPS.green : OPS.red} glow />
+          <OpsFinancialCard label="Destroyed Value"    value={fmtMoney(destroyed, cur)} color={OPS.red} arrow="↓" />
         </div>
 
         <div style={{

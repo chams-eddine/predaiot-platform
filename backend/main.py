@@ -635,6 +635,11 @@ def _dispatch_mode(asset_type: Optional[str]) -> str:
     return "storage"  # default + explicit storage types
 
 
+# Last MILP solve telemetry — read by ingestion to disclose time-limited
+# (incumbent, not proven-optimal) solves on very large files.
+_MILP_LAST = {"status": "Optimal", "steps": 0}
+
+
 def _run_optimizer_storage(asset: AssetSpecs, prices: List[float], dt_hours: float = 1.0,
                            return_charge: bool = False):
     """
@@ -647,6 +652,8 @@ def _run_optimizer_storage(asset: AssetSpecs, prices: List[float], dt_hours: flo
     the EDV accounting (Reference Manual Vol II Ch 3: J subtracts the charge
     purchase cost) and by the Ch 8.2 gap-attribution second solve.
     """
+    if not prices:
+        return ({}, {}) if return_charge else {}
     hours = range(len(prices))
     prob = pulp.LpProblem("PREDAIOT_MILP", pulp.LpMaximize)
     p_dis = pulp.LpVariable.dicts("Discharge", hours, lowBound=0, upBound=asset.p_max)
@@ -668,7 +675,12 @@ def _run_optimizer_storage(asset: AssetSpecs, prices: List[float], dt_hours: flo
             prob += soc[t] == soc[t-1] + step_delta
         if t == max(hours):
             prob += soc[t] == asset.soc_init
-    prob.solve(pulp.PULP_CBC_CMD(msg=0))
+    # Hard wall-clock cap: a multi-day 5-minute file means thousands of
+    # binaries — CBC keeps the best incumbent when the limit hits, and the
+    # status below lets ingestion disclose "optimum is a lower bound".
+    prob.solve(pulp.PULP_CBC_CMD(msg=0, timeLimit=45))
+    _MILP_LAST["status"] = pulp.LpStatus.get(prob.status, "Unknown")
+    _MILP_LAST["steps"] = len(prices)
     dis = {t: (p_dis[t].varValue or 0.0) for t in hours}
     ch  = {t: (p_ch[t].varValue or 0.0) for t in hours}
     return (dis, ch) if return_charge else dis
@@ -2281,6 +2293,11 @@ def _detect_currency(raw_columns: list) -> Optional[str]:
     return None
 
 
+# Upload ceiling: a year of 1-minute data for one asset is ~40 MB of CSV;
+# anything past this is either the wrong export or a memory-exhaustion attempt.
+_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
+
 def _looks_numeric(v: str) -> bool:
     try:
         float(str(v).replace(",", ""))
@@ -2425,51 +2442,46 @@ def _parse_file_bytes_raw(contents: bytes, filename: str) -> pd.DataFrame:
     # Separator heuristic
     sep = "\t" if fname.endswith(".tsv") else ","
 
-    # ── BOM detection ──────────────────────────────────────────────────────────
-    if contents[:2] in (b"\xff\xfe", b"\xfe\xff"):
+    # ── Encoding resolution, scored by USEFULNESS ──────────────────────────────
+    # "Decoded without an exception" is NOT the same as "decoded correctly":
+    # cp1256 Arabic bytes decode 'successfully' as Shift-JIS mojibake and the
+    # column names become garbage. So every candidate parse is scored by how
+    # many internal fields its columns actually resolve to, and the best
+    # candidate wins. A score >= 2 (price + an output/consumption column)
+    # short-circuits — that parse is definitely the right alphabet.
+    def _alias_score(df_cand) -> int:
         try:
-            return pd.read_csv(BytesIO(contents), encoding="utf-16", sep=sep)
+            return len(_resolve_columns_verbose([str(c) for c in df_cand.columns])["resolved"])
         except Exception:
-            pass
-    if contents[:3] == b"\xef\xbb\xbf":
-        try:
-            return pd.read_csv(BytesIO(contents), encoding="utf-8-sig", sep=sep)
-        except Exception:
-            pass
+            return 0
 
-    # ── charset_normalizer auto-detect ─────────────────────────────────────────
+    ordered = []
+    if contents[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        ordered.append("utf-16")
+    if contents[:3] == b"\xef\xbb\xbf":
+        ordered.append("utf-8-sig")
     try:
         from charset_normalizer import from_bytes
-        result = from_bytes(contents[:20000]).best()
-        if result and result.encoding:
-            try:
-                return pd.read_csv(BytesIO(contents), encoding=str(result.encoding), sep=sep)
-            except Exception:
-                pass
+        guess = from_bytes(contents[:20000]).best()
+        if guess and guess.encoding:
+            ordered.append(str(guess.encoding))
     except ImportError:
         pass
-
-    # ── chardet fallback ───────────────────────────────────────────────────────
     try:
         import chardet
-        detected = chardet.detect(contents[:20000])
-        enc_detected = detected.get("encoding") or ""
-        if enc_detected:
-            try:
-                return pd.read_csv(BytesIO(contents), encoding=enc_detected, sep=sep)
-            except Exception:
-                pass
+        g = chardet.detect(contents[:20000]).get("encoding")
+        if g:
+            ordered.append(g)
     except ImportError:
         pass
-
-    # ── Exhaustive encoding list ───────────────────────────────────────────────
-    ENCODINGS = [
+    ordered += [
         # Unicode
         "utf-8", "utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "utf-32",
+        # Arabic (كل ملفات Excel المحلية تستخدم هذا) — before Western so Gulf
+        # exports don't get eaten by latin-1 (which never raises)
+        "cp1256", "iso-8859-6",
         # Western European
         "latin-1", "cp1252", "iso-8859-15",
-        # Arabic (كل ملفات Excel المحلية تستخدم هذا)
-        "cp1256", "iso-8859-6", "windows-1256",
         # Central / Eastern European
         "cp1250", "iso-8859-2",
         # Cyrillic
@@ -2479,11 +2491,26 @@ def _parse_file_bytes_raw(contents: bytes, filename: str) -> pd.DataFrame:
         # Misc
         "ascii", "cp437",
     ]
-    for enc in ENCODINGS:
+
+    best_df, best_score, tried = None, -1, set()
+    for enc in ordered:
+        key = enc.lower()
+        if key in tried:
+            continue
+        tried.add(key)
         try:
-            return pd.read_csv(BytesIO(contents), encoding=enc, sep=sep)
+            df_cand = pd.read_csv(BytesIO(contents), encoding=enc, sep=sep)
         except Exception:
             continue
+        if len(df_cand.columns) == 0:
+            continue
+        score = _alias_score(df_cand)
+        if score > best_score:
+            best_df, best_score = df_cand, score
+        if score >= 2:
+            return df_cand
+    if best_df is not None:
+        return best_df
 
     # ── Nuclear fallback: force-decode with Unicode replacement chars ───────────
     try:
@@ -2520,18 +2547,31 @@ async def audit_from_file(
     """
     try:
         contents = await file.read()
+        if len(contents) > _MAX_UPLOAD_BYTES:
+            return JSONResponse(status_code=413, content={
+                "detail": f"File is {len(contents) / 1e6:.0f} MB — the upload limit is "
+                          f"{_MAX_UPLOAD_BYTES // (1024 * 1024)} MB. Split the export or "
+                          "resample to a coarser interval."})
         df = _parse_file_bytes(contents, file.filename or "")
+        if len(df) == 0:
+            return JSONResponse(status_code=400, content={
+                "detail": "The file parsed but contains no data rows (header only?)."})
 
         # Resolve column aliases (exact → fuzzy)
         col_info = _resolve_columns_verbose(list(df.columns))
         col_map = col_info["resolved"]
 
-        # Check required fields resolved
-        missing_internal = [r for r in ("price", "actual_discharge") if r not in col_map]
-        if missing_internal:
+        # Check required fields resolved. Load-class assets (electrolyzers,
+        # desalination) report CONSUMPTION, not output — actual_charge alone
+        # is a valid audit input for them (the engine falls back internally).
+        has_output = ("actual_discharge" in col_map) or ("actual_charge" in col_map)
+        if "price" not in col_map or not has_output:
+            missing = [r for r in ("price",) if r not in col_map]
+            if not has_output:
+                missing.append("actual_discharge (or a consumption column like actual_charge)")
             return JSONResponse(status_code=400, content={
                 "detail": (
-                    f"Could not find required column(s): {missing_internal}. "
+                    f"Could not find required column(s): {missing}. "
                     f"Your file has columns: {list(df.columns)}. "
                     f"Use /api/v1/audit/inspect to see the full mapping attempt."
                 )
@@ -2541,9 +2581,10 @@ async def audit_from_file(
         rename_map = {v: k for k, v in col_map.items() if v in df.columns}
         df = df.rename(columns=rename_map)
 
-        # Add missing optional columns with defaults
+        # Add missing optional columns with defaults. actual_discharge is
+        # optional too since load-class files carry only consumption.
         defaults = {
-            'hour': None, 'actual_charge': 0.0, 'soc': None,
+            'hour': None, 'actual_discharge': 0.0, 'actual_charge': 0.0, 'soc': None,
             'grid_demand': None, 'curtailment_mw': 0.0,
             'operator_override': False, 'forecast_price': None,
         }
@@ -2630,6 +2671,15 @@ async def audit_from_file(
 
         result = process_calculation(asset, time_series, dt_hours=dt_hours,
                                      currency=currency or "USD")
+
+        # Very large files can hit the MILP wall-clock cap — CBC then returns
+        # its best incumbent. Disclose it: the optimum becomes a lower bound.
+        if _dispatch_mode(asset.asset_type) == "storage" and \
+                _MILP_LAST.get("status") not in ("Optimal",):
+            dq_flags.append(_dq("info", "milp_time_capped",
+                                f"The optimizer hit its {45}s time cap on {_MILP_LAST.get('steps')} "
+                                "steps and returned its best solution so far — the reported optimum "
+                                "is a LOWER bound; the true gap can only be larger."))
 
         # Model/data disagreement: actual "beat" the theoretical optimum →
         # the mapping or specs are wrong, not the operator superhuman. Flag it
@@ -2723,6 +2773,9 @@ async def inspect_file(file: UploadFile = File(...)):
     """
     try:
         contents = await file.read()
+        if len(contents) > _MAX_UPLOAD_BYTES:
+            return JSONResponse(status_code=413, content={
+                "detail": f"File exceeds the {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB upload limit."})
         df = _parse_file_bytes(contents, file.filename or "")
         col_info = _resolve_columns_verbose(list(df.columns))
         col_map = col_info["resolved"]
@@ -2786,7 +2839,8 @@ async def inspect_file(file: UploadFile = File(...)):
             "data_quality":         dq_flags,
             "currency":             currency,
             "field_warnings":       field_warnings,
-            "will_succeed":         "price" in col_map and "actual_discharge" in col_map,
+            "will_succeed":         "price" in col_map
+                                    and ("actual_discharge" in col_map or "actual_charge" in col_map),
             "sample_row":           df.iloc[0].to_dict() if len(df) > 0 else {},
         }
     except Exception as e:
@@ -3022,20 +3076,41 @@ async def websocket_live_stream(websocket: WebSocket):
 
     try:
         while True:
-            data = await websocket.receive_json()
+            # A field outage is exactly when garbage frames arrive (half-written
+            # buffers, proxy timeouts). One bad frame must never kill the
+            # session — reply with an error frame and keep listening.
+            raw = await websocket.receive_text()
+            try:
+                data = json.loads(raw)
+                if not isinstance(data, dict):
+                    raise ValueError("frame must be a JSON object")
+            except (json.JSONDecodeError, ValueError) as e:
+                await websocket.send_json({"error": f"bad frame ignored: {e}",
+                                           "step": step_count})
+                continue
+
             # Session resume after a connection drop (grid/network outage):
             # the client replays its last cumulative counters in the first
             # message of the new socket so the session's economics continue
-            # instead of resetting to zero. Only honoured before step 1.
+            # instead of resetting to zero. Only honoured before step 1,
+            # and applied atomically — garbage resume fields change nothing.
             resume = data.pop("resume", None)
             if isinstance(resume, dict) and step_count == 0:
                 try:
-                    cumulative_opt = max(0.0, float(resume.get("cumulative_opt", 0) or 0))
-                    cumulative_act = float(resume.get("cumulative_act", 0) or 0)
-                    step_count = max(0, int(resume.get("step", 0) or 0))
+                    r_opt = max(0.0, float(resume.get("cumulative_opt", 0) or 0))
+                    r_act = float(resume.get("cumulative_act", 0) or 0)
+                    r_step = max(0, int(resume.get("step", 0) or 0))
                 except (TypeError, ValueError):
                     pass
-            step = _live_decision_core(data)
+                else:
+                    cumulative_opt, cumulative_act, step_count = r_opt, r_act, r_step
+
+            try:
+                step = _live_decision_core(data)
+            except Exception as e:
+                await websocket.send_json({"error": f"step could not be evaluated: {e}",
+                                           "step": step_count})
+                continue
             step_count += 1
 
             cumulative_opt += max(0.0, step["optimal_value"])
@@ -3753,7 +3828,14 @@ def health():
 
 
 try:
-    frontend_path = os.path.abspath("../frontend/dist")
+    # Resolve relative to THIS file, not the process CWD — uvicorn launched
+    # with --app-dir (or from any directory) must still find the build.
+    _here = os.path.dirname(os.path.abspath(__file__))
+    _candidates = [
+        os.path.abspath(os.path.join(_here, "..", "frontend", "dist")),
+        os.path.abspath("../frontend/dist"),
+    ]
+    frontend_path = next((p for p in _candidates if os.path.exists(p)), _candidates[0])
     if os.path.exists(frontend_path):
         app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
         print(f"[startup] Frontend mounted successfully from: {frontend_path}")
