@@ -225,6 +225,12 @@ class AuditResponse(BaseModel):
     # names, e.g. "solar_revenue_omr" → OMR). PDF + certificate render this
     # instead of assuming dollars. "USD" = legacy default.
     currency: Optional[str] = "USD"
+    # Offline audits benchmark against ETL — the perfect-foresight hindsight
+    # optimum (Reference Manual Ch 6.1) — so dq_score is formally the ECF.
+    benchmark: Optional[str] = "ETL (perfect-foresight hindsight, Ref. Manual Ch 6.1)"
+    # Ch 8.2 split: {forecast_gap, execution_gap, recommended_value, method}.
+    # Present only for storage audits whose file carries a forecast column.
+    gap_attribution: Optional[Dict[str, Any]] = None
     decision_log: List[DecisionRecord]
     # Extended EDA sections
     asset_name: Optional[str] = "Energy Asset"
@@ -629,12 +635,17 @@ def _dispatch_mode(asset_type: Optional[str]) -> str:
     return "storage"  # default + explicit storage types
 
 
-def _run_optimizer_storage(asset: AssetSpecs, prices: List[float], dt_hours: float = 1.0) -> dict:
+def _run_optimizer_storage(asset: AssetSpecs, prices: List[float], dt_hours: float = 1.0,
+                           return_charge: bool = False):
     """
     BESS MILP. dt_hours is the step duration: SoC moves by P × dt / E_max per
     step, so a 5-minute SCADA feed (dt=1/12) no longer lets the model shift
     12× the physically possible energy per step. dt=1.0 reproduces the v1
     reference audit exactly.
+
+    return_charge=True also returns the optimal charge schedule — needed by
+    the EDV accounting (Reference Manual Vol II Ch 3: J subtracts the charge
+    purchase cost) and by the Ch 8.2 gap-attribution second solve.
     """
     hours = range(len(prices))
     prob = pulp.LpProblem("PREDAIOT_MILP", pulp.LpMaximize)
@@ -658,7 +669,9 @@ def _run_optimizer_storage(asset: AssetSpecs, prices: List[float], dt_hours: flo
         if t == max(hours):
             prob += soc[t] == asset.soc_init
     prob.solve(pulp.PULP_CBC_CMD(msg=0))
-    return {t: (p_dis[t].varValue or 0.0) for t in hours}
+    dis = {t: (p_dis[t].varValue or 0.0) for t in hours}
+    ch  = {t: (p_ch[t].varValue or 0.0) for t in hours}
+    return (dis, ch) if return_charge else dis
 
 
 def _run_optimizer_intermittent(asset: AssetSpecs, time_series_list: list) -> dict:
@@ -761,6 +774,21 @@ def run_optimizer(asset: AssetSpecs, time_series_list: list, dt_hours: float = 1
     if mode == "dispatchable":
         return _run_optimizer_dispatchable(asset, prices)
     return _run_optimizer_storage(asset, prices, dt_hours=dt_hours)
+
+
+def run_optimizer_full(asset: AssetSpecs, time_series_list: list, dt_hours: float = 1.0) -> tuple:
+    """
+    Like run_optimizer but also returns the optimal CHARGE schedule (empty for
+    non-storage modes, which have no charging concept). The EDV ledger needs
+    both sides: per Reference Manual Vol II Ch 3 the storage objective is
+    J = [P·P_dis − P·P_ch]·Δt − C_deg — charging cost is real money.
+    """
+    mode = _dispatch_mode(asset.asset_type)
+    if mode == "storage":
+        prices = [float(ts.get("price", 0)) for ts in time_series_list]
+        dis, ch = _run_optimizer_storage(asset, prices, dt_hours=dt_hours, return_charge=True)
+        return dis, ch
+    return run_optimizer(asset, time_series_list, dt_hours=dt_hours), {}
 
 # ==========================================
 # 5. NEW: EDA Intelligence Engine
@@ -1275,9 +1303,11 @@ def _build_ai_commentary(
     return "\n".join(L)
 
 def _risk_level(dq: float) -> str:
-    if dq >= 0.70:
+    # War Room thresholds per Reference Manual Vol III Part 1, Screen 1:
+    # green > 0.9, yellow > 0.7, red below.
+    if dq >= 0.90:
         return "Low"
-    elif dq >= 0.40:
+    elif dq >= 0.70:
         return "Moderate"
     return "Severe"
 
@@ -1298,7 +1328,7 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
     pre-existing hourly audit byte-identical.
     """
     dt_hours = float(dt_hours) if dt_hours and dt_hours > 0 else 1.0
-    optimal_actions = run_optimizer(asset, time_series_list, dt_hours=dt_hours)
+    optimal_actions, optimal_charges = run_optimizer_full(asset, time_series_list, dt_hours=dt_hours)
     total_edv_opt, total_edv_act = 0.0, 0.0
     decision_log = []
     db = SessionLocal() if save_to_db else None
@@ -1312,11 +1342,13 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
     # reads as "recoverable value."
     mode = _dispatch_mode(asset.asset_type)
     is_load = (mode == "load")
+    is_storage = (mode == "storage")
     peak_price = max((float(ts.get("price", 0) or 0) for ts in time_series_list), default=0.0)
 
     try:
         for i, ts in enumerate(time_series_list):
             opt_dis  = optimal_actions.get(i, 0.0)
+            opt_ch   = optimal_charges.get(i, 0.0)
             # Load-class inputs may put consumption in actual_charge; other
             # modes use actual_discharge. Fall back if the caller only filled one.
             if is_load:
@@ -1333,6 +1365,15 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
             if is_load:
                 edv_opt_step = (peak_price - price) * opt_dis * dt_hours
                 edv_act_step = (peak_price - price) * act_dis * dt_hours
+            elif is_storage:
+                # Reference Manual Vol II Ch 3: J = [P·P_dis − P·P_ch]·Δt − C_deg.
+                # Charging is paid for at the market price — omitting it (the
+                # old formula) reported gross discharge margin, overstating the
+                # optimal by the whole charge bill (observed: 536 vs ~209 OMR
+                # on the Ibri2 reference file).
+                act_ch = float(ts.get("actual_charge", 0) or 0)
+                edv_opt_step = ((price - asset.deg_cost) * opt_dis - price * opt_ch) * dt_hours
+                edv_act_step = ((price - asset.deg_cost) * act_dis - price * act_ch) * dt_hours
             else:
                 edv_opt_step = ((price * opt_dis) - (asset.deg_cost * opt_dis)) * dt_hours
                 edv_act_step = ((price * act_dis) - (asset.deg_cost * act_dis)) * dt_hours
@@ -1394,6 +1435,37 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
     dq_score = max(0.0, min(1.0, dq_score))
     total_gap = total_edv_opt - total_edv_act
 
+    # ── Gap Attribution per Reference Manual Ch 8.2 ─────────────────────
+    # G_total = G_forecast + G_execution. d_rec = what the MILP recommends
+    # using the FORECAST prices; evaluating d_rec under realized prices
+    # telescopes the gap exactly:
+    #   G_forecast  = J(d*|P_act) − J(d_rec|P_act)  (forecast imperfection)
+    #   G_execution = J(d_rec|P_act) − J(d_act|P_act) (not following the rec)
+    # Storage-only (the MILP mode) and only when a forecast column exists.
+    gap_attribution = None
+    if is_storage and time_series_list:
+        fc_raw = [ts.get("forecast_price") for ts in time_series_list]
+        n_ok = sum(1 for f in fc_raw if f is not None and f == f)
+        if n_ok >= 0.9 * len(time_series_list):
+            try:
+                fc_prices = [float(f) if (f is not None and f == f) else 0.0 for f in fc_raw]
+                rec_dis, rec_ch = _run_optimizer_storage(asset, fc_prices, dt_hours=dt_hours,
+                                                         return_charge=True)
+                j_rec_actual = sum(
+                    ((float(ts.get("price", 0)) - asset.deg_cost) * rec_dis.get(i, 0.0)
+                     - float(ts.get("price", 0)) * rec_ch.get(i, 0.0)) * dt_hours
+                    for i, ts in enumerate(time_series_list)
+                )
+                gap_attribution = {
+                    "forecast_gap":  round(total_edv_opt - j_rec_actual, 2),
+                    "execution_gap": round(j_rec_actual - total_edv_act, 2),
+                    "recommended_value": round(j_rec_actual, 2),
+                    "method": ("Ch 8.2 telescoping split under realized prices: "
+                               "G = [J(d*|P) - J(d_rec|P)] + [J(d_rec|P) - J(d_act|P)]"),
+                }
+            except Exception:
+                gap_attribution = None  # attribution is enrichment, never fatal
+
     # Build EDA intelligence layers. Annualisation uses the span actually
     # audited (8760 / span_hours) — for a 24h hourly file this is exactly the
     # legacy ×365, for a 5-minute SCADA day it stops over-scaling 12×.
@@ -1409,6 +1481,16 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
         eda_metrics=eda_metrics, opportunities=opportunities, root_causes=root_causes,
         annual_factor=annual_factor, currency=currency,
     )
+    if gap_attribution:
+        ai_commentary += (
+            "\n\nGAP ATTRIBUTION (Ref. Manual Ch 8.2)\n"
+            f"Forecast gap   {_fmt_money(gap_attribution['forecast_gap'], currency)}"
+            "  — value unreachable because the day-ahead forecast was imperfect "
+            "(not operator-attributable).\n"
+            f"Execution gap  {_fmt_money(gap_attribution['execution_gap'], currency)}"
+            "  — value lost by not following the forecast-based recommendation "
+            "(operator / automation attributable)."
+        )
 
     top_sources = []
     for rc in root_causes[:5]:
@@ -1430,6 +1512,7 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
         edv_actual_total=round(total_edv_act, 2),
         dq_score=round(dq_score, 4),
         dq_score_raw=round(dq_score_raw, 4),
+        gap_attribution=gap_attribution,
         total_gap_usd=round(total_gap, 2),
         decision_log=decision_log,
         # Extended EDA
@@ -2558,6 +2641,42 @@ async def audit_from_file(
                                 "specs likely don't match this asset — review the resolved mapping "
                                 "before quoting these results."))
 
+        # Ch 4.2 third domain case: EDV_optimal ≈ 0 but EDV_actual > 0 is an
+        # ERROR STATE per the Reference Manual (profit was mathematically
+        # impossible) — surface it, never certify it silently.
+        if result.edv_optimal_total <= 0.01 and result.edv_actual_total > 0.01:
+            dq_flags.append(_dq("warning", "dq_undefined_error_state",
+                                "The model found no economic opportunity in this period, yet the "
+                                "asset reports captured value — DQ is undefined here (Ref. Manual "
+                                "Ch 4.2 error state). Check asset specs and column mapping."))
+
+        # Reconciliation with the file's OWN gap estimate, when it carries one
+        # (many SCADA exports embed a simple-rule gap column). Disclosing the
+        # comparison — instead of silently ignoring the column — is what lets
+        # an operator trust the MILP figure.
+        embedded_col = next(
+            (c for c in df.columns
+             if "economic_decision_gap" in _normalise_col(str(c))
+             or _normalise_col(str(c)).startswith("edg_")
+             or _normalise_col(str(c)) in ("edg", "gap_omr", "gap_usd")), None)
+        if embedded_col is not None:
+            emb = pd.to_numeric(df[embedded_col], errors="coerce").fillna(0.0)
+            emb_total = float(emb.sum())
+            ours = float(result.total_gap_usd)
+            if emb_total > 0:
+                ratio = ours / emb_total
+                if 0.75 <= ratio <= 1.25:
+                    dq_flags.append(_dq("info", "embedded_gap_consistent",
+                                        f"Your file carries its own gap estimate ({emb_total:,.0f}) — "
+                                        f"consistent with the MILP counterfactual ({ours:,.0f})."))
+                else:
+                    dq_flags.append(_dq("info", "embedded_gap_differs",
+                                        f"Your file carries its own gap estimate ({emb_total:,.0f}), "
+                                        f"while the MILP counterfactual finds {ours:,.0f}. The embedded "
+                                        "column is typically a simple threshold rule; the MILP evaluates "
+                                        "every feasible dispatch trajectory (Ref. Manual Ch 9), so a "
+                                        "difference is expected — both are shown for transparency."))
+
         _latest_by_token[lead.token] = result.dict()   # per-tenant cache — no cross-leak
         background.add_task(_bump_audit_count, lead.token)
 
@@ -3231,7 +3350,7 @@ async def get_certificate_for_latest(lead: TrialLead = Depends(require_trial_tok
     audit. Gated on the trial token per the tenant-isolation fix.
     """
     data = _latest_by_token.get(lead.token)
-    if not data or not data.get("dq_score"):
+    if not data or data.get("dq_score") is None:
         return JSONResponse(status_code=404, content={"detail": "No audit has been run yet."})
     return _build_certificate(data)
 
@@ -3525,11 +3644,61 @@ async def generate_audit_pdf(
     )
 
 
+@app.get("/api/v1/audit/ledger.csv")
+async def get_audit_ledger_csv(lead: TrialLead = Depends(require_trial_token)):
+    """
+    Economic Energy Ledger (Reference Manual Ch 8.1): the caller's most
+    recent audit as a step-by-step CSV. Every headline number on the PDF is
+    the sum of a column in this file — anyone can open it and reconcile the
+    certificate line by line. R_k rows, fully auditable.
+    """
+    data = _latest_by_token.get(lead.token)
+    if not data or not data.get("decision_log"):
+        return JSONResponse(status_code=404, content={"detail": "No audit has been run yet."})
+
+    import csv as _csv
+    buf = StringIO()
+    w = _csv.writer(buf, lineterminator="\n")
+    cur = (data.get("currency") or "USD").lower()
+    w.writerow(["step", "hour", f"price_{cur}_per_mwh", "forecast_price",
+                "optimal_action_mw", "actual_action_mw",
+                f"edv_optimal_step_{cur}", f"edv_actual_step_{cur}",
+                f"gap_step_{cur}", f"cumulative_gap_{cur}",
+                "decision_type", "confidence", "soc",
+                "curtailment_mw", "operator_override"])
+    cum = 0.0
+    for i, r in enumerate(data["decision_log"], 1):
+        g = float(r.get("gap_step") or 0)
+        cum += g
+        w.writerow([i, r.get("hour"), r.get("price"), r.get("forecast_price"),
+                    r.get("optimal_action"), r.get("actual_action"),
+                    r.get("edv_optimal_step"), r.get("edv_actual_step"),
+                    round(g, 2), round(cum, 2),
+                    r.get("decision_type"), r.get("confidence"), r.get("soc"),
+                    r.get("curtailment_mw"), r.get("operator_override")])
+    # Trailer: totals for one-glance reconciliation against the PDF.
+    w.writerow([])
+    w.writerow(["TOTALS", "", "", "", "", "",
+                data.get("edv_optimal_total"), data.get("edv_actual_total"),
+                data.get("total_gap_usd"), round(cum, 2),
+                f"dq_score={data.get('dq_score')}", "", "", "", ""])
+    ga = data.get("gap_attribution") or {}
+    if ga:
+        w.writerow(["GAP ATTRIBUTION (Ch 8.2)", "", "", "", "", "",
+                    f"forecast_gap={ga.get('forecast_gap')}",
+                    f"execution_gap={ga.get('execution_gap')}",
+                    "", "", "", "", "", "", ""])
+    return Response(
+        content=buf.getvalue(), media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="predaiot_audit_ledger.csv"'},
+    )
+
+
 @app.get("/api/v1/audit/pdf/latest")
 async def get_latest_audit_pdf(lead: TrialLead = Depends(require_trial_token)):
     """PDF for the caller's most recent audit. Per-tenant cache, no cross-leak."""
     data = _latest_by_token.get(lead.token)
-    if not data or not data.get("dq_score"):
+    if not data or data.get("dq_score") is None:
         return JSONResponse(status_code=404, content={"detail": "No audit has been run yet."})
     pdf_bytes = _build_audit_pdf(data)
     safe_asset = "".join(ch for ch in (data.get("asset_name") or "audit") if ch.isalnum() or ch in "-_") or "audit"

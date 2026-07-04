@@ -1414,6 +1414,26 @@ export default function App() {
     setPdfLoading(false);
   };
 
+  // ── Download Economic Energy Ledger (Ref. Manual Ch 8.1) ───────────
+  // Step-by-step CSV where every PDF headline number is a column sum —
+  // the transparency artifact that lets a customer reconcile the audit.
+  const downloadLedger = async () => {
+    if (!data.dq_score) return alert('Run an audit first.');
+    if (!requireTrial()) return;
+    try {
+      const r = await axios.get('/api/v1/audit/ledger.csv', { responseType: 'blob' });
+      const blobUrl = URL.createObjectURL(new Blob([r.data], { type: 'text/csv' }));
+      const a = document.createElement('a');
+      a.href = blobUrl; a.download = 'predaiot_audit_ledger.csv';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    } catch (err) {
+      if (err?.response?.status !== 401 && err?.response?.status !== 402) {
+        alert('Ledger export failed. Run an audit first, then try again.');
+      }
+    }
+  };
+
   // ── Claude AI enhanced commentary ─────────────────────────────────
   const generateAI = async () => {
     if (!data.dq_score) return;
@@ -1607,6 +1627,11 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           <BtnOutline color={DS.purple} onClick={downloadPdf} disabled={pdfLoading || !data.dq_score}>
             {pdfLoading ? 'PDF…' : (isMobile ? '⬇ PDF' : '⬇ DOWNLOAD PDF')}
           </BtnOutline>
+          {!isMobile && (
+            <BtnOutline color={DS.cyan} onClick={downloadLedger} disabled={!data.dq_score}>
+              ⬇ LEDGER CSV
+            </BtnOutline>
+          )}
           {!isMobile && (
             <BtnOutline color={DS.dim} onClick={() => setShowMethodology(true)}>METHODOLOGY</BtnOutline>
           )}
