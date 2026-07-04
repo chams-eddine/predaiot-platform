@@ -138,6 +138,9 @@ class TimeStepData(BaseModel):
 class AuditRequest(BaseModel):
     asset: AssetSpecs
     time_series: List[TimeStepData]
+    # Step duration in hours (0.0833… = 5-minute SCADA data). Defaults to the
+    # legacy hourly assumption so existing callers get identical numbers.
+    dt_hours: Optional[float] = 1.0
 
 class DecisionRecord(BaseModel):
     hour: Optional[int] = None
@@ -214,6 +217,9 @@ class AuditResponse(BaseModel):
     edv_optimal_total: float
     edv_actual_total: float
     dq_score: float
+    # Unclamped DQ ratio. > 1.0 signals model/data disagreement (bad column
+    # mapping or asset specs) — ingestion turns that into a data-quality flag.
+    dq_score_raw: Optional[float] = None
     total_gap_usd: float
     decision_log: List[DecisionRecord]
     # Extended EDA sections
@@ -605,11 +611,27 @@ def _dispatch_mode(asset_type: Optional[str]) -> str:
     if t in _INTERMITTENT_TYPES: return "intermittent"
     if t in _DISPATCHABLE_TYPES: return "dispatchable"
     if t in _LOAD_TYPES:         return "load"
+    # Hybrid labels from real SCADA exports: "Solar+BESS", "Wind + Storage",
+    # "PV/Battery". The storage component is the one making dispatch decisions,
+    # so storage keywords win over generation keywords.
+    if any(k in t for k in ("bess", "battery", "storage")):
+        return "storage"
+    if any(k in t for k in ("solar", "pv", "wind", "tidal", "wave")):
+        return "intermittent"
+    if any(k in t for k in ("gas", "coal", "thermal", "nuclear", "geothermal", "chp")):
+        return "dispatchable"
+    if any(k in t for k in ("hydrogen", "electrolyzer", "desal")):
+        return "load"
     return "storage"  # default + explicit storage types
 
 
-def _run_optimizer_storage(asset: AssetSpecs, prices: List[float]) -> dict:
-    """Original BESS MILP. Unchanged from v1 — preserves the reference audit."""
+def _run_optimizer_storage(asset: AssetSpecs, prices: List[float], dt_hours: float = 1.0) -> dict:
+    """
+    BESS MILP. dt_hours is the step duration: SoC moves by P × dt / E_max per
+    step, so a 5-minute SCADA feed (dt=1/12) no longer lets the model shift
+    12× the physically possible energy per step. dt=1.0 reproduces the v1
+    reference audit exactly.
+    """
     hours = range(len(prices))
     prob = pulp.LpProblem("PREDAIOT_MILP", pulp.LpMaximize)
     p_dis = pulp.LpVariable.dicts("Discharge", hours, lowBound=0, upBound=asset.p_max)
@@ -624,10 +646,11 @@ def _run_optimizer_storage(asset: AssetSpecs, prices: List[float]) -> dict:
     for t in hours:
         prob += p_dis[t] <= asset.p_max * is_dis[t]
         prob += p_ch[t]  <= asset.p_max * (1 - is_dis[t])
+        step_delta = (p_ch[t] * asset.eta_ch - p_dis[t] / asset.eta_dis) * dt_hours / asset.e_max
         if t == 0:
-            prob += soc[t] == asset.soc_init + (p_ch[t] * asset.eta_ch - p_dis[t] / asset.eta_dis) / asset.e_max
+            prob += soc[t] == asset.soc_init + step_delta
         else:
-            prob += soc[t] == soc[t-1] + (p_ch[t] * asset.eta_ch - p_dis[t] / asset.eta_dis) / asset.e_max
+            prob += soc[t] == soc[t-1] + step_delta
         if t == max(hours):
             prob += soc[t] == asset.soc_init
     prob.solve(pulp.PULP_CBC_CMD(msg=0))
@@ -714,11 +737,16 @@ def _run_optimizer_load(asset: AssetSpecs, time_series_list: list) -> dict:
     return optimal
 
 
-def run_optimizer(asset: AssetSpecs, time_series_list: list) -> dict:
+def run_optimizer(asset: AssetSpecs, time_series_list: list, dt_hours: float = 1.0) -> dict:
     """
     Dispatch router. Picks the right optimizer for the asset class and returns
     `{step_index: optimal_dispatch_mw}`. Defaults to the storage MILP so legacy
     audits (BESS, asset_type unset / 'Generic') produce identical numbers.
+
+    dt_hours only affects the storage MILP (SoC energy balance). The
+    intermittent / dispatchable / load optimizers are per-step MW policies —
+    step duration cancels out of their dispatch decision, and the money side
+    is handled centrally in process_calculation's EDV × dt.
     """
     mode = _dispatch_mode(asset.asset_type)
     if mode == "intermittent":
@@ -728,7 +756,7 @@ def run_optimizer(asset: AssetSpecs, time_series_list: list) -> dict:
     prices = [float(ts.get("price", 0)) for ts in time_series_list]
     if mode == "dispatchable":
         return _run_optimizer_dispatchable(asset, prices)
-    return _run_optimizer_storage(asset, prices)
+    return _run_optimizer_storage(asset, prices, dt_hours=dt_hours)
 
 # ==========================================
 # 5. NEW: EDA Intelligence Engine
@@ -1024,15 +1052,19 @@ _SECTOR_OPS = {
 }
 
 
-def _build_opportunities(total_gap: float, asset_type: str, decision_log: list = None) -> List[OpportunityItem]:
+def _build_opportunities(total_gap: float, asset_type: str, decision_log: list = None,
+                         annual_factor: float = 365.0) -> List[OpportunityItem]:
     """
     Build a prioritised Economic Action Plan™ appropriate to the asset class.
 
     Routes on dispatch mode so a Solar audit doesn't recommend "Charging Window
     Optimization." Each mode ships 5 curated opportunities plus a mode-agnostic
     "Operator Override Governance" card when overrides > 5.
+
+    annual_factor scales the audited-period gap to a year (8760 / span_hours).
+    Default 365 = the legacy "gap covers exactly one day" assumption.
     """
-    annual = total_gap * 365
+    annual = total_gap * annual_factor
     log = decision_log or []
 
     stats = {
@@ -1144,6 +1176,7 @@ def _build_ai_commentary(
     asset_name: str, total_gap: float, total_opt: float,
     decision_log: List[DecisionRecord], dq: float,
     eda_metrics=None, opportunities: list = None, root_causes: list = None,
+    annual_factor: float = 365.0,
 ) -> str:
     """
     Generates the default (non-Claude) Economic Intelligence Report™.
@@ -1201,7 +1234,7 @@ def _build_ai_commentary(
     L.append(
         f"Had the dispatch strategy followed the economically optimal schedule, the asset could have "
         f"recovered approximately {recoverable}% additional revenue during the audited period without "
-        f"additional hardware investment. Annualised, this represents an estimated ${total_gap*365*0.68:,.0f} "
+        f"additional hardware investment. Annualised, this represents an estimated ${total_gap*annual_factor*0.68:,.0f} "
         f"in recoverable value."
     )
     L.append("")
@@ -1247,14 +1280,21 @@ def _risk_level(dq: float) -> str:
 # ==========================================
 # 6. Central Calculation Engine  (CORE UNCHANGED + EDA LAYER)
 # ==========================================
-def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: bool = True):
+def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: bool = True,
+                        dt_hours: float = 1.0):
     """
     Runs the MILP + EDV + EDA pipeline. Does NOT touch the per-token cache —
     the endpoint handler is responsible for caching the result under its
     trial token. Keeping the tenant-scoping outside this function preserves
     it as a pure calc engine (no auth coupling).
+
+    dt_hours = duration of one time step. All monetary EDV terms are
+    price × MW × dt (money = energy × price, not power × price), and the
+    storage MILP's SoC balance uses the same dt. Default 1.0 keeps every
+    pre-existing hourly audit byte-identical.
     """
-    optimal_actions = run_optimizer(asset, time_series_list)
+    dt_hours = float(dt_hours) if dt_hours and dt_hours > 0 else 1.0
+    optimal_actions = run_optimizer(asset, time_series_list, dt_hours=dt_hours)
     total_edv_opt, total_edv_act = 0.0, 0.0
     decision_log = []
     db = SessionLocal() if save_to_db else None
@@ -1287,11 +1327,11 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
             demand   = ts.get("grid_demand", None)
 
             if is_load:
-                edv_opt_step = (peak_price - price) * opt_dis
-                edv_act_step = (peak_price - price) * act_dis
+                edv_opt_step = (peak_price - price) * opt_dis * dt_hours
+                edv_act_step = (peak_price - price) * act_dis * dt_hours
             else:
-                edv_opt_step = (price * opt_dis) - (asset.deg_cost * opt_dis)
-                edv_act_step = (price * act_dis) - (asset.deg_cost * act_dis)
+                edv_opt_step = ((price * opt_dis) - (asset.deg_cost * opt_dis)) * dt_hours
+                edv_act_step = ((price * act_dis) - (asset.deg_cost * act_dis)) * dt_hours
             gap_step     = edv_opt_step - edv_act_step
             total_edv_opt += edv_opt_step
             total_edv_act += edv_act_step
@@ -1341,25 +1381,42 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
         dq_score = 1.0
     else:
         dq_score = 0.0
+    # DQ is a ratio against a modeled UPPER BOUND, so raw > 1.0 means the
+    # model disagrees with reality — wrong column mapping, wrong asset specs,
+    # or actual dispatch exceeding p_max. Clamp for display (Ch. 4.2 defines
+    # DQ ∈ [0,1]) but keep the raw value so ingestion can flag the mismatch
+    # instead of silently reporting a perfect score.
+    dq_score_raw = dq_score
+    dq_score = max(0.0, min(1.0, dq_score))
     total_gap = total_edv_opt - total_edv_act
 
-    # Build EDA intelligence layers
+    # Build EDA intelligence layers. Annualisation uses the span actually
+    # audited (8760 / span_hours) — for a 24h hourly file this is exactly the
+    # legacy ×365, for a 5-minute SCADA day it stops over-scaling 12×.
+    span_hours_eda = len(time_series_list) * dt_hours
+    annual_factor = (8760.0 / span_hours_eda) if span_hours_eda > 0 else 365.0
     eda_metrics  = _build_eda_metrics(decision_log, total_edv_opt, total_edv_act, asset.asset_type)
     root_causes  = _build_root_causes(decision_log, total_gap, total_edv_opt)
-    opportunities = _build_opportunities(total_gap, asset.asset_type, decision_log)
+    opportunities = _build_opportunities(total_gap, asset.asset_type, decision_log,
+                                         annual_factor=annual_factor)
     heat_map     = _build_heat_map(decision_log)
     ai_commentary = _build_ai_commentary(
         asset.asset_name, total_gap, total_edv_opt, decision_log, dq_score,
         eda_metrics=eda_metrics, opportunities=opportunities, root_causes=root_causes,
+        annual_factor=annual_factor,
     )
 
     top_sources = []
     for rc in root_causes[:5]:
         top_sources.append({"name": rc.category, "usd": rc.loss_usd, "pct": rc.contribution_pct})
 
+    # Annualise from the actual span covered, not "×365 days" — a 5-minute
+    # file covering 24h and an hourly file covering 48h both scale correctly.
+    span_hours = span_hours_eda
+    projection_12m = total_gap * annual_factor if span_hours > 0 else 0.0
     financial_leakage = FinancialLeakage(
         period_24h=round(total_gap, 2),
-        projection_12m=round(total_gap * 365, 2),
+        projection_12m=round(projection_12m, 2),
         top_sources=top_sources
     )
 
@@ -1368,12 +1425,13 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
         edv_optimal_total=round(total_edv_opt, 2),
         edv_actual_total=round(total_edv_act, 2),
         dq_score=round(dq_score, 4),
+        dq_score_raw=round(dq_score_raw, 4),
         total_gap_usd=round(total_gap, 2),
         decision_log=decision_log,
         # Extended EDA
         asset_name=asset.asset_name,
         asset_type=asset.asset_type,
-        audit_period_label=f"{len(time_series_list)} Steps ({len(time_series_list)//12}h)",
+        audit_period_label=f"{len(time_series_list)} Steps ({span_hours:g}h)",
         risk_level=_risk_level(dq_score),
         eda_metrics=eda_metrics,
         root_causes=root_causes,
@@ -1442,7 +1500,8 @@ async def calculate_gap(
     background: BackgroundTasks,
     lead: TrialLead = Depends(require_trial_token),
 ):
-    result = process_calculation(audit_req.asset, [ts.dict() for ts in audit_req.time_series])
+    result = process_calculation(audit_req.asset, [ts.dict() for ts in audit_req.time_series],
+                                 dt_hours=audit_req.dt_hours or 1.0)
     _latest_by_token[lead.token] = result.dict()   # per-tenant cache — no cross-leak
     background.add_task(_bump_audit_count, lead.token)
     return result
@@ -1484,7 +1543,9 @@ COLUMN_ALIASES = {
         "generation", "actual_generation", "gen_mw", "output_mw",
         "dispatch_mw", "actual_dispatch", "p_actual", "p_out",
         "power_mw", "energy_out", "production", "actual_production",
-        "mw_out", "discharge_mw", "bess_discharge", "solar_output",
+        "mw_out", "discharge_mw", "bess_discharge", "bess_discharge_mw",
+        "battery_discharge", "battery_discharge_mw", "storage_discharge_mw",
+        "pcs_discharge_mw", "solar_output",
         "wind_output", "p_gen", "pgen", "p_dis", "pdis",
         "net_generation", "real_power", "active_power",
         "gross_generation", "net_output",
@@ -1528,7 +1589,9 @@ COLUMN_ALIASES = {
     # ── actual_charge — charging power (BESS / pumped hydro / electrolyzer) ─────
     "actual_charge": [
         "actual_charge", "charge", "charge_mw", "p_charge", "pcharge",
-        "charging_power", "bess_charge", "charge_power", "p_ch",
+        "charging_power", "bess_charge", "bess_charge_mw",
+        "battery_charge", "battery_charge_mw", "storage_charge_mw",
+        "charge_power", "p_ch",
         "pumping_power", "pump_power_mw", "h2_load", "electrolyzer_load",
         "الشحن", "طاقة_الشحن",
     ],
@@ -1650,12 +1713,23 @@ def _resolve_columns_verbose(df_cols: list) -> dict:
     match_type = {}         # internal → "exact" | "fuzzy"
     fuzzy_scores = {}       # internal → {matched_alias, score, from_col}
 
-    # Tier 1: exact alias match
+    # Tier 1: exact alias match. Iterate the ALIAS LIST in order — each list is
+    # curated most-specific-first, so with hybrid files that expose several
+    # plausible columns (e.g. a Solar+BESS export with both `solar_output` and
+    # `bess_discharge_mw`) the storage-specific name wins deterministically
+    # instead of "whichever column happened to come first in the file". A
+    # column can only be claimed once across internals.
+    norm_to_orig: dict = {}
+    for original, norm in normalised.items():
+        norm_to_orig.setdefault(norm, original)  # first file occurrence wins ties
+    claimed = set()
     for internal, aliases in all_aliases.items():
-        for original, norm in normalised.items():
-            if norm in aliases and internal not in resolved:
+        for alias in aliases:
+            original = norm_to_orig.get(alias)
+            if original is not None and original not in claimed:
                 resolved[internal] = original
                 match_type[internal] = "exact"
+                claimed.add(original)
                 break
 
     # Tier 2: fuzzy match for the remainder
@@ -1936,7 +2010,241 @@ def _detect_and_resample(df: pd.DataFrame) -> tuple:
     return df, notes
 
 
+# ==========================================
+# DATA QUALITY & CLEANING LAYER
+# "Trust of result is everything" — every silent auto-correction the pipeline
+# makes gets a named flag the operator can read before quoting the audit.
+# Severity: "warning" = affects result trust, "info" = cosmetic / advisory.
+# ==========================================
+
+def _dq(severity: str, code: str, message: str) -> dict:
+    return {"severity": severity, "code": code, "message": message}
+
+
+def _json_safe(obj):
+    """Recursively replace NaN/±inf with None — strict JSON has no NaN."""
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, float) and (obj != obj or obj in (float("inf"), float("-inf"))):
+        return None
+    return obj
+
+
+def _order_and_dedupe_timestamps(df: pd.DataFrame) -> tuple:
+    """
+    Sort out-of-order rows, drop unparseable timestamps, drop duplicate
+    timestamps (keep first). Only acts when "hour" is a real datetime.
+    """
+    flags = []
+    if "hour" not in df.columns or not pd.api.types.is_datetime64_any_dtype(df["hour"]):
+        return df, flags
+
+    n_nat = int(df["hour"].isna().sum())
+    if n_nat:
+        df = df[df["hour"].notna()].copy()
+        flags.append(_dq("warning", "timestamps_dropped",
+                         f"{n_nat} row(s) had unreadable timestamps and were removed from the audit."))
+    if len(df) and not df["hour"].is_monotonic_increasing:
+        df = df.sort_values("hour").reset_index(drop=True)
+        flags.append(_dq("info", "timestamps_sorted",
+                         "Rows were not in chronological order — sorted by timestamp."))
+    n_dup = int(df["hour"].duplicated().sum())
+    if n_dup:
+        df = df[~df["hour"].duplicated(keep="first")].reset_index(drop=True)
+        flags.append(_dq("warning", "duplicate_timestamps",
+                         f"{n_dup} duplicate timestamp row(s) removed (kept the first occurrence)."))
+    return df, flags
+
+
+def _coerce_numeric_columns(df: pd.DataFrame) -> tuple:
+    """
+    Numeric coercion with honest gap handling. Prices are load-bearing for
+    every EDV figure, so missing prices are linearly interpolated from
+    neighbours (with a flag) instead of silently becoming $0 — a fake $0
+    price fabricates arbitrage that never existed. Power columns default
+    missing → 0 MW and negatives are clipped (charge/discharge arrive in
+    separate columns; a negative there is a sign-convention artefact).
+    """
+    flags = []
+    for col in ("price", "actual_discharge", "actual_charge", "curtailment_mw"):
+        if col not in df.columns:
+            continue
+        num = pd.to_numeric(
+            df[col].astype(str).str.replace(r"[^\d.\-]", "", regex=True),
+            errors="coerce",
+        )
+        n_bad = int(num.isna().sum())
+        if col == "price":
+            if n_bad and n_bad < len(num):
+                num = num.interpolate("linear", limit_direction="both")
+                flags.append(_dq("warning", "price_gaps_interpolated",
+                                 f"{n_bad} missing/non-numeric price value(s) were linearly "
+                                 "interpolated from neighbouring steps."))
+            df[col] = num.fillna(0.0)
+        else:
+            if n_bad and n_bad < len(num):
+                flags.append(_dq("info", f"{col}_gaps_zeroed",
+                                 f"{n_bad} missing {col} value(s) treated as 0 MW."))
+            df[col] = num.fillna(0.0)
+            n_neg = int((df[col] < 0).sum())
+            if n_neg:
+                df[col] = df[col].clip(lower=0.0)
+                flags.append(_dq("info", f"{col}_negatives_clipped",
+                                 f"{n_neg} negative {col} value(s) clipped to 0 MW "
+                                 "(charge and discharge are separate columns)."))
+    return df, flags
+
+
+# Column names that carry a comms / link health status in SCADA exports
+_COMMS_STATUS_ALIASES = {
+    "communication_status", "comm_status", "comms_status", "comms",
+    "link_status", "connection_status", "telemetry_status", "signal_status",
+}
+_COMMS_OK_VALUES = {"ok", "online", "good", "connected", "healthy", "up", "1", "true", "normal"}
+
+
+def _build_sensor_quality_flags(df: pd.DataFrame, dt_hours: float,
+                                p_max: float, e_max: float) -> list:
+    """
+    Read-only plausibility checks on the (renamed) frame. Nothing here mutates
+    data — these flags exist so the operator knows which windows to distrust.
+    """
+    flags = []
+    n_rows = len(df)
+
+    # 1. Comms dropouts (TIMEOUT / LOST / OFFLINE windows → stale sensor values)
+    comms_col = next(
+        (c for c in df.columns if _normalise_col(str(c)) in _COMMS_STATUS_ALIASES), None)
+    if comms_col is not None and n_rows:
+        vals = df[comms_col].astype(str).str.strip().str.lower()
+        bad = vals[~vals.isin(_COMMS_OK_VALUES) & (vals != "nan")]
+        if len(bad):
+            top = ", ".join(f"{v.upper()}×{c}" for v, c in bad.value_counts().head(3).items())
+            flags.append(_dq("warning", "comms_dropouts",
+                             f"{len(bad)} of {n_rows} steps report a degraded telemetry link "
+                             f"({top}). Sensor values in those windows may be stale; they are "
+                             "included in the audit but step-level attributions there should "
+                             "be treated with caution."))
+
+    # 2. SoC physics: a p_max MW converter on an e_max MWh pack can move at most
+    #    p_max·dt/e_max of SoC per step. Bigger jumps = batch-updated SoC sensor.
+    if "soc" in df.columns and e_max and e_max > 0:
+        soc = pd.to_numeric(df["soc"], errors="coerce").dropna()
+        if len(soc) >= 3:
+            soc_pct = soc * 100.0 if float(soc.abs().max()) <= 1.5 else soc
+            max_step_pct = (p_max * dt_hours / e_max) * 100.0
+            viol = int((soc_pct.diff().abs() > max_step_pct * 1.5).sum())
+            if viol:
+                flags.append(_dq("warning", "soc_physics_violation",
+                                 f"{viol} SoC step change(s) exceed what a {p_max:g} MW converter on a "
+                                 f"{e_max:g} MWh pack can physically move in one step (max "
+                                 f"{max_step_pct:.1f}%/step). The SCADA SoC register is likely "
+                                 "batch-updated; the audit relies on the power columns, SoC is advisory."))
+
+    # 3. Frozen price feed: identical price for ≥ 2 hours straight suggests a
+    #    stuck market-data link, not a real market.
+    if "price" in df.columns and n_rows:
+        pr = pd.to_numeric(df["price"], errors="coerce")
+        run_ids = (pr != pr.shift()).cumsum()
+        longest = int(run_ids.value_counts().max()) if pr.notna().any() else 0
+        freeze_threshold = max(3, int(round(2.0 / max(dt_hours, 1e-9))))
+        if longest >= freeze_threshold:
+            flags.append(_dq("warning", "price_feed_frozen",
+                             f"The price column repeats the same value for {longest} consecutive "
+                             "steps (≥ 2 hours) — the market feed may have been frozen in that window."))
+        n_neg = int((pr < 0).sum())
+        if n_neg:
+            flags.append(_dq("info", "negative_prices",
+                             f"{n_neg} step(s) have negative prices — legitimate in some markets; "
+                             "the audit treats them as real."))
+
+    return flags
+
+
+# Currency detection from column-name hints ("solar_revenue_omr" → OMR).
+# Display-only: figures are reported in the file's own currency, we just stop
+# implying dollars when the data plainly isn't in dollars.
+_CURRENCY_HINTS = [
+    ("omr", "OMR"), ("aed", "AED"), ("sar", "SAR"), ("kwd", "KWD"),
+    ("qar", "QAR"), ("bhd", "BHD"), ("eur", "EUR"), ("gbp", "GBP"),
+    ("usd", "USD"),
+]
+
+
+def _detect_currency(raw_columns: list) -> Optional[str]:
+    joined = " " + " ".join(_normalise_col(str(c)) for c in raw_columns) + " "
+    for hint, code in _CURRENCY_HINTS:
+        if f"_{hint}" in joined or f"{hint}_" in joined or f" {hint} " in joined:
+            return code
+    return None
+
+
+def _looks_numeric(v: str) -> bool:
+    try:
+        float(str(v).replace(",", ""))
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _fix_banner_header(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Real Excel/CSV exports often carry a title banner above the real header
+    ("PREDAIOT — Site Export | July 2024" merged across the sheet). pandas
+    then reads the banner as the header and every column becomes "Unnamed: N".
+    Detect that shape, find the first row that actually looks like a header
+    (mostly non-numeric strings across most columns), and re-head the frame.
+
+    Adds a "banner_header_skipped" flag via df.attrs["ingest_flags"] so the
+    correction is visible to the operator.
+    """
+    n_cols = len(df.columns)
+    if n_cols == 0 or len(df) == 0:
+        return df
+    unnamed = sum(1 for c in df.columns
+                  if str(c).startswith("Unnamed:") or not str(c).strip())
+    if unnamed < max(2, n_cols // 2):
+        return df
+
+    for i in range(min(10, len(df))):
+        row = df.iloc[i]
+        vals = [str(v).strip() for v in row if pd.notna(v) and str(v).strip()]
+        if len(vals) < max(2, int(n_cols * 0.6)):
+            continue  # banner / blank spacer row
+        numericish = sum(1 for v in vals if _looks_numeric(v))
+        if numericish > len(vals) * 0.3:
+            continue  # data row, not a header
+        # Group-band rows ("IDENTIFICATION IDENTIFICATION MARKET MARKET …")
+        # repeat a handful of labels; a real header row is nearly all unique.
+        if len(set(vals)) < len(vals) * 0.8:
+            continue
+        new_cols = [str(v).strip() if pd.notna(v) and str(v).strip() else f"col_{j}"
+                    for j, v in enumerate(row)]
+        out = df.iloc[i + 1:].reset_index(drop=True)
+        out.columns = new_cols
+        # Restore numeric dtypes the banner header forced to object.
+        # Positional access — survives any residual duplicate names.
+        for j in range(out.shape[1]):
+            num = pd.to_numeric(out.iloc[:, j], errors="coerce")
+            if num.notna().mean() >= 0.9:
+                out.isetitem(j, num)
+        out.attrs["ingest_flags"] = [_dq(
+            "info", "banner_header_skipped",
+            f"The file starts with {i + 1} title/banner row(s) above the real column "
+            "header — skipped automatically.")]
+        return out
+    return df
+
+
 def _parse_file_bytes(contents: bytes, filename: str) -> pd.DataFrame:
+    """Universal parser + banner-header recovery. See _parse_file_bytes_raw."""
+    df = _parse_file_bytes_raw(contents, filename)
+    return _fix_banner_header(df)
+
+
+def _parse_file_bytes_raw(contents: bytes, filename: str) -> pd.DataFrame:
     """
     Universal file parser — handles CSV/TSV/Excel with automatic encoding detection.
 
@@ -2147,21 +2455,23 @@ async def audit_from_file(
         df, ts_corrections = _detect_excel_serial_timestamps(df)
         df, ts_format = _parse_timestamps(df)
 
+        # Clean: drop unparseable timestamps, sort out-of-order, dedupe.
+        # Parse-stage flags (banner-header recovery) come first.
+        parse_flags = list(df.attrs.get("ingest_flags", []))
+        df, dq_flags = _order_and_dedupe_timestamps(df)
+        dq_flags = parse_flags + dq_flags
+
         # If we still have no usable "hour", fall back to a 0..N-1 index. The
         # audit engine only needs ordering; wall-clock time is a nice-to-have
         # for the resolution detector.
         if 'hour' not in df.columns or df['hour'].isnull().all():
             df['hour'] = range(len(df))
 
-        df = df.fillna({'actual_discharge': 0.0, 'actual_charge': 0.0, 'curtailment_mw': 0.0})
-
-        # Coerce numeric columns — tolerates strings like "12.5 MW"
-        for col in ('price', 'actual_discharge', 'actual_charge', 'curtailment_mw'):
-            if col in df.columns:
-                df[col] = pd.to_numeric(
-                    df[col].astype(str).str.replace(r'[^\d.\-]', '', regex=True),
-                    errors='coerce'
-                ).fillna(0.0)
+        # Coerce numeric columns — tolerates strings like "12.5 MW"; missing
+        # prices interpolate (never fake $0), missing power → 0 MW, each with
+        # a named flag.
+        df, coerce_flags = _coerce_numeric_columns(df)
+        dq_flags.extend(coerce_flags)
 
         # Unit auto-detection (kW→MW, $/kWh→$/MWh)
         df, unit_corrections = _detect_and_apply_units(df)
@@ -2170,25 +2480,66 @@ async def audit_from_file(
         # real datetime, so this is a no-op for CSV/JSON without a timestamp).
         df, resolution_notes = _detect_and_resample(df)
 
+        # Step duration for the audit engine. Detected from timestamps when
+        # available; otherwise the legacy hourly assumption (dt = 1.0).
+        res_sec = resolution_notes.get("detected_resolution_sec")
+        dt_hours = (res_sec / 3600.0) if res_sec else 1.0
+        resolution_notes["dt_hours_used"] = round(dt_hours, 6)
+
+        # Asset specs from meta-columns — first NON-NULL value, because real
+        # SCADA exports fill metadata on row 1 only (or on a random row after
+        # a historian merge).
+        asset_kwargs = {}
+        for key in ASSET_META_ALIASES:
+            if key in df.columns:
+                non_null = df[key].dropna()
+                if len(non_null):
+                    val = non_null.iloc[0]
+                    asset_kwargs[key] = val.strip() if isinstance(val, str) else val
+
+        # Initial SoC from the file's first reading when not given explicitly —
+        # the MILP's arbitrage budget depends on where the battery started.
+        if "soc_init" not in asset_kwargs and "soc" in df.columns:
+            soc_series = pd.to_numeric(df["soc"], errors="coerce").dropna()
+            if len(soc_series):
+                v = float(soc_series.iloc[0])
+                v = v / 100.0 if v > 1.5 else v
+                asset_kwargs["soc_init"] = min(0.95, max(0.1, v))
+                dq_flags.append(_dq("info", "soc_init_from_data",
+                                    f"Initial state of charge taken from the file's first reading: "
+                                    f"{asset_kwargs['soc_init'] * 100:.0f}%."))
+        asset = AssetSpecs(**asset_kwargs)
+
+        # Read-only sensor plausibility checks (comms dropouts, SoC physics,
+        # frozen price feed) — run while "hour" is still a datetime.
+        dq_flags.extend(_build_sensor_quality_flags(df, dt_hours, asset.p_max, asset.e_max))
+        currency = _detect_currency(list(rename_map.keys()) + list(df.columns))
+
         # Collapse "hour" back to an ordered integer for the audit engine
         if 'hour' in df.columns and pd.api.types.is_datetime64_any_dtype(df['hour']):
             df['hour'] = range(len(df))
 
-        # Asset specs from meta-columns (first row)
-        asset_kwargs = {}
-        for key in ASSET_META_ALIASES:
-            if key in df.columns:
-                val = df[key].iloc[0]
-                if pd.notna(val):
-                    asset_kwargs[key] = val
-        asset = AssetSpecs(**asset_kwargs)
-
-        time_series = df[[
+        # NaN → None before records: resampling turns absent optional columns
+        # (forecast_price, soc, grid_demand) into all-NaN floats, and NaN is
+        # not JSON-compliant — it must become null, not poison the response.
+        sub = df[[
             'hour', 'price', 'actual_discharge', 'actual_charge',
             'soc', 'grid_demand', 'curtailment_mw', 'operator_override', 'forecast_price'
-        ]].to_dict('records')
+        ]]
+        time_series = sub.astype(object).where(pd.notna(sub), None).to_dict('records')
 
-        result = process_calculation(asset, time_series)
+        result = process_calculation(asset, time_series, dt_hours=dt_hours)
+
+        # Model/data disagreement: actual "beat" the theoretical optimum →
+        # the mapping or specs are wrong, not the operator superhuman. Flag it
+        # loudly rather than shipping a quietly-clamped perfect score.
+        if (result.dq_score_raw or 0.0) > 1.02:
+            dq_flags.append(_dq("warning", "actual_exceeds_optimal",
+                                f"Actual captured value exceeds the modeled optimum by "
+                                f"{(result.dq_score_raw - 1) * 100:.0f}%. The column mapping or asset "
+                                "specs likely don't match this asset — review the resolved mapping "
+                                "before quoting these results."))
+
         _latest_by_token[lead.token] = result.dict()   # per-tenant cache — no cross-leak
         background.add_task(_bump_audit_count, lead.token)
 
@@ -2197,6 +2548,7 @@ async def audit_from_file(
         has_notes = (
             unit_corrections or ts_corrections or col_info["fuzzy_scores"]
             or ts_format.get("format_detected") or resolution_notes.get("detected_resolution_sec")
+            or dq_flags or currency
         )
         if has_notes:
             result_dict = result.dict()
@@ -2206,8 +2558,10 @@ async def audit_from_file(
                 "fuzzy_column_matches":   col_info["fuzzy_scores"],
                 "timestamp_format":       ts_format,
                 "time_resolution":        resolution_notes,
+                "data_quality":           dq_flags,
+                "currency":               currency,
             }
-            return JSONResponse(content=result_dict)
+            return JSONResponse(content=_json_safe(result_dict))
         return result
 
     except Exception as e:
@@ -2240,16 +2594,35 @@ async def inspect_file(file: UploadFile = File(...)):
         preview = df.copy()
         rename_map = {v: k for k, v in col_map.items() if v in preview.columns}
         preview = preview.rename(columns=rename_map)
-        for col in ('price', 'actual_discharge', 'actual_charge', 'curtailment_mw'):
-            if col in preview.columns:
-                preview[col] = pd.to_numeric(
-                    preview[col].astype(str).str.replace(r'[^\d.\-]', '', regex=True),
-                    errors='coerce'
-                ).fillna(0.0)
+        parse_flags = list(df.attrs.get("ingest_flags", []))
         preview, ts_corrections = _detect_excel_serial_timestamps(preview) if "hour" in preview.columns else (preview, [])
         preview, ts_format = _parse_timestamps(preview)
+        preview, dq_flags = _order_and_dedupe_timestamps(preview)
+        dq_flags = parse_flags + dq_flags
+        preview, coerce_flags = _coerce_numeric_columns(preview)
+        dq_flags.extend(coerce_flags)
         preview, unit_corrections = _detect_and_apply_units(preview)
         preview, resolution_notes = _detect_and_resample(preview)
+
+        # Same dt / asset-spec resolution the audit will apply, so the preview
+        # shows the exact sensor-quality flags the audit response will carry.
+        res_sec = resolution_notes.get("detected_resolution_sec")
+        dt_hours = (res_sec / 3600.0) if res_sec else 1.0
+        resolution_notes["dt_hours_used"] = round(dt_hours, 6)
+        meta_kwargs = {}
+        for key in ASSET_META_ALIASES:
+            if key in preview.columns:
+                non_null = preview[key].dropna()
+                if len(non_null):
+                    val = non_null.iloc[0]
+                    meta_kwargs[key] = val.strip() if isinstance(val, str) else val
+        try:
+            asset_preview = AssetSpecs(**meta_kwargs)
+        except Exception:
+            asset_preview = AssetSpecs()
+        dq_flags.extend(_build_sensor_quality_flags(preview, dt_hours,
+                                                    asset_preview.p_max, asset_preview.e_max))
+        currency = _detect_currency(list(df.columns))
 
         # Warnings for missing optional fields
         expected_optional = ["actual_charge", "soc", "curtailment_mw", "forecast_price",
@@ -2273,6 +2646,8 @@ async def inspect_file(file: UploadFile = File(...)):
             "timestamp_corrections": ts_corrections,
             "timestamp_format":     ts_format,
             "time_resolution":      resolution_notes,
+            "data_quality":         dq_flags,
+            "currency":             currency,
             "field_warnings":       field_warnings,
             "will_succeed":         "price" in col_map and "actual_discharge" in col_map,
             "sample_row":           df.iloc[0].to_dict() if len(df) > 0 else {},
@@ -2511,6 +2886,18 @@ async def websocket_live_stream(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_json()
+            # Session resume after a connection drop (grid/network outage):
+            # the client replays its last cumulative counters in the first
+            # message of the new socket so the session's economics continue
+            # instead of resetting to zero. Only honoured before step 1.
+            resume = data.pop("resume", None)
+            if isinstance(resume, dict) and step_count == 0:
+                try:
+                    cumulative_opt = max(0.0, float(resume.get("cumulative_opt", 0) or 0))
+                    cumulative_act = float(resume.get("cumulative_act", 0) or 0)
+                    step_count = max(0, int(resume.get("step", 0) or 0))
+                except (TypeError, ValueError):
+                    pass
             step = _live_decision_core(data)
             step_count += 1
 
@@ -2710,6 +3097,13 @@ def _build_certificate(data: dict) -> dict:
     rating, rating_label, rating_color, composite = _eda_rating(dq, m)
     eis        = m.get("economic_intelligence_score", 0) if isinstance(m, dict) else 0
     efficiency = dq * 100
+    # Span-correct annualisation: the audit result already computed
+    # projection_12m from the actual period covered (8760 / span_hours).
+    # Fall back to the legacy ×365 for results cached before that field.
+    fl = data.get("financial_leakage") or {}
+    annual_leakage = fl.get("projection_12m")
+    if annual_leakage is None:
+        annual_leakage = total_gap * 365
     cert_id    = f"PREDAIOT-EDPC-{datetime.utcnow().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
 
     # Rating narrative (Moody's style)
@@ -2734,12 +3128,12 @@ def _build_certificate(data: dict) -> dict:
         narrative = (
             f"Significant economic underperformance detected. {round((1-dq)*100,1)}% of achievable value destroyed. "
             "Immediate review of dispatch strategy and operator protocols required. "
-            f"Estimated annual leakage: {round(total_gap * 365, 0):,.0f} USD."
+            f"Estimated annual leakage: {round(annual_leakage, 0):,.0f} USD."
         )
     else:  # CCC
         narrative = (
             f"Critical economic underperformance. Asset captured only {round(dq*100,1)}% of its achievable potential. "
-            f"Estimated annual value destruction: ${round(total_gap * 365, 0):,.0f}. "
+            f"Estimated annual value destruction: ${round(annual_leakage, 0):,.0f}. "
             "Immediate operational review and EMS reconfiguration required."
         )
 
@@ -2787,12 +3181,12 @@ def _build_certificate(data: dict) -> dict:
         "rating_color":         rating_color,
         "rating_narrative":     narrative,
         "economic_efficiency":  round(efficiency, 1),
-        "annual_leakage":       round(total_gap * 365, 2),
+        "annual_leakage":       round(annual_leakage, 2),
         "risk_level":           data.get("risk_level", "Moderate"),
         "key_finding": (
             f"During the audit period, {data.get('asset_name','the asset')} captured "
             f"{round(dq*100,1)}% of its achievable economic value. "
-            f"Estimated annual value destruction: ${total_gap*365:,.0f}."
+            f"Estimated annual value destruction: ${annual_leakage:,.0f}."
         ),
         "rating_components": {
             "decision_quality_40":    round(dq * 40, 1),

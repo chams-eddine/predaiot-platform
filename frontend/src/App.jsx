@@ -645,13 +645,17 @@ function IngestionNotesBanner({ notes, onDismiss }) {
   const fuzzyList  = Object.entries(fuzzy);
   const tsFormat   = notes.timestamp_format || null;
   const resolution = notes.time_resolution || null;
+  const dataQuality = notes.data_quality || [];
+  const dqWarnings  = dataQuality.filter((f) => f.severity === 'warning');
+  const dqInfos     = dataQuality.filter((f) => f.severity !== 'warning');
+  const currency    = notes.currency || null;
 
   const showTsFormat   = tsFormat && tsFormat.format_detected;
   const showResolution = resolution && (resolution.detected_resolution_sec || resolution.warning);
 
   if (
     units.length === 0 && timestamps.length === 0 && fuzzyList.length === 0 &&
-    !showTsFormat && !showResolution
+    !showTsFormat && !showResolution && dataQuality.length === 0 && !currency
   ) return null;
 
   return (
@@ -752,6 +756,45 @@ function IngestionNotesBanner({ notes, onDismiss }) {
               ⚠ {resolution.warning}
             </div>
           )}
+        </div>
+      )}
+
+      {dqWarnings.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ color: DS.loss, fontSize: 10, letterSpacing: '0.1em', fontWeight: 700, marginBottom: 4 }}>
+            DATA QUALITY WARNINGS
+          </div>
+          {dqWarnings.map((f) => (
+            <div key={f.code} style={{ color: DS.text, fontSize: 11, marginBottom: 4, paddingLeft: 12, lineHeight: 1.5 }}>
+              ⚠ {f.message}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {dqInfos.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ color: DS.cyan, fontSize: 10, letterSpacing: '0.1em', fontWeight: 700, marginBottom: 4 }}>
+            DATA CLEANING APPLIED
+          </div>
+          {dqInfos.map((f) => (
+            <div key={f.code} style={{ color: DS.sub, fontSize: 11, marginBottom: 3, paddingLeft: 12, lineHeight: 1.5 }}>
+              • {f.message}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {currency && currency !== 'USD' && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ color: DS.warning, fontSize: 10, letterSpacing: '0.1em', fontWeight: 700, marginBottom: 4 }}>
+            CURRENCY
+          </div>
+          <div style={{ color: DS.text, fontSize: 11, paddingLeft: 12, lineHeight: 1.5 }}>
+            • Column names indicate this file is denominated in{' '}
+            <span style={{ color: DS.cyan, fontWeight: 700 }}>{currency}</span> — all monetary
+            figures in this audit are {currency}, not USD.
+          </div>
         </div>
       )}
     </div>
@@ -1100,6 +1143,93 @@ export default function App() {
   const [wsRef]                           = useState({ current: null });
   const [simRunning, setSimRunning]       = useState(false);
   const [simRef]                          = useState({ current: null, soc: 0.5, step: 0 });
+  // ── Live-feed resilience (grid/network outage mid-session) ─────────
+  // 'offline' | 'connected' | 'reconnecting'. On unexpected socket loss we
+  // KEEP everything on screen, auto-reconnect with exponential backoff, and
+  // resume the simulated feed where it left off. Only the DISCONNECT button
+  // stops the retry loop.
+  const [liveStatus, setLiveStatus]       = useState('offline');
+  const [lastTickAt, setLastTickAt]       = useState(null);
+  const [reconnectRef]                    = useState({ timer: null, attempt: 0, userStop: false });
+  // Re-render every 5s while live so the "feed stale" age stays current.
+  const [, setStaleTick] = useState(0);
+  useEffect(() => {
+    if (!liveMode) return undefined;
+    const iv = setInterval(() => setStaleTick(t => t + 1), 5000);
+    return () => clearInterval(iv);
+  }, [liveMode]);
+
+  // Opens /ws/live with resilience wiring. Lives here (not inline in S13's
+  // button) because the auto-reconnect loop re-invokes it after an outage.
+  const connectLive = () => {
+    const scheduleRetry = () => {
+      setLiveStatus('reconnecting');
+      const delay = Math.min(30000, 1000 * Math.pow(2, reconnectRef.attempt));
+      reconnectRef.attempt += 1;
+      reconnectRef.timer = setTimeout(connectLive, delay);
+    };
+    try {
+      const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(`${proto}://${window.location.host}/ws/live`);
+      ws.onopen = () => {
+        reconnectRef.attempt = 0;
+        // If we have cumulative stats from before the drop, replay them in
+        // the first message so the server-side session continues, not resets.
+        reconnectRef.needResume = !!reconnectRef.lastCums;
+        setLiveMode(true);
+        setLiveStatus('connected');
+      };
+      ws.onmessage = (e) => {
+        try {
+          const d = JSON.parse(e.data);
+          reconnectRef.lastCums = {
+            cumulative_opt: d.cumulative_opt,
+            cumulative_act: d.cumulative_act,
+            step: d.step,
+          };
+          setLiveData(prev => [...prev.slice(-287), d]);
+          setLastTickAt(Date.now());
+        } catch (_) {}
+      };
+      ws.onclose = () => {
+        wsRef.current = null;
+        if (reconnectRef.userStop) {
+          setLiveMode(false);
+          setLiveStatus('offline');
+          return;
+        }
+        // Unexpected loss (grid / network outage mid-session): keep every
+        // chart and statistic on screen and retry with capped exponential
+        // backoff. The simulated feed's interval keeps running — its tick()
+        // no-ops while the socket is down and resumes on reconnect.
+        scheduleRetry();
+      };
+      ws.onerror = () => { try { ws.close(); } catch (_) {} };
+      wsRef.current = ws;
+    } catch (err) {
+      scheduleRetry();
+    }
+  };
+
+  const startLive = () => {
+    reconnectRef.userStop = false;
+    reconnectRef.attempt = 0;
+    reconnectRef.lastCums = null;   // manual start = fresh session stats
+    reconnectRef.needResume = false;
+    setLiveMode(true);              // session starts now; status shows progress
+    setLiveStatus('reconnecting');  // amber until onopen flips it green
+    connectLive();
+  };
+
+  const disconnectLive = () => {
+    reconnectRef.userStop = true;
+    if (reconnectRef.timer) { clearTimeout(reconnectRef.timer); reconnectRef.timer = null; }
+    if (simRef.current) { clearInterval(simRef.current); simRef.current = null; }
+    setSimRunning(false);
+    if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+    setLiveMode(false);
+    setLiveStatus('offline');
+  };
   const [certificate, setCertificate]     = useState(null);
   const [certLoading, setCertLoading]     = useState(false);
   // Tracks the provenance of the data currently on screen so the header
@@ -1178,9 +1308,11 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
-  // Cleanup live WebSocket + simulator on unmount
+  // Cleanup live WebSocket + simulator + reconnect loop on unmount
   useEffect(() => {
     return () => {
+      reconnectRef.userStop = true;
+      if (reconnectRef.timer) clearTimeout(reconnectRef.timer);
       if (simRef.current) clearInterval(simRef.current);
       if (wsRef.current) wsRef.current.close();
     };
@@ -2336,29 +2468,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
               <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
                 <BtnOutline
                   color={liveMode ? DS.loss : DS.optimal}
-                  onClick={() => {
-                    if (liveMode) {
-                      if (simRef.current) { clearInterval(simRef.current); simRef.current = null; }
-                      setSimRunning(false);
-                      if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
-                      setLiveMode(false);
-                    } else {
-                      try {
-                        const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-                        const ws = new WebSocket(`${proto}://${window.location.host}/ws/live`);
-                        ws.onopen = () => setLiveMode(true);
-                        ws.onmessage = (e) => {
-                          try {
-                            const d = JSON.parse(e.data);
-                            setLiveData(prev => [...prev.slice(-287), d]);
-                          } catch (_) {}
-                        };
-                        ws.onclose = () => { setLiveMode(false); setSimRunning(false); if (simRef.current) { clearInterval(simRef.current); simRef.current = null; } };
-                        ws.onerror = () => { setLiveMode(false); alert('WebSocket connection failed. Make sure the backend is running and reachable.'); };
-                        wsRef.current = ws;
-                      } catch (err) { alert('Could not open WebSocket: ' + err.message); }
-                    }
-                  }}
+                  onClick={() => (liveMode ? disconnectLive() : startLive())}
                 >
                   {liveMode ? '⏹ DISCONNECT' : '▶ CONNECT TO /ws/live'}
                 </BtnOutline>
@@ -2394,11 +2504,18 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                       const tick = () => {
                         if (!wsRef.current || wsRef.current.readyState !== 1) return;
                         const payload = profile.tick(simRef);
-                        wsRef.current.send(JSON.stringify({
+                        const msg = {
                           timestamp: new Date().toISOString(),
                           asset_id: data.asset_name || profile.asset_id,
                           ...payload,
-                        }));
+                        };
+                        // First tick on a reconnected socket carries the resume
+                        // seed so cumulative session stats survive the outage.
+                        if (reconnectRef.needResume && reconnectRef.lastCums) {
+                          msg.resume = reconnectRef.lastCums;
+                          reconnectRef.needResume = false;
+                        }
+                        wsRef.current.send(JSON.stringify(msg));
                       };
                       tick();
                       simRef.current = setInterval(tick, 1200);
@@ -2414,13 +2531,29 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                 )}
               </div>
 
-              {/* Live status strip */}
-              {liveMode && (
-                <div style={{ display: 'flex', gap: 20, padding: '12px 20px', background: `${DS.optimal}08`, border: `1px solid ${DS.optimal}30`, borderRadius: DS.r12, marginBottom: 16, flexWrap: 'wrap' }}>
+              {/* Live status strip — green when healthy, amber while the
+                  auto-reconnect loop is riding out a grid/network outage. */}
+              {liveMode && (() => {
+                const reconnecting = liveStatus === 'reconnecting';
+                const stripColor = reconnecting ? DS.warning : DS.optimal;
+                const staleForSec = (!reconnecting && simRunning && lastTickAt)
+                  ? Math.floor((Date.now() - lastTickAt) / 1000) : 0;
+                const isStale = staleForSec > 15;
+                return (
+                <div style={{ display: 'flex', gap: 20, padding: '12px 20px', background: `${stripColor}08`, border: `1px solid ${stripColor}30`, borderRadius: DS.r12, marginBottom: 16, flexWrap: 'wrap' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: DS.optimal, boxShadow: `0 0 10px ${DS.optimal}` }} />
-                    <span style={{ color: DS.optimal, fontSize: 12, fontWeight: 700, letterSpacing: '0.1em' }}>CONNECTED{simRunning ? ' · SIMULATING' : ''}</span>
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: stripColor, boxShadow: `0 0 10px ${stripColor}` }} />
+                    <span style={{ color: stripColor, fontSize: 12, fontWeight: 700, letterSpacing: '0.1em' }}>
+                      {reconnecting
+                        ? 'CONNECTION LOST — RECONNECTING… (data held on screen)'
+                        : `CONNECTED${simRunning ? ' · SIMULATING' : ''}`}
+                    </span>
                   </div>
+                  {isStale && (
+                    <span style={{ color: DS.warning, fontSize: 12, fontWeight: 700 }}>
+                      ⚠ FEED STALE — last tick {staleForSec}s ago
+                    </span>
+                  )}
                   <span style={{ color: DS.sub, fontSize: 12 }}>{liveData.length} ticks received</span>
                   {liveData.length > 0 && (
                     <>
@@ -2434,7 +2567,8 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                     </>
                   )}
                 </div>
-              )}
+                );
+              })()}
 
               {/* Latest advisory recommendation card */}
               {liveData.length > 0 && (() => {
