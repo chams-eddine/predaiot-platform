@@ -1294,7 +1294,9 @@ export default function App() {
     const poll = async () => {
       try {
         const r = await axios.get('/api/latest');
-        if (r.data?.dq_score > 0) {
+        // decision_log presence — not dq_score truthiness — signals a real
+        // result (dq can legitimately be 0.0 for destructive dispatch).
+        if (Array.isArray(r.data?.decision_log) && r.data.decision_log.length > 0) {
           setData(r.data);
           // Only set if we haven't tagged from a fresher local action.
           setDataSource((cur) => (cur === 'idle' ? 'historical' : cur));
@@ -1340,6 +1342,7 @@ export default function App() {
       const r = await axios.post('/api/v1/audit', {
         asset: { asset_type: 'BESS', asset_name: 'Ibri 2 — 500 MW BESS', asset_id: 'IBRI2_BESS', p_max: 50, e_max: 100, soc_init: 0.5, eta_ch: 0.95, eta_dis: 0.95, deg_cost: 5.0 },
         time_series: ts,
+        dt_hours: 1 / 12,  // 288 five-minute steps = a 24h demo day
       });
       setData(r.data);
       setDataSource('demo');
@@ -1379,7 +1382,7 @@ export default function App() {
 
   // ── Share ──────────────────────────────────────────────────────────
   const handleShare = async () => {
-    if (!data.dq_score) return alert('Run an audit first.');
+    if (!(data.decision_log || []).length) return alert('Run an audit first.');
     try {
       const r = await axios.post('/api/share', data);
       const url = window.location.origin + r.data.share_url;
@@ -1392,7 +1395,7 @@ export default function App() {
   // ── Download branded PDF (letterhead overlay) ──────────────────────
   const [pdfLoading, setPdfLoading] = useState(false);
   const downloadPdf = async () => {
-    if (!data.dq_score) return alert('Run an audit first.');
+    if (!(data.decision_log || []).length) return alert('Run an audit first.');
     if (!requireTrial()) return;
     setPdfLoading(true);
     try {
@@ -1418,7 +1421,7 @@ export default function App() {
   // Step-by-step CSV where every PDF headline number is a column sum —
   // the transparency artifact that lets a customer reconcile the audit.
   const downloadLedger = async () => {
-    if (!data.dq_score) return alert('Run an audit first.');
+    if (!(data.decision_log || []).length) return alert('Run an audit first.');
     if (!requireTrial()) return;
     try {
       const r = await axios.get('/api/v1/audit/ledger.csv', { responseType: 'blob' });
@@ -1436,7 +1439,7 @@ export default function App() {
 
   // ── Claude AI enhanced commentary ─────────────────────────────────
   const generateAI = async () => {
-    if (!data.dq_score) return;
+    if (!(data.decision_log || []).length) return;
     setAiLoading(true);
     try {
       const capturePct = data.edv_optimal_total > 0 ? (data.edv_actual_total / data.edv_optimal_total) * 100 : 0;
@@ -1530,7 +1533,9 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
   const log         = Array.isArray(data.decision_log) ? data.decision_log : [];
   const captureRate = data.edv_optimal_total > 0 ? (data.edv_actual_total / data.edv_optimal_total) * 100 : 0;
   const m           = data.eda_metrics;
-  const hasData     = data.dq_score > 0;
+  // "An audit is loaded" = the decision log has rows. NOT dq_score > 0 —
+  // an honest DQ of 0.0 (destructive dispatch) is a real, displayable audit.
+  const hasData     = log.length > 0;
 
   const navItems = [
     { id: 'exec',      label: 'Executive Summary',           tag: '01' },
@@ -1624,11 +1629,11 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {!isMobile && (
             <BtnOutline color={DS.warning} onClick={handleShare}>SHARE REPORT</BtnOutline>
           )}
-          <BtnOutline color={DS.purple} onClick={downloadPdf} disabled={pdfLoading || !data.dq_score}>
+          <BtnOutline color={DS.purple} onClick={downloadPdf} disabled={pdfLoading || !hasData}>
             {pdfLoading ? 'PDF…' : (isMobile ? '⬇ PDF' : '⬇ DOWNLOAD PDF')}
           </BtnOutline>
           {!isMobile && (
-            <BtnOutline color={DS.cyan} onClick={downloadLedger} disabled={!data.dq_score}>
+            <BtnOutline color={DS.cyan} onClick={downloadLedger} disabled={!hasData}>
               ⬇ LEDGER CSV
             </BtnOutline>
           )}
