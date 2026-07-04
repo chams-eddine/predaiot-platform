@@ -221,6 +221,10 @@ class AuditResponse(BaseModel):
     # mapping or asset specs) — ingestion turns that into a data-quality flag.
     dq_score_raw: Optional[float] = None
     total_gap_usd: float
+    # Currency the uploaded data is denominated in (detected from column
+    # names, e.g. "solar_revenue_omr" → OMR). PDF + certificate render this
+    # instead of assuming dollars. "USD" = legacy default.
+    currency: Optional[str] = "USD"
     decision_log: List[DecisionRecord]
     # Extended EDA sections
     asset_name: Optional[str] = "Energy Asset"
@@ -1053,7 +1057,7 @@ _SECTOR_OPS = {
 
 
 def _build_opportunities(total_gap: float, asset_type: str, decision_log: list = None,
-                         annual_factor: float = 365.0) -> List[OpportunityItem]:
+                         annual_factor: float = 365.0, currency: str = "USD") -> List[OpportunityItem]:
     """
     Build a prioritised Economic Action Plan™ appropriate to the asset class.
 
@@ -1090,7 +1094,7 @@ def _build_opportunities(total_gap: float, asset_type: str, decision_log: list =
                            0.08, annual, total_gap,
                            difficulty="Quick Win", priority_stars=4, priority_score=88, confidence_pct=94.2,
                            investment_type="No CAPEX", owner="Operations", operational_risk="Low", payback_days=1,
-                           evidence=f"{override} operator overrides detected in audit period. Avg economic cost per override: ${round(total_gap / override, 0):.0f}.",
+                           evidence=f"{override} operator overrides detected in audit period. Avg economic cost per override: {_fmt_money(total_gap / override, currency, 0)}.",
                            intervals_observed=override))
 
     return ops
@@ -1176,7 +1180,7 @@ def _build_ai_commentary(
     asset_name: str, total_gap: float, total_opt: float,
     decision_log: List[DecisionRecord], dq: float,
     eda_metrics=None, opportunities: list = None, root_causes: list = None,
-    annual_factor: float = 365.0,
+    annual_factor: float = 365.0, currency: str = "USD",
 ) -> str:
     """
     Generates the default (non-Claude) Economic Intelligence Report™.
@@ -1212,7 +1216,7 @@ def _build_ai_commentary(
     L.append("")
     L.append("KEY FINDINGS")
     L.append(f"✔ Economic Intelligence Score        {eis} / 100")
-    L.append(f"✔ Economic Leakage                   ${total_gap:,.2f}")
+    L.append(f"✔ Economic Leakage                   {_fmt_money(total_gap, currency)}")
     L.append(f"✔ Missed High-Value Intervals         {len(missed)}")
     L.append(f"✔ Largest Opportunity                 {top_opp}")
     L.append("")
@@ -1234,8 +1238,8 @@ def _build_ai_commentary(
     L.append(
         f"Had the dispatch strategy followed the economically optimal schedule, the asset could have "
         f"recovered approximately {recoverable}% additional revenue during the audited period without "
-        f"additional hardware investment. Annualised, this represents an estimated ${total_gap*annual_factor*0.68:,.0f} "
-        f"in recoverable value."
+        f"additional hardware investment. Annualised, this represents an estimated "
+        f"{_fmt_money(total_gap * annual_factor * 0.68, currency, 0)} in recoverable value."
     )
     L.append("")
     L.append("AUDITOR CONCLUSION")
@@ -1254,7 +1258,7 @@ def _build_ai_commentary(
         for i, op in enumerate(opportunities[:5], 1):
             L.append(f"")
             L.append(f"Recommendation {i} — {op.name}")
-            L.append(f"  Expected Annual Gain    ${op.annual_gain_usd:,.0f}")
+            L.append(f"  Expected Annual Gain    {_fmt_money(op.annual_gain_usd, currency, 0)}")
             L.append(f"  Implementation          {op.difficulty}")
             L.append(f"  Operational Risk        {op.operational_risk}")
             L.append(f"  Confidence              {op.confidence_pct}%")
@@ -1281,7 +1285,7 @@ def _risk_level(dq: float) -> str:
 # 6. Central Calculation Engine  (CORE UNCHANGED + EDA LAYER)
 # ==========================================
 def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: bool = True,
-                        dt_hours: float = 1.0):
+                        dt_hours: float = 1.0, currency: str = "USD"):
     """
     Runs the MILP + EDV + EDA pipeline. Does NOT touch the per-token cache —
     the endpoint handler is responsible for caching the result under its
@@ -1398,12 +1402,12 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
     eda_metrics  = _build_eda_metrics(decision_log, total_edv_opt, total_edv_act, asset.asset_type)
     root_causes  = _build_root_causes(decision_log, total_gap, total_edv_opt)
     opportunities = _build_opportunities(total_gap, asset.asset_type, decision_log,
-                                         annual_factor=annual_factor)
+                                         annual_factor=annual_factor, currency=currency)
     heat_map     = _build_heat_map(decision_log)
     ai_commentary = _build_ai_commentary(
         asset.asset_name, total_gap, total_edv_opt, decision_log, dq_score,
         eda_metrics=eda_metrics, opportunities=opportunities, root_causes=root_causes,
-        annual_factor=annual_factor,
+        annual_factor=annual_factor, currency=currency,
     )
 
     top_sources = []
@@ -1439,10 +1443,11 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
         heat_map=heat_map,
         financial_leakage=financial_leakage,
         ai_commentary=ai_commentary,
+        currency=(currency or "USD").upper(),
         counterfactual_summary=(
             f"Under optimal dispatch, {asset.asset_name} would have captured "
-            f"${total_edv_opt:,.2f} vs actual ${total_edv_act:,.2f}. "
-            f"The counterfactual gap of ${total_gap:,.2f} represents decisions that "
+            f"{_fmt_money(total_edv_opt, currency)} vs actual {_fmt_money(total_edv_act, currency)}. "
+            f"The counterfactual gap of {_fmt_money(total_gap, currency)} represents decisions that "
             f"were physically feasible but economically sub-optimal."
         ),
         # Echo ISSUED TO fields from AssetSpecs
@@ -2021,6 +2026,18 @@ def _dq(severity: str, code: str, message: str) -> dict:
     return {"severity": severity, "code": code, "message": message}
 
 
+def _fmt_money(x, cur: str = "USD", decimals: int = 2) -> str:
+    """"$1,234.56" for USD, "1,234.56 OMR" for everything else."""
+    cur = (cur or "USD").upper()
+    try:
+        val = float(x or 0)
+    except (TypeError, ValueError):
+        val = 0.0
+    if cur == "USD":
+        return f"${val:,.{decimals}f}"
+    return f"{val:,.{decimals}f} {cur}"
+
+
 def _json_safe(obj):
     """Recursively replace NaN/±inf with None — strict JSON has no NaN."""
     if isinstance(obj, dict):
@@ -2528,7 +2545,8 @@ async def audit_from_file(
         ]]
         time_series = sub.astype(object).where(pd.notna(sub), None).to_dict('records')
 
-        result = process_calculation(asset, time_series, dt_hours=dt_hours)
+        result = process_calculation(asset, time_series, dt_hours=dt_hours,
+                                     currency=currency or "USD")
 
         # Model/data disagreement: actual "beat" the theoretical optimum →
         # the mapping or specs are wrong, not the operator superhuman. Flag it
@@ -3089,7 +3107,10 @@ async def mqtt_status(lead: TrialLead = Depends(require_trial_token)):
 # NEW: Economic Decision Certificate
 # ==========================================
 def _build_certificate(data: dict) -> dict:
-    dq         = data.get("dq_score", 0)
+    # Sanity gate: DQ is a ratio in [0,1] by definition (Ch. 4.2). A value
+    # outside that range means the result came from a broken/stale engine —
+    # never let it inflate a AAA rating on a signed certificate.
+    dq         = max(0.0, min(1.0, float(data.get("dq_score", 0) or 0)))
     total_gap  = data.get("total_gap_usd", 0)
     opt        = data.get("edv_optimal_total", 0)
     act        = data.get("edv_actual_total", 0)
@@ -3104,6 +3125,7 @@ def _build_certificate(data: dict) -> dict:
     annual_leakage = fl.get("projection_12m")
     if annual_leakage is None:
         annual_leakage = total_gap * 365
+    cur = (data.get("currency") or "USD").upper()
     cert_id    = f"PREDAIOT-EDPC-{datetime.utcnow().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
 
     # Rating narrative (Moody's style)
@@ -3128,12 +3150,12 @@ def _build_certificate(data: dict) -> dict:
         narrative = (
             f"Significant economic underperformance detected. {round((1-dq)*100,1)}% of achievable value destroyed. "
             "Immediate review of dispatch strategy and operator protocols required. "
-            f"Estimated annual leakage: {round(annual_leakage, 0):,.0f} USD."
+            f"Estimated annual leakage: {_fmt_money(annual_leakage, cur, 0)}."
         )
     else:  # CCC
         narrative = (
             f"Critical economic underperformance. Asset captured only {round(dq*100,1)}% of its achievable potential. "
-            f"Estimated annual value destruction: ${round(annual_leakage, 0):,.0f}. "
+            f"Estimated annual value destruction: {_fmt_money(annual_leakage, cur, 0)}. "
             "Immediate operational review and EMS reconfiguration required."
         )
 
@@ -3182,11 +3204,12 @@ def _build_certificate(data: dict) -> dict:
         "rating_narrative":     narrative,
         "economic_efficiency":  round(efficiency, 1),
         "annual_leakage":       round(annual_leakage, 2),
+        "currency":             cur,
         "risk_level":           data.get("risk_level", "Moderate"),
         "key_finding": (
             f"During the audit period, {data.get('asset_name','the asset')} captured "
             f"{round(dq*100,1)}% of its achievable economic value. "
-            f"Estimated annual value destruction: ${annual_leakage:,.0f}."
+            f"Estimated annual value destruction: {_fmt_money(annual_leakage, cur, 0)}."
         ),
         "rating_components": {
             "decision_quality_40":    round(dq * 40, 1),
@@ -3362,8 +3385,11 @@ def _build_audit_pdf(audit: dict) -> bytes:
     edv_opt = float(audit.get("edv_optimal_total", 0) or 0)
     edv_act = float(audit.get("edv_actual_total", 0) or 0)
     gap     = float(audit.get("total_gap_usd", 0) or 0)
-    dq_pct  = float(audit.get("dq_score", 0) or 0) * 100.0
+    # DQ is clamped to [0,1] by the engine; clamp here too so a stale cached
+    # result can never print "12020.5 / 100" on a customer certificate again.
+    dq_pct  = max(0.0, min(1.0, float(audit.get("dq_score", 0) or 0))) * 100.0
     risk    = (audit.get("risk_level") or "Moderate")
+    cur     = (audit.get("currency") or "USD").upper()
 
     y = 540
     c.setFillColorRGB(0.04, 0.14, 0.22)
@@ -3374,9 +3400,9 @@ def _build_audit_pdf(audit: dict) -> bytes:
     c.line(60, y - 4, 535, y - 4)
 
     rows = [
-        ("Economic Potential",      f"${edv_opt:,.2f}"),
-        ("Captured Value",          f"${edv_act:,.2f}"),
-        ("Destroyed Value (Gap)",   f"${gap:,.2f}"),
+        ("Economic Potential",      _fmt_money(edv_opt, cur)),
+        ("Captured Value",          _fmt_money(edv_act, cur)),
+        ("Destroyed Value (Gap)",   _fmt_money(gap, cur)),
         ("Decision Quality (DQ)",   f"{dq_pct:.1f} / 100"),
         ("Risk Level",              risk.upper()),
     ]
@@ -3405,7 +3431,7 @@ def _build_audit_pdf(audit: dict) -> bytes:
             pct = rc.get("contribution_pct") if isinstance(rc, dict) else getattr(rc, "contribution_pct", 0)
             usd = rc.get("loss_usd") if isinstance(rc, dict) else getattr(rc, "loss_usd", 0)
             c.drawString(72, y, f"{i}. {cat}")
-            c.drawRightString(535, y, f"{float(pct or 0):.1f}%   (${float(usd or 0):,.0f})")
+            c.drawRightString(535, y, f"{float(pct or 0):.1f}%   ({_fmt_money(usd, cur, 0)})")
             y -= 16
     else:
         c.setFillColorRGB(0.5, 0.5, 0.55)
@@ -3433,7 +3459,7 @@ def _build_audit_pdf(audit: dict) -> bytes:
         c.drawString(80, y - 12, str(diff))
         c.setFillColorRGB(0.18, 0.18, 0.2)
         c.setFont("Helvetica", 10)
-        c.drawRightString(535, y, f"${float(gain or 0):,.0f}")
+        c.drawRightString(535, y, _fmt_money(gain, cur, 0))
         y -= 28
 
     # ── Certification block ───────────────────────────────────────────
