@@ -36,3 +36,8 @@ lerna-debug.log*
 # Smoke-test artifacts
 backend/smoke_*
 *.pdf.tmp
+
+# node-core generated artifacts
+node-core/node_modules/
+node-core/validation/reference.json
+node-core/validation/node_output.json
