@@ -93,7 +93,7 @@ export default function HeroSection() {
                 clipRule="evenodd"
               />
             </svg>
-            Bank-Level Encryption
+            TLS-Encrypted Transfers
           </span>
           <span className="flex items-center gap-2">
             <svg
@@ -123,7 +123,7 @@ export default function HeroSection() {
                 clipRule="evenodd"
               />
             </svg>
-            ISO 27001 Compliant
+            ISO 27001-Aligned Controls
           </span>
         </div>
       </motion.div>
