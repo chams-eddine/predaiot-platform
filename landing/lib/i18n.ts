@@ -47,9 +47,10 @@ const en = {
     cta: "Explore the Math Methodology →",
     leakageLabel: "Live Leakage Detected",
     leakagePerHour: "/ hour",
+    leakageDisclaimer: "Illustrative demo figure — not measured data",
   },
   social: {
-    title: "Trusted by Energy Leaders & Independent Power Producers",
+    title: "Built for Energy Leaders & Independent Power Producers — one engine, every asset class",
   },
   final: {
     headlineLine1: "The Universal Economic Engine",
@@ -87,10 +88,11 @@ const fr: typeof en = {
     cta: "Explorer la méthodologie mathématique →",
     leakageLabel: "Fuite en direct détectée",
     leakagePerHour: "/ heure",
+    leakageDisclaimer: "Chiffre de démonstration illustratif — pas une mesure réelle",
   },
   social: {
     title:
-      "Approuvé par les leaders de l'énergie et les producteurs indépendants",
+      "Conçu pour les leaders de l'énergie et les producteurs indépendants — un moteur, toutes les classes d'actifs",
   },
   final: {
     headlineLine1: "Le moteur économique universel",
@@ -125,9 +127,10 @@ const ar: typeof en = {
     cta: "← استكشاف المنهجية الرياضية",
     leakageLabel: "تم اكتشاف تسرب مباشر",
     leakagePerHour: "/ ساعة",
+    leakageDisclaimer: "رقم توضيحي للعرض فقط — ليس قياساً حقيقياً",
   },
   social: {
-    title: "موثوق به من قادة الطاقة والمنتجين المستقلين للكهرباء",
+    title: "صُمم لقادة الطاقة والمنتجين المستقلين — محرك واحد لكل فئات الأصول",
   },
   final: {
     headlineLine1: "المحرك الاقتصادي الشامل",

@@ -3,14 +3,16 @@
 import { motion } from "framer-motion";
 import { useLanguage } from "@/lib/LanguageContext";
 
-// Placeholder company names — not translated (proper nouns). Replace with
-// signed customers before promoting the section on live media.
+// Asset classes the engine audits — factual capability claims. The previous
+// list showed invented company names implying customers that do not exist
+// (docs/REMOVED_HEURISTICS.md); real logos go here once customers sign.
 const partners = [
-  "Global Energy Co.",
-  "TechWind Corp.",
-  "HydroGen Solutions",
-  "Solaris Grid",
-  "Nexus Power",
+  "BESS & Storage",
+  "Solar PV",
+  "Wind",
+  "Gas & Thermal",
+  "Green Hydrogen",
+  "Desalination",
 ];
 
 export default function SocialProofSection() {

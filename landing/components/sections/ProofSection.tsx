@@ -111,6 +111,9 @@ export default function ProofSection() {
                   {t.proof.leakagePerHour}
                 </span>
               </div>
+              <div className="text-[10px] text-gray-600 mt-1 font-sans normal-case tracking-normal">
+                {t.proof.leakageDisclaimer}
+              </div>
             </div>
           </motion.div>
         </motion.div>
