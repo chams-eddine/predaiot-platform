@@ -640,6 +640,78 @@ function SessionBadge({ liveMode, simRunning, dataSource }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// DATA QUALITY / AUDIT CONFIDENCE PANEL (EDA metrics W1–W4).
+// Every number here is reproducible from the Data Quality Manifest via the
+// published equations; N/A components are shown and excluded from the mean.
+// ══════════════════════════════════════════════════════════════════════
+const _gradeColor = (g) => (
+  g === 'A' ? DS.optimal : g === 'B' ? '#69F0AE' : g === 'C' ? DS.warning :
+  g === 'D' ? DS.orange : g === 'E' ? DS.loss : DS.dim);
+
+function DataQualityPanel({ dqi, ac, fr, compact }) {
+  if (!dqi) return null;
+  const cell = (label, obj) => {
+    const val = obj?.value_pct;
+    const grade = obj?.grade;
+    return (
+      <div style={{ textAlign: 'center', minWidth: 120 }}>
+        <Label style={{ fontSize: 9 }}>{label}</Label>
+        <div style={{ color: _gradeColor(grade), fontFamily: DS.mono, fontSize: compact ? 18 : 24, fontWeight: 800 }}>
+          {val != null ? `${val}%` : (grade || 'N/A')}
+        </div>
+        <div style={{ color: _gradeColor(grade), fontSize: 10, fontWeight: 700 }}>
+          {grade != null ? `Grade ${grade}` : ''}
+        </div>
+        {!compact && obj?.interpretation && (
+          <div style={{ color: DS.dim, fontSize: 9, marginTop: 2 }}>{obj.interpretation}</div>
+        )}
+      </div>
+    );
+  };
+  return (
+    <div style={{ background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: DS.r12, padding: compact ? '12px 16px' : '16px 20px', marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <Label>DATA QUALITY &amp; AUDIT CONFIDENCE</Label>
+        <span style={{ color: DS.dim, fontSize: 9, fontFamily: DS.mono }}>
+          {dqi.version}{ac ? ` · ${ac.version}` : ''}
+        </span>
+      </div>
+      <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        {cell('Data Quality Index', dqi)}
+        {cell('Audit Confidence', ac)}
+        {fr && (
+          <div style={{ textAlign: 'center', minWidth: 120 }}>
+            <Label style={{ fontSize: 9 }}>Forecast Reliability</Label>
+            <div style={{ color: DS.cyan, fontFamily: DS.mono, fontSize: compact ? 18 : 24, fontWeight: 800 }}>{fr.value_pct}%</div>
+            <div style={{ color: DS.dim, fontSize: 8.5, marginTop: 2 }}>Experimental · report-only</div>
+          </div>
+        )}
+      </div>
+      {!compact && (
+        <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
+          {Object.entries(dqi.components || {}).map(([k, c]) => (
+            <div key={k} style={{ padding: '6px 10px', background: 'rgba(255,255,255,0.015)', border: `1px solid ${DS.border}`, borderRadius: DS.r8 }}>
+              <div style={{ color: DS.sub, fontSize: 10 }}>{c.label}</div>
+              <div style={{ color: c.applicable ? _gradeColor(dqi.grade) : DS.dim, fontFamily: DS.mono, fontSize: 12, fontWeight: 700 }}>
+                {c.applicable ? `${c.value_pct}%` : 'N/A'}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {!compact && (
+        <div style={{ color: DS.dim, fontSize: 9.5, marginTop: 10, lineHeight: 1.5 }}>
+          DQI = geometric mean of applicable components (N/A excluded, never scored 0).
+          Audit Confidence = DQI × model consistency, solver-gated — measures confidence in the
+          audit process, independent of forecast accuracy. Grade bands are a declared EDA scale.
+          Every value reproduces from the Data Quality Manifest.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // INGESTION NOTES BANNER — shown after an upload when the pipeline made
 // auto-corrections (units, timestamps, or fuzzy column matches). Lets the
 // operator see "here's what we assumed" before they quote the audit to
@@ -1066,6 +1138,9 @@ function OpsConsoleExec({ data, log, m, ingestionNotes, onDismissNotes }) {
       </div>
       {ingestionNotes && (
         <IngestionNotesBanner notes={ingestionNotes} onDismiss={onDismissNotes} />
+      )}
+      {data.data_quality_index && (
+        <DataQualityPanel dqi={data.data_quality_index} ac={data.audit_confidence} fr={data.forecast_reliability} compact />
       )}
 
       {/* Row 1 — Financial Impact | DQ Gauge | Market Audit + Telemetry */}
@@ -2043,6 +2118,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {hasData && activeSection === 'metrics' && (
             <div>
               <SectionHeader tag="06" title="Economic Decision Quality Metrics" />
+              <DataQualityPanel dqi={data.data_quality_index} ac={data.audit_confidence} fr={data.forecast_reliability} />
               {!m ? <EmptyMsg>Run an audit to generate metrics.</EmptyMsg> : (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 16 }}>
                   {/* Ledger-derived ratios only. EIS composite, Decision Delay
@@ -2914,6 +2990,8 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                           ? [{ label: 'Recoverable Execution Gap', v: fmtMoney(certificate.recoverable_execution_gap, certificate.currency), c: DS.loss }]
                           : []),
                         { label: 'DQ / ECF',             v: `${certificate.dq_score} / 100`,  c: qualColor(certificate.dq_score) },
+                        { label: 'Data Quality Grade', v: certificate.data_quality_index ? `${certificate.data_quality_index.value_pct}% / ${certificate.data_quality_grade}` : (certificate.data_quality_grade || 'N/A'), c: _gradeColor(certificate.data_quality_grade) },
+                        { label: 'Audit Confidence Grade', v: certificate.audit_confidence ? (certificate.audit_confidence.value_pct != null ? `${certificate.audit_confidence.value_pct}% / ${certificate.confidence_grade}` : certificate.confidence_grade) : (certificate.confidence_grade || 'N/A'), c: _gradeColor(certificate.confidence_grade) },
                         { label: 'Annual Ceiling Gap (Linear Est.)', v: fmtMoney(certificate.annual_leakage, certificate.currency), c: DS.orange },
                       ].map(f => (
                         <div key={f.label} style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: `1px solid ${DS.border}`, borderRadius: DS.r8 }}>

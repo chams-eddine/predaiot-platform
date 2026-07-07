@@ -17,6 +17,7 @@ from typing import List, Optional, Dict, Any
 import pulp
 import hashlib as _hashlib
 import base64 as _base64
+import eda_metrics  # versioned, asset-agnostic DQI / Audit Confidence (pure module)
 from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime, Boolean, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime, timedelta
@@ -123,6 +124,8 @@ class CertificateRecord(Base):
     engine_ver        = Column(String, nullable=False)
     solver_ver        = Column(String, nullable=False)
     input_sha256      = Column(String, nullable=True)   # dataset hash from the manifest
+    dqi_grade         = Column(String, nullable=True)   # W1 quality grade (A..E / N/A)
+    confidence_grade  = Column(String, nullable=True)   # W1 confidence grade / INDETERMINATE
     issued_at         = Column(DateTime, default=datetime.utcnow, nullable=False)
     revoked           = Column(Boolean, default=False, nullable=False)
     revocation_reason = Column(String, nullable=True)
@@ -302,6 +305,15 @@ class AuditResponse(BaseModel):
     # C2 — chain of custody: input hash, provenance, and software versions.
     # Populated by the file-audit endpoint; None for raw JSON audits.
     audit_manifest: Optional[Dict[str, Any]] = None
+    # W1–W4 — versioned quality metrics (asset-agnostic; N/A-aware).
+    # data_quality_index: {value, grade, interpretation, components{...}}
+    # audit_confidence:   {value|None, grade|INDETERMINATE, factors{...}}
+    # forecast_reliability: report-only, Experimental; None when no forecast.
+    # data_quality_manifest: raw integer evidence DQI is derived from.
+    data_quality_index: Optional[Dict[str, Any]] = None
+    audit_confidence: Optional[Dict[str, Any]] = None
+    forecast_reliability: Optional[Dict[str, Any]] = None
+    data_quality_manifest: Optional[Dict[str, Any]] = None
     decision_log: List[DecisionRecord]
     # Extended EDA sections
     asset_name: Optional[str] = "Energy Asset"
@@ -633,6 +645,41 @@ async def _api_access_log(request, call_next):
         print(f"[access-log] non-fatal: {type(e).__name__}: {e}")
     return response
 
+def _apply_additive_migrations(bind_engine):
+    """
+    Idempotent additive-column migration. create_all() creates missing TABLES
+    but never adds new COLUMNS to a table that already exists, so a deployment
+    upgrading over a persistent DB would 500 on the new columns. This adds any
+    missing nullable columns via ALTER TABLE (safe on SQLite + Postgres).
+    Additive-only: never drops or alters existing columns.
+    """
+    # {table: [(column, SQL type)]} — extend as the schema grows.
+    _EXPECTED = {
+        "certificate_registry": [
+            ("dqi_grade", "VARCHAR"),
+            ("confidence_grade", "VARCHAR"),
+        ],
+    }
+    insp_sql_existing = {}
+    with bind_engine.connect() as conn:
+        for table, cols in _EXPECTED.items():
+            try:
+                rows = conn.exec_driver_sql(
+                    f"SELECT * FROM {table} LIMIT 0")
+                existing = set(rows.keys())
+            except Exception:
+                continue  # table not present yet (create_all will have made it)
+            for name, sqltype in cols:
+                if name not in existing:
+                    try:
+                        conn.exec_driver_sql(
+                            f"ALTER TABLE {table} ADD COLUMN {name} {sqltype}")
+                        conn.commit()
+                        print(f"[startup] migration: added {table}.{name}")
+                    except Exception as e:
+                        print(f"[startup] migration WARN {table}.{name}: {e}")
+
+
 @app.on_event("startup")
 async def init_database_tables():
     """
@@ -644,6 +691,7 @@ async def init_database_tables():
     def _create_tables():
         try:
             Base.metadata.create_all(bind=engine)
+            _apply_additive_migrations(engine)
             print("[startup] Database tables ready.")
         except Exception as e:
             print(f"[startup] WARNING: could not initialize database tables: {e}")
@@ -2293,6 +2341,134 @@ def _build_sensor_quality_flags(df: pd.DataFrame, dt_hours: float,
     return flags
 
 
+def _collect_data_quality_counts(snap: pd.DataFrame, p_max: float, e_max: float,
+                                 dt_hours: float, has_forecast_col: bool,
+                                 col_map: dict) -> dict:
+    """
+    READ-ONLY, DETERMINISTIC extraction of the integer evidence the Data
+    Quality Index is derived from. Operates on a snapshot of the renamed
+    frame taken AFTER timestamp parsing but BEFORE the mutating pipeline
+    (dedupe / coercion / resample), so the counts describe the dataset the
+    customer actually supplied. Nothing here mutates `snap`.
+
+    Asset-agnostic: SoC / telemetry / forecast counts are None when the
+    corresponding column is absent — those DQI dimensions then become N/A.
+
+    Returns the Data Quality Manifest (raw counts + metadata). Every DQI
+    number is reproducible from these integers via eda_metrics.
+    """
+    n_rows = int(len(snap))
+    mf = {
+        "manifest_version": "1.0",
+        "n_rows_raw": n_rows,
+        # timestamps
+        "has_timestamps": False, "n_expected_steps": None, "n_present_steps": None,
+        "n_missing_steps": None, "n_unparseable_timestamps": 0,
+        "n_duplicate_timestamps": 0, "n_out_of_order_timestamps": 0,
+        "detected_interval_sec": None, "timezone_assumed": None, "span_hours": None,
+        # price (required)
+        "n_price_missing_interpolated": 0, "n_negative_price_steps": 0,
+        # sensor (asset-specific → may be None)
+        "n_soc_present": None, "n_soc_physics_violations": None,
+        # telemetry (may be None)
+        "n_telemetry_rows": None, "n_telemetry_degraded": None,
+        # forecast (may be None)
+        "n_forecast_present": None,
+    }
+
+    # ── Timestamps ──────────────────────────────────────────────────────────
+    hour = snap["hour"] if "hour" in snap.columns else None
+    if hour is not None and pd.api.types.is_datetime64_any_dtype(hour):
+        mf["has_timestamps"] = True
+        n_unparseable = int(hour.isna().sum())
+        valid = hour.dropna()
+        mf["n_unparseable_timestamps"] = n_unparseable
+        mf["n_present_steps"] = int(len(valid))
+        if len(valid) >= 2:
+            deltas = valid.diff().dt.total_seconds().dropna()
+            mf["n_out_of_order_timestamps"] = int((deltas < 0).sum())
+            mf["n_duplicate_timestamps"] = int(valid.duplicated().sum())
+            pos = deltas[deltas > 0]
+            interval = float(pos.median()) if len(pos) else None
+            mf["detected_interval_sec"] = round(interval, 3) if interval else None
+            span = float((valid.max() - valid.min()).total_seconds())
+            mf["span_hours"] = round(span / 3600.0, 4)
+            if interval and interval > 0:
+                mf["n_expected_steps"] = int(round(span / interval)) + 1
+                mf["n_missing_steps"] = max(0, mf["n_expected_steps"] - mf["n_present_steps"])
+        try:
+            tz = valid.dt.tz
+            mf["timezone_assumed"] = str(tz) if tz is not None else "naive/UTC"
+        except Exception:
+            mf["timezone_assumed"] = None
+
+    # ── Price (required column) ─────────────────────────────────────────────
+    if "price" in snap.columns:
+        num = pd.to_numeric(snap["price"].astype(str).str.replace(r"[^\d.\-]", "", regex=True),
+                            errors="coerce")
+        mf["n_price_missing_interpolated"] = int(num.isna().sum())
+        mf["n_negative_price_steps"] = int((num < 0).sum())
+
+    # ── Sensor validity (SoC physics — only when a SoC column was supplied) ──
+    if "soc" in col_map and "soc" in snap.columns and e_max and e_max > 0:
+        soc = pd.to_numeric(snap["soc"], errors="coerce").dropna()
+        if len(soc) >= 3:
+            soc_pct = soc * 100.0 if float(soc.abs().max()) <= 1.5 else soc
+            max_step_pct = (p_max * dt_hours / e_max) * 100.0
+            mf["n_soc_present"] = int(len(soc))
+            mf["n_soc_physics_violations"] = int((soc_pct.diff().abs() > max_step_pct * 1.5).sum())
+
+    # ── Telemetry health (only when a comms-status column was supplied) ──────
+    comms_col = next((c for c in snap.columns
+                      if _normalise_col(str(c)) in _COMMS_STATUS_ALIASES), None)
+    if comms_col is not None and n_rows:
+        vals = snap[comms_col].astype(str).str.strip().str.lower()
+        mf["n_telemetry_rows"] = n_rows
+        mf["n_telemetry_degraded"] = int((~vals.isin(_COMMS_OK_VALUES) & (vals != "nan")).sum())
+
+    # ── Forecast availability (only when a forecast column was supplied) ─────
+    if has_forecast_col and "forecast_price" in snap.columns:
+        mf["n_forecast_present"] = int(pd.to_numeric(snap["forecast_price"], errors="coerce").notna().sum())
+
+    return mf
+
+
+def _dqi_components_from_manifest(mf: dict) -> dict:
+    """Deterministically map manifest counts → the six DQI components (N/A-aware)."""
+    n = mf.get("n_rows_raw")
+    has_ts = mf.get("has_timestamps")
+    return {
+        "completeness": eda_metrics.completeness(
+            mf.get("n_present_steps"), mf.get("n_expected_steps")),
+        "timestamp_integrity": eda_metrics.timestamp_integrity(
+            (n if has_ts else None), mf.get("n_unparseable_timestamps", 0),
+            mf.get("n_duplicate_timestamps", 0)),
+        "sensor_validity": eda_metrics.sensor_validity(
+            mf.get("n_soc_present"), mf.get("n_soc_physics_violations") or 0),
+        "telemetry_health": eda_metrics.telemetry_health(
+            mf.get("n_telemetry_rows"), mf.get("n_telemetry_degraded") or 0),
+        "price_integrity": eda_metrics.price_integrity(
+            n, mf.get("n_price_missing_interpolated", 0)),
+        "forecast_availability": eda_metrics.forecast_availability(
+            (n if mf.get("n_forecast_present") is not None else None),
+            mf.get("n_forecast_present")),
+    }
+
+
+def _forecast_reliability_from_snapshot(snap: pd.DataFrame, has_forecast_col: bool) -> Optional[dict]:
+    """MAPE of a supplied forecast vs realized price → Forecast Reliability (report-only)."""
+    if not has_forecast_col or "forecast_price" not in snap.columns or "price" not in snap.columns:
+        return None
+    f = pd.to_numeric(snap["forecast_price"], errors="coerce")
+    p = pd.to_numeric(snap["price"].astype(str).str.replace(r"[^\d.\-]", "", regex=True), errors="coerce")
+    mask = f.notna() & p.notna()
+    if int(mask.sum()) < 2:
+        return None
+    denom = p[mask].abs().clip(lower=1e-9)
+    mape = float(((f[mask] - p[mask]).abs() / denom).mean())
+    return eda_metrics.forecast_reliability(mape)
+
+
 # Currency detection from column-name hints ("solar_revenue_omr" → OMR).
 # Display-only: figures are reported in the file's own currency, we just stop
 # implying dollars when the data plainly isn't in dollars.
@@ -2615,6 +2791,12 @@ async def audit_from_file(
         df, ts_corrections = _detect_excel_serial_timestamps(df)
         df, ts_format = _parse_timestamps(df)
 
+        # Read-only snapshot for the Data Quality Manifest: taken AFTER
+        # timestamp parsing but BEFORE the mutating pipeline (dedupe / coerce /
+        # resample), so DQI describes the dataset the customer actually
+        # supplied. Never mutated.
+        dq_snapshot = df.copy()
+
         # Clean: drop unparseable timestamps, sort out-of-order, dedupe.
         # Parse-stage flags (banner-header recovery) come first.
         parse_flags = list(df.attrs.get("ingest_flags", []))
@@ -2691,11 +2873,35 @@ async def audit_from_file(
         result = process_calculation(asset, time_series, dt_hours=dt_hours,
                                      currency=currency or "USD")
 
+        input_sha256 = _hashlib.sha256(contents).hexdigest()
+
+        # ── W1–W4: Data Quality Index + Audit Confidence ────────────────────
+        # Data Quality Manifest: read-only integer evidence from the supplied
+        # dataset (before any mutation). DQI is the geometric mean of the
+        # applicable, asset-agnostic components; absent dimensions are N/A.
+        dq_manifest = _collect_data_quality_counts(
+            dq_snapshot, asset.p_max, asset.e_max, dt_hours,
+            has_forecast_col=("forecast_price" in col_map), col_map=col_map)
+        dq_manifest["dataset_sha256"] = input_sha256
+        dq_components = _dqi_components_from_manifest(dq_manifest)
+        dqi_obj = eda_metrics.build_dqi(dq_components)
+        # Audit Confidence — solver-gated, independent of Forecast Reliability.
+        solver_proven = not (_dispatch_mode(asset.asset_type) == "storage"
+                             and _MILP_LAST.get("status") not in ("Optimal",))
+        m_consistency = eda_metrics.model_consistency(result.dq_score_raw)
+        ac_obj = eda_metrics.audit_confidence(dqi_obj["value"], m_consistency, solver_proven)
+        fr_obj = _forecast_reliability_from_snapshot(dq_snapshot, "forecast_price" in col_map)
+
+        result.data_quality_index = dqi_obj
+        result.audit_confidence = ac_obj
+        result.forecast_reliability = fr_obj
+        result.data_quality_manifest = dq_manifest
+
         # C2 — chain of custody. Every figure in this audit can be re-derived
         # from the file identified by input_sha256 using the versions below.
         result.audit_manifest = {
             "manifest_version":   "1.0",
-            "input_sha256":       _hashlib.sha256(contents).hexdigest(),
+            "input_sha256":       input_sha256,
             "original_filename":  file.filename,
             "file_size_bytes":    len(contents),
             "rows_parsed":        int(raw_shape[0]),
@@ -2969,15 +3175,18 @@ def _canonical_json(payload: dict) -> bytes:
                       ensure_ascii=False, default=str).encode("utf-8")
 
 
-def _register_certificate(cert: dict, manifest: Optional[dict]) -> dict:
+def _register_certificate(cert: dict, manifest: Optional[dict],
+                          dqi_grade: Optional[str] = None,
+                          confidence_grade: Optional[str] = None) -> dict:
     """
     Deterministic identity + signature + registry persistence.
 
     cert_id = first 16 hex of SHA-256 over the canonical CONTENT payload
-    (metrics, scope, versions — no timestamps), so re-requesting the
-    certificate for the same audit returns the same certificate instead of
-    minting a new ID each call. The registry stores only hashes, signature,
-    versions and scope — no customer identity or economics.
+    (metrics, scope, versions, quality grades — no timestamps), so
+    re-requesting the certificate for the same audit returns the same
+    certificate instead of minting a new ID each call. The registry stores
+    only hashes, signature, versions, scope and quality GRADES — no customer
+    identity or economics.
     """
     content = {k: cert.get(k) for k in (
         "asset_type", "audit_period", "economic_potential", "captured_value",
@@ -2986,6 +3195,8 @@ def _register_certificate(cert: dict, manifest: Optional[dict]) -> dict:
     content["input_sha256"] = (manifest or {}).get("input_sha256")
     content["methodology_version"] = METHODOLOGY_VERSION
     content["engine_version"] = ENGINE_VERSION
+    content["data_quality_grade"] = dqi_grade
+    content["confidence_grade"] = confidence_grade
     payload_hash = _hashlib.sha256(_canonical_json(content)).hexdigest()
     cert_id = f"EDPC-{payload_hash[:16].upper()}"
 
@@ -3004,6 +3215,7 @@ def _register_certificate(cert: dict, manifest: Optional[dict]) -> dict:
                 methodology_ver=METHODOLOGY_VERSION, engine_ver=ENGINE_VERSION,
                 solver_ver=f"{SOLVER_NAME} {SOLVER_VERSION}",
                 input_sha256=(manifest or {}).get("input_sha256"),
+                dqi_grade=dqi_grade, confidence_grade=confidence_grade,
             )
             db.add(rec)
             db.commit()
@@ -3457,6 +3669,10 @@ def _build_certificate(data: dict) -> dict:
     # Ch 8.2 attribution when the audited file carried a forecast column —
     # lets the certificate distinguish recoverable vs forecast-unreachable gap.
     _ga = data.get("gap_attribution") or None
+    # W1–W4 quality metrics carried from the audit result (may be None for a
+    # direct-JSON audit that never ran through the file ingestion pipeline).
+    _dqi = data.get("data_quality_index") or None
+    _ac  = data.get("audit_confidence") or None
     # cert identity + signature assigned by _register_certificate (C3):
     # deterministic content-hash ID, Ed25519 signature, registry persistence.
 
@@ -3552,9 +3768,30 @@ def _build_certificate(data: dict) -> dict:
         "methodology":          "MILP counterfactual optimization (hindsight ETL benchmark, Ch 8.2 attribution)",
         "standard":             "PREDAIOT EDA Methodology (pre-standard; EDA Standard v1.0 in preparation)",
         "version":              ENGINE_VERSION,
+        # ── W1: Data Quality Grade + Confidence Grade (spec §12) ──────────
+        # Overall DQI + every component (N/A shown, excluded from the mean),
+        # numeric + grade + interpretation. Audit Confidence separate.
+        "data_quality_index":   (None if not _dqi else {
+            "value_pct":      _dqi.get("value_pct"),
+            "grade":          _dqi.get("grade"),
+            "interpretation": _dqi.get("interpretation"),
+            "version":        _dqi.get("version"),
+            "components":     _dqi.get("components"),
+            "components_na":  _dqi.get("components_na"),
+        }),
+        "data_quality_grade":   (_dqi.get("grade") if _dqi else "N/A"),
+        "audit_confidence":     (None if not _ac else {
+            "value_pct":      _ac.get("value_pct"),
+            "grade":          _ac.get("grade"),
+            "interpretation": _ac.get("interpretation"),
+            "version":        _ac.get("version"),
+        }),
+        "confidence_grade":     (_ac.get("grade") if _ac else "N/A"),
     }
     # C3: deterministic ID, Ed25519 signature, registry row, verification URL
-    return _register_certificate(cert, data.get("audit_manifest"))
+    return _register_certificate(cert, data.get("audit_manifest"),
+                                 dqi_grade=(_dqi.get("grade") if _dqi else None),
+                                 confidence_grade=(_ac.get("grade") if _ac else None))
 
 
 @app.get("/api/v1/certificate")
@@ -3573,6 +3810,23 @@ async def get_certificate_for_latest(lead: TrialLead = Depends(require_trial_tok
 async def generate_certificate_for_audit(data: AuditResponse):
     """Generate a certificate for a provided audit result."""
     return _build_certificate(data.dict())
+
+
+@app.get("/api/v1/metrics/registry")
+async def metrics_registry():
+    """
+    Public, ungated self-description of every versioned quality metric
+    (name, version, equation, inputs, outputs, dependencies, validation
+    rules). No customer data. Enables independent reproduction of DQI /
+    Audit Confidence from the Data Quality Manifest.
+    """
+    return {
+        "registry_version": "1.0",
+        "metrics": eda_metrics.METRIC_REGISTRY,
+        "grade_scale": {lo: g for lo, g, _ in eda_metrics._GRADE_BANDS},
+        "note": "Grade cut-points are a declared normative scale, not empirical "
+                "constants; the numeric value is the primary reproducible quantity.",
+    }
 
 
 @app.get("/api/v1/certificate/verify/{cert_id}")
@@ -3615,6 +3869,9 @@ async def verify_certificate(cert_id: str):
         "payload_sha256":      rec.payload_sha256,
         "dataset_sha256":      rec.input_sha256,
         "audit_scope":         {"asset_type": rec.asset_type, "audit_period": rec.audit_period},
+        # Quality grades only — never the underlying customer economics.
+        "data_quality_grade":  rec.dqi_grade,
+        "confidence_grade":    rec.confidence_grade,
         "methodology_version": rec.methodology_ver,
         "engine_version":      rec.engine_ver,
         "solver_version":      rec.solver_ver,
@@ -3880,11 +4137,23 @@ def _build_audit_pdf(audit: dict) -> bytes:
     y -= 18
     c.setFillColorRGB(0.18, 0.18, 0.2)
     c.setFont("Helvetica", 9)
+    _q = cert.get("data_quality_index")
+    _dq_line = (f"{_q['value_pct']}% / Grade {_q['grade']} / {_q['interpretation']}"
+                if _q else "N/A (direct JSON audit)")
+    _a = cert.get("audit_confidence")
+    if _a and _a.get("value_pct") is not None:
+        _ac_line = f"{_a['value_pct']}% / Grade {_a['grade']}"
+    elif _a:
+        _ac_line = str(_a.get("grade"))
+    else:
+        _ac_line = "N/A"
     cert_lines = [
         f"Certificate ID:  {cert.get('certificate_id', '—')}    Status: {cert.get('certificate_status', '—')}    Signature: {('Ed25519' if cert.get('signature_ed25519') else 'UNSIGNED')}",
         f"Issued:          {cert.get('issued_at', '—')}",
         f"Economic Rating: {cert.get('rating_label', '—')}",
         f"DQ / ECF:        {cert.get('dq_score', '—')} / 100    Risk band: {str(cert.get('risk_level', '—')).upper()}",
+        f"Data Quality:    {_dq_line}   [{eda_metrics.DQI_VERSION}]",
+        f"Audit Confidence:{_ac_line}   [{eda_metrics.AC_VERSION}]",
         f"Dataset SHA-256: {cert.get('dataset_sha256') or 'n/a (direct JSON audit)'}",
         f"Versions:        engine {cert.get('engine_version', '—')} · {cert.get('methodology_version', '—')} · {cert.get('solver_version', '—')}",
         f"Verify:          {cert.get('verification_url', '—')}",
