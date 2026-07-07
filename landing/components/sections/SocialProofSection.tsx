@@ -2,14 +2,16 @@
 
 import { motion } from "framer-motion";
 
-// Placeholder company names — no real customer logos yet. Replace this array
-// with signed customers before promoting the section on live media.
+// Asset classes the engine audits — factual capability claims. The previous
+// list showed invented company names implying customers that do not exist
+// (docs/REMOVED_HEURISTICS.md); real logos go here once customers sign.
 const partners = [
-  "Global Energy Co.",
-  "TechWind Corp.",
-  "HydroGen Solutions",
-  "Solaris Grid",
-  "Nexus Power",
+  "BESS & Storage",
+  "Solar PV",
+  "Wind",
+  "Gas & Thermal",
+  "Green Hydrogen",
+  "Desalination",
 ];
 
 export default function SocialProofSection() {
@@ -23,7 +25,7 @@ export default function SocialProofSection() {
           viewport={{ once: true }}
           className="text-center text-gray-500 text-sm uppercase tracking-widest mb-10"
         >
-          Trusted by Energy Leaders &amp; Independent Power Producers
+          Built for Energy Leaders &amp; Independent Power Producers — one engine, every asset class
         </motion.p>
 
         <div className="flex flex-wrap justify-center items-center gap-x-12 gap-y-6">

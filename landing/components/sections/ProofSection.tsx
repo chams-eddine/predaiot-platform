@@ -106,6 +106,9 @@ export default function ProofSection() {
                 -$1,205{" "}
                 <span className="text-sm text-gray-500 font-normal">/ hour</span>
               </div>
+              <div className="text-[10px] text-gray-600 mt-1 font-sans normal-case tracking-normal">
+                Illustrative demo figure — not measured data
+              </div>
             </div>
           </motion.div>
         </motion.div>

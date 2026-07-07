@@ -15,9 +15,20 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import pulp
+import hashlib as _hashlib
+import base64 as _base64
 from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime, Boolean, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime, timedelta
+
+# ── Version identity (chain of custody, C2) ─────────────────────────────────
+# Stamped into every audit manifest and certificate so an archived report can
+# be matched to the exact software that produced it.
+ENGINE_VERSION      = "2.1.0"
+METHODOLOGY_VERSION = "EDA-Methodology-1.0-draft"
+PARSER_VERSION      = "ingest-1.3"
+SOLVER_NAME         = "CBC via PuLP"
+SOLVER_VERSION      = getattr(pulp, "__version__", "unknown")
 
 # ==========================================
 # 1. Database Setup  (CORE LOGIC UNCHANGED — connection made fault-tolerant)
@@ -91,6 +102,30 @@ class APIAccessLog(Base):
     client_ip    = Column(String, nullable=True)
     user_agent   = Column(String, nullable=True)
     latency_ms   = Column(Integer, nullable=True)
+
+
+class CertificateRecord(Base):
+    """
+    Certificate registry (C3 — verification system). Stores ONLY what public
+    verification needs: hashes, signature, versions, scope metadata. No
+    customer identity, no asset economics — a scanned QR must never expose
+    customer data.
+    """
+    __tablename__ = "certificate_registry"
+    id                = Column(Integer, primary_key=True, index=True)
+    cert_id           = Column(String, unique=True, index=True, nullable=False)
+    payload_sha256    = Column(String, index=True, nullable=False)
+    signature_b64     = Column(String, nullable=True)   # None = issued unsigned
+    public_key_b64    = Column(String, nullable=True)
+    asset_type        = Column(String, nullable=True)
+    audit_period      = Column(String, nullable=True)
+    methodology_ver   = Column(String, nullable=False)
+    engine_ver        = Column(String, nullable=False)
+    solver_ver        = Column(String, nullable=False)
+    input_sha256      = Column(String, nullable=True)   # dataset hash from the manifest
+    issued_at         = Column(DateTime, default=datetime.utcnow, nullable=False)
+    revoked           = Column(Boolean, default=False, nullable=False)
+    revocation_reason = Column(String, nullable=True)
 
 
 TRIAL_DURATION_DAYS = 7
@@ -170,20 +205,34 @@ class RootCauseItem(BaseModel):
     loss_usd: float
 
 class OpportunityItem(BaseModel):
+    # No-Fabrication rule (docs/REMOVED_HEURISTICS.md): every numeric field is
+    # either derived from ledger rows with a stated formula, or None. The
+    # withdrawn fields are retained as keys for API compatibility only.
     name: str
     description: str
-    annual_gain_usd: float
-    difficulty: str           # Quick Win | Strategic Initiative | Market Integration
-    priority_stars: int       # 1–5 (kept for API compatibility)
-    priority_score: int       # 0–100 investment-grade priority
-    confidence_pct: float     # statistical confidence %
-    investment_type: str      # No CAPEX | Low CAPEX | Requires Investment
-    owner: str                # EMS Engineer | Operations | Trading Desk | Asset Manager
-    operational_risk: str     # Low | Medium | High
-    payback_days: int         # estimated payback period
-    evidence: str             # data evidence supporting this opportunity
-    intervals_observed: int   # dispatch intervals showing this pattern
-    efficiency_gain_pct: float  # expected EDE improvement
+    # Derived economics — Σ gap_step over the ledger rows matching this
+    # opportunity's classification filter. None on advisory items.
+    period_gain: Optional[float] = None
+    annual_gain_usd: Optional[float] = None      # period_gain × (8760/span_h), linear extrapolation
+    share_of_positive_gap_pct: Optional[float] = None  # period_gain / Σ positive gap_step × 100
+    intervals_observed: Optional[int] = None
+    evidence: Optional[str] = None
+    derivation: Optional[str] = None             # exact ledger filter + formula
+    # Qualitative advisory labels (recommendations expressed as text, not
+    # dressed as measurements)
+    difficulty: Optional[str] = None
+    investment_type: Optional[str] = None
+    owner: Optional[str] = None
+    operational_risk: Optional[str] = None
+    # Experimental flag: conceptually valuable, not derivable from this audit
+    experimental: bool = False
+    experimental_note: Optional[str] = None
+    # WITHDRAWN (previously fabricated) — always None
+    priority_stars: Optional[int] = None
+    priority_score: Optional[int] = None
+    confidence_pct: Optional[float] = None
+    payback_days: Optional[int] = None
+    efficiency_gain_pct: Optional[float] = None
 
 class HeatMapCell(BaseModel):
     hour: int
@@ -194,16 +243,22 @@ class HeatMapCell(BaseModel):
     action_taken: str
 
 class EDAMetrics(BaseModel):
-    # Section 6 — Economic Decision Quality Metrics
-    economic_decision_efficiency: float     # EDE  = captured / potential
-    economic_leakage_ratio: float           # ELR  = lost / potential
-    dispatch_accuracy: float                # correct dispatches / total
-    decision_delay_index: float             # avg timesteps late (0 if perfect)
-    forecast_utilization_index: float       # % of steps with forecast provided
-    curtailment_recovery_ratio: float       # curtailed MWh potentially rescued
-    revenue_stacking_index: int             # number of distinct revenue services used
-    economic_intelligence_score: float      # 0–100 composite
-    battery_opportunity_capture: Optional[float] = None  # BESS only
+    # Section 6 — Economic Decision Quality Metrics.
+    # Only ratios derivable from ledger rows are populated. Withdrawn
+    # composite/invented-scale fields are retained as None for API
+    # compatibility (docs/REMOVED_HEURISTICS.md).
+    economic_decision_efficiency: float     # EDE = EDV_act / EDV_opt × 100 (Ch 4.2 domain rules)
+    economic_leakage_ratio: float           # ELR = 100 − EDE
+    dispatch_accuracy: float                # steps classified Correct / total × 100
+    forecast_utilization_index: float       # steps with forecast present / total × 100
+    override_rate_pct: Optional[float] = None      # override-flagged steps / total × 100
+    curtailed_energy_mwh: Optional[float] = None   # Σ curtailment_mw × Δt
+    # WITHDRAWN (previously fabricated) — always None
+    decision_delay_index: Optional[float] = None
+    curtailment_recovery_ratio: Optional[float] = None
+    revenue_stacking_index: Optional[int] = None
+    economic_intelligence_score: Optional[float] = None
+    battery_opportunity_capture: Optional[float] = None
 
 class FinancialLeakage(BaseModel):
     period_24h: float
@@ -244,6 +299,9 @@ class AuditResponse(BaseModel):
     theoretical_ceiling_gap: Optional[float] = None
     recoverable_execution_gap: Optional[float] = None
     headline_gap_basis: Optional[str] = "ceiling"  # "execution" | "ceiling"
+    # C2 — chain of custody: input hash, provenance, and software versions.
+    # Populated by the file-audit endpoint; None for raw JSON audits.
+    audit_manifest: Optional[Dict[str, Any]] = None
     decision_log: List[DecisionRecord]
     # Extended EDA sections
     asset_name: Optional[str] = "Energy Asset"
@@ -819,19 +877,43 @@ def run_optimizer_full(asset: AssetSpecs, time_series_list: list, dt_hours: floa
 # 5. NEW: EDA Intelligence Engine
 # ==========================================
 def _classify_decision(opt: float, act: float, price: float, threshold: float = 5.0) -> tuple:
-    """Returns (decision_type, confidence)"""
-    gap = (opt - act) * price
+    """
+    Deterministic step classification. The boundaries below are NORMATIVE
+    TAXONOMY DEFINITIONS (published in the methodology), not measurements:
+      tolerance 0.5 MW  — |opt − act| below this is "the same action"
+      materiality 5 MW  — optimal dispatch below this is "no opportunity"
+
+    Returns (decision_type, confidence). Confidence is ALWAYS None: the
+    previous per-class constants (0.96/0.85/…) were fabricated and were
+    removed under the No-Fabrication rule (docs/REMOVED_HEURISTICS.md).
+    A defensible confidence must derive from data quality — future EDA
+    Standard work, not an invented constant.
+    """
     if abs(opt - act) < 0.5:
-        return "Correct Dispatch", 0.96
+        return "Correct Dispatch", None
     if opt > threshold and act < 0.5:
-        return "Missed Arbitrage", min(0.99, 0.80 + (price / 200))
+        return "Missed Arbitrage", None
     if act > opt + threshold:
-        return "Over-Dispatch", 0.85
+        return "Over-Dispatch", None
     if opt < threshold and act < 0.5:
-        return "Correct Idle", 0.92
+        return "Correct Idle", None
     if opt > threshold and 0 < act < opt:
-        return "Partial Capture", 0.78
-    return "Sub-optimal Dispatch", 0.70
+        return "Partial Capture", None
+    return "Sub-optimal Dispatch", None
+
+def _root_cause_bucket(decision_type: str) -> str:
+    """Mutually exclusive mapping from step classification to gap category —
+    every positive gap_step is attributed to EXACTLY ONE category, so the
+    category losses partition Σ positive gap exactly (no double counting)."""
+    dt = decision_type or ""
+    if "Missed Arbitrage" in dt:
+        return "Missed Arbitrage"
+    if "Partial" in dt:
+        return "Partial Capture"
+    if "Over" in dt:
+        return "Over-Dispatch"
+    return "Schedule-based Dispatch"
+
 
 def _build_root_causes(
     decision_log: List[DecisionRecord],
@@ -839,343 +921,241 @@ def _build_root_causes(
     total_edv_opt: float,
 ) -> List[RootCauseItem]:
     """
-    Attribute the Economic Gap to category-level root causes.
+    Attribute the ceiling gap to categories via an EXACT PARTITION:
 
-    Denominator note (P0 fix — Coverage Tasks v1): contribution_pct expresses
-    each category as a fraction of TOTAL ECONOMIC POTENTIAL (EDV_optimal), not
-    of total_gap. Using total_gap was a real bug: total_gap = Σ gap_step sums
-    both positive AND negative step-gaps (operator-override steps that beat
-    the MILP contribute negative), while category loss sums only positives —
-    the ratio could exceed 100% (observed: "Missed Arbitrage 152.2%"). Using
-    total_edv_opt guarantees ≤ 100% because Σ positive_gap ≤ Σ optimal_edv.
-    We also min(100, …) as belt-and-suspenders. Curtailment attribution is
-    a secondary tag (double-counts by design — flagged for a follow-up).
+        loss(cat)            = Σ gap_step over rows with gap_step > 0
+                               whose classification maps to cat
+        contribution_pct(cat)= loss(cat) / Σ_cat loss(cat) × 100
+
+    The percentages therefore sum to 100.0 by construction, and every figure
+    reproduces from ledger rows by filtering on decision_type. The former
+    "Curtailment += gap × 0.15" secondary tag was removed — the 0.15 factor
+    was fabricated and double-counted gap already attributed to another
+    category (docs/REMOVED_HEURISTICS.md). Curtailed energy is reported
+    separately as a descriptive quantity in EDAMetrics.curtailed_energy_mwh.
     """
-    cats = {
-        "Missed Arbitrage":     0.0,
-        "Schedule-based Dispatch": 0.0,
-        "Partial Capture":      0.0,
-        "Over-Dispatch":        0.0,
-        "Curtailment":          0.0,
-        "SOC Constraint":       0.0,
-    }
+    cats: dict = {}
     for rec in decision_log:
         gap = rec.gap_step or 0
         if gap <= 0:
             continue
-        dt = rec.decision_type or ""
-        if "Missed Arbitrage" in dt:
-            cats["Missed Arbitrage"] += gap
-        elif "Partial" in dt:
-            cats["Partial Capture"] += gap
-        elif "Over" in dt:
-            cats["Over-Dispatch"] += gap
-        else:
-            cats["Schedule-based Dispatch"] += gap
-        if (rec.curtailment_mw or 0) > 0:
-            cats["Curtailment"] += gap * 0.15
+        cats[_root_cause_bucket(rec.decision_type)] = \
+            cats.get(_root_cause_bucket(rec.decision_type), 0.0) + gap
 
-    denom = total_edv_opt if total_edv_opt and total_edv_opt > 0 else 0.0
+    total_positive = sum(cats.values())
     result = []
     for cat, loss in cats.items():
-        if loss > 0 and denom > 0:
-            pct = min(100.0, (loss / denom) * 100.0)
+        if loss > 0 and total_positive > 0:
             result.append(RootCauseItem(
                 category=cat,
-                contribution_pct=round(pct, 1),
+                contribution_pct=round(loss / total_positive * 100.0, 1),
                 loss_usd=round(loss, 2),
             ))
     result.sort(key=lambda x: x.contribution_pct, reverse=True)
-    return result[:6]
+    return result
 
-def _opp(name, description, share, annual, total_gap, **fields) -> OpportunityItem:
-    """Small helper — every opportunity shares the same shape, so factor out
-    the arithmetic (annual_gain_usd, efficiency_gain_pct) and pass the rest."""
-    return OpportunityItem(
-        name=name,
-        description=description,
-        annual_gain_usd=round(annual * share, 0),
-        efficiency_gain_pct=round(annual * share / max(1, total_gap) * 100, 1),
-        **fields,
-    )
+# ── Economic Action Plan under the No-Fabrication rule ──────────────────────
+# QUANTIFIED items derive every number from ledger rows:
+#     period_gain(cat) = sum of gap_step over rows with gap_step > 0 whose
+#                        classification maps to cat (_root_cause_bucket)
+#     annual_gain      = period_gain x annual_factor (linear extrapolation,
+#                        labeled as such everywhere it is shown)
+#     share%           = period_gain / sum of positive gap_step x 100
+# Each carries a `derivation` string stating the exact filter + formula, so
+# any reader can reproduce it from the exported ledger CSV.
+#
+# ADVISORY items (market/strategy ideas that CANNOT be quantified from the
+# audited dataset) carry NO numbers and are flagged
+# "Experimental - Not part of EDA Standard v1.0".
+#
+# The former implementation allocated fixed shares of the gap
+# (0.28/0.35/0.18/0.12/0.07 ...) with invented confidence/priority/payback
+# figures - removed; see docs/REMOVED_HEURISTICS.md.
 
+_EXPERIMENTAL_NOTE = ("Experimental - Not part of EDA Standard v1.0. "
+                      "Not quantifiable from the audited dataset; no value figure is given.")
 
-def _ops_storage(annual, total_gap, stats) -> List[OpportunityItem]:
-    """BESS / Pumped Hydro / storage-with-cycles."""
-    total, missed, partial, curtail = stats["total"], stats["missed"], stats["partial"], stats["curtail"]
-    curtail_ivals = stats["curtail_ivals"]
-    return [
-        _opp("Charging Window Optimization",
-             "Shift battery charging to off-peak periods (00:00–05:00) to maximise arbitrage spread. "
-             "Replace fixed schedule with rolling 4-hour price forecast trigger.",
-             0.28, annual, total_gap,
-             difficulty="Quick Win", priority_stars=5, priority_score=100,
-             confidence_pct=round(min(99.5, 85 + (missed / total) * 15), 1),
-             investment_type="No CAPEX", owner="EMS Engineer", operational_risk="Low", payback_days=0,
-             evidence=f"Detected across {missed} dispatch intervals with chronic off-peak charging conflict.",
-             intervals_observed=missed),
-        _opp("Curtailment Recovery",
-             "Absorb curtailed generation by charging the storage asset during curtailment events "
-             "instead of wasting available energy. Captures otherwise-spilled economic value.",
-             0.35, annual, total_gap,
-             difficulty="Strategic Initiative", priority_stars=5, priority_score=98,
-             confidence_pct=round(min(99.0, 80 + (curtail / max(1, total)) * 20), 1),
-             investment_type="No CAPEX", owner="Operations", operational_risk="Low", payback_days=(0 if curtail > 0 else 14),
-             evidence=f"{round(curtail, 1)} MWh curtailed during audit period — all recoverable.",
-             intervals_observed=curtail_ivals),
-        _opp("Reserve Market Participation",
-             "Stack Frequency Containment Reserve (FCR) or Spinning Reserve on top of energy arbitrage. "
-             "Available capacity that is idle during low-price windows can earn continuous passive income.",
-             0.18, annual, total_gap,
-             difficulty="Market Integration", priority_stars=4, priority_score=85, confidence_pct=92.4,
-             investment_type="Low CAPEX", owner="Trading Desk", operational_risk="Medium", payback_days=45,
-             evidence=f"Asset was idle in {round((total - missed) / total * 100, 0):.0f}% of intervals — capacity available for reserve stacking.",
-             intervals_observed=total - missed),
-        _opp("Dynamic Dispatch Threshold",
-             "Replace fixed price threshold with market-adaptive trigger based on rolling 4-hour forecast. "
-             "Captures high-price spikes currently missed by static rules.",
-             0.12, annual, total_gap,
-             difficulty="Quick Win", priority_stars=4, priority_score=80, confidence_pct=97.1,
-             investment_type="No CAPEX", owner="EMS Engineer", operational_risk="Low", payback_days=2,
-             evidence=f"{partial} partial-capture events show dispatch threshold is too conservative.",
-             intervals_observed=partial),
-        _opp("Frequency Regulation Market",
-             "Enrol available capacity in primary frequency regulation (FFR / FCR-D). "
-             "Earns continuous capacity payments regardless of price level.",
-             0.07, annual, total_gap,
-             difficulty="Market Integration", priority_stars=3, priority_score=62, confidence_pct=88.7,
-             investment_type="Requires Investment", owner="Asset Manager", operational_risk="Medium", payback_days=90,
-             evidence="Market data indicates FCR capacity prices support revenue stacking.",
-             intervals_observed=0),
-    ]
+# Mode-aware recommendation wording per evidence bucket. Text is advice;
+# numbers always come from the ledger.
+_BUCKET_ACTIONS = {
+    "storage": {
+        "Missed Arbitrage":        ("Dynamic dispatch trigger",
+                                    "Respond to high-price windows instead of holding charge - replace static "
+                                    "thresholds with a price-responsive trigger."),
+        "Partial Capture":         ("Raise dispatch to the available optimum",
+                                    "During priced windows the asset dispatched below the feasible optimum - "
+                                    "review threshold conservatism and power-limit settings."),
+        "Schedule-based Dispatch": ("Replace fixed-schedule logic",
+                                    "Dispatch followed a predefined schedule rather than market signals during "
+                                    "these intervals."),
+        "Over-Dispatch":           ("Stop dispatch below marginal economics",
+                                    "Discharge occurred when the price did not cover marginal cost."),
+    },
+    "intermittent": {
+        "Missed Arbitrage":        ("Export available generation during priced windows",
+                                    "Available power was not exported while prices exceeded marginal cost."),
+        "Partial Capture":         ("Reduce unnecessary curtailment",
+                                    "Output was partially curtailed while export remained economic."),
+        "Schedule-based Dispatch": ("Price-responsive curtailment logic",
+                                    "Curtailment decisions did not track market signals in these intervals."),
+        "Over-Dispatch":           ("Negative-price curtailment discipline",
+                                    "Export continued into intervals where it destroyed value."),
+    },
+    "dispatchable": {
+        "Missed Arbitrage":        ("Merit-order compliance",
+                                    "The plant idled while price exceeded marginal generation cost."),
+        "Partial Capture":         ("Dispatch to full economic capacity",
+                                    "Output was below the economic optimum during priced windows."),
+        "Schedule-based Dispatch": ("Replace fixed-schedule logic",
+                                    "Dispatch followed a schedule rather than the merit-order rule."),
+        "Over-Dispatch":           ("Stop uneconomic dispatch",
+                                    "Generation ran while price was below marginal cost."),
+    },
+    "load": {
+        "Missed Arbitrage":        ("Shift consumption into cheapest windows",
+                                    "Consumption was scheduled outside the day's lowest-price windows."),
+        "Partial Capture":         ("Deepen load-shifting into cheap windows",
+                                    "Only part of the shiftable load moved to low-price intervals."),
+        "Schedule-based Dispatch": ("Price-responsive consumption scheduling",
+                                    "Consumption timing ignored market prices in these intervals."),
+        "Over-Dispatch":           ("Avoid consumption in peak-price windows",
+                                    "Load ran during the day's most expensive intervals."),
+    },
+}
 
-
-def _ops_intermittent(annual, total_gap, stats) -> List[OpportunityItem]:
-    """Solar / Wind / Tidal — no storage, decision space is curtail-vs-export."""
-    total, curtail = stats["total"], stats["curtail"]
-    curtail_ivals = stats["curtail_ivals"]
-    negative_price = stats["negative_price_ivals"]
-    return [
-        _opp("Negative-Price Curtailment Discipline",
-             "Programmatically curtail export during negative-price intervals. Continuing to export "
-             "into negative prices means paying the grid to take your energy — every MWh has a real "
-             "cost, not zero.",
-             0.38, annual, total_gap,
-             difficulty="Quick Win", priority_stars=5, priority_score=100,
-             confidence_pct=round(min(99.5, 85 + (negative_price / max(1, total)) * 100), 1),
-             investment_type="No CAPEX", owner="EMS Engineer", operational_risk="Low", payback_days=0,
-             evidence=f"{negative_price} intervals ran into negative prices without curtailment. Immediate SCADA-side inverter throttle would recover the loss.",
-             intervals_observed=negative_price),
-        _opp("Storage Colocation for Time-Shift",
-             "Pair the plant with a colocated BESS to shift midday oversupply into evening peak. "
-             "Turns curtailed generation into evening-peak revenue rather than lost value.",
-             0.24, annual, total_gap,
-             difficulty="Strategic Initiative", priority_stars=5, priority_score=94, confidence_pct=91.0,
-             investment_type="Requires Investment", owner="Asset Manager", operational_risk="Medium", payback_days=730,
-             evidence=f"{curtail_ivals} curtailment intervals concentrated in midday — the classic time-shift profile.",
-             intervals_observed=curtail_ivals),
-        _opp("Forecast-Weighted Bid Strategy",
-             "Bid the plant's next-day output into the day-ahead market with a merit curve informed "
-             "by wind/irradiance forecast confidence, instead of a flat price-taker bid.",
-             0.14, annual, total_gap,
-             difficulty="Market Integration", priority_stars=4, priority_score=82, confidence_pct=88.6,
-             investment_type="Low CAPEX", owner="Trading Desk", operational_risk="Low", payback_days=60,
-             evidence="Forecast utilisation index below sector benchmark — significant capacity to move from price-taker to price-shaper.",
-             intervals_observed=total),
-        _opp("Ancillary Services Enrolment",
-             "Enrol the inverter fleet in voltage support / reactive power / synthetic inertia markets. "
-             "These earn independent of energy price and reward available capacity.",
-             0.14, annual, total_gap,
-             difficulty="Market Integration", priority_stars=4, priority_score=76, confidence_pct=86.2,
-             investment_type="Low CAPEX", owner="Trading Desk", operational_risk="Medium", payback_days=120,
-             evidence="Modern IBR-capable inverters can participate in grid support markets during export hours with no fuel penalty.",
-             intervals_observed=total),
-        _opp("PPA-vs-Merchant Allocation",
-             "Optimise the split between fixed-price PPA volume and merchant exposure. Excess merchant "
-             "exposure at low prices is the highest-cost mistake this asset class makes.",
-             0.10, annual, total_gap,
-             difficulty="Strategic Initiative", priority_stars=3, priority_score=68, confidence_pct=81.4,
-             investment_type="No CAPEX", owner="Asset Manager", operational_risk="Low", payback_days=180,
-             evidence="Merchant-tail exposure detected during low-price windows — reallocatable to PPA volume.",
-             intervals_observed=0),
-    ]
-
-
-def _ops_dispatchable(annual, total_gap, stats) -> List[OpportunityItem]:
-    """Gas / Thermal / Hydro-no-storage / Nuclear / Geothermal / CHP."""
-    total, missed, partial = stats["total"], stats["missed"], stats["partial"]
-    return [
-        _opp("Merit-Order Compliance",
-             "Dispatch when market price exceeds the marginal cost of production and idle when it "
-             "doesn't. Fixed schedules that ignore price are the largest source of value destruction "
-             "in this asset class.",
-             0.40, annual, total_gap,
-             difficulty="Quick Win", priority_stars=5, priority_score=100,
-             confidence_pct=round(min(99.5, 88 + (missed / total) * 12), 1),
-             investment_type="No CAPEX", owner="EMS Engineer", operational_risk="Low", payback_days=0,
-             evidence=f"{missed} intervals dispatched below marginal cost. Merit-order trigger would eliminate the loss.",
-             intervals_observed=missed),
-        _opp("Ramp-Rate Optimisation",
-             "Align turbine ramp with the price gradient — ramp up as prices rise into peak, ramp "
-             "down as they fall. Reduces cycling wear and captures more of the peak shoulder.",
-             0.18, annual, total_gap,
-             difficulty="Strategic Initiative", priority_stars=4, priority_score=84, confidence_pct=91.7,
-             investment_type="Low CAPEX", owner="Operations", operational_risk="Medium", payback_days=90,
-             evidence=f"{partial} partial-capture events consistent with mistimed ramps.",
-             intervals_observed=partial),
-        _opp("Startup-Cost Recovery Windowing",
-             "Extend runs to amortise startup fuel and maintenance across a longer profitable window "
-             "rather than cycling on/off around marginal prices.",
-             0.14, annual, total_gap,
-             difficulty="Quick Win", priority_stars=4, priority_score=78, confidence_pct=90.4,
-             investment_type="No CAPEX", owner="Operations", operational_risk="Low", payback_days=14,
-             evidence="Frequent short runs detected — starts likely uneconomic vs. sustained dispatch during peak windows.",
-             intervals_observed=total),
-        _opp("Spinning Reserve Enrolment",
-             "Offer the plant's synchronised capacity into the spinning reserve / operating reserve "
-             "market. Earns capacity payments during hours the plant would otherwise idle.",
-             0.16, annual, total_gap,
-             difficulty="Market Integration", priority_stars=4, priority_score=76, confidence_pct=89.0,
-             investment_type="Low CAPEX", owner="Trading Desk", operational_risk="Medium", payback_days=60,
-             evidence="Synchronised idle-capacity hours identified — direct qualification for reserve products.",
-             intervals_observed=0),
-        _opp("Fuel Cost Hedging",
-             "Lock the marginal fuel component with forward contracts to stabilise dispatch economics "
-             "and lift the confidence of the merit-order trigger.",
-             0.12, annual, total_gap,
-             difficulty="Strategic Initiative", priority_stars=3, priority_score=64, confidence_pct=83.0,
-             investment_type="No CAPEX", owner="Trading Desk", operational_risk="Low", payback_days=180,
-             evidence="Spot fuel exposure aligned with revenue volatility — hedgeable via monthly forwards.",
-             intervals_observed=0),
-    ]
-
-
-def _ops_load(annual, total_gap, stats) -> List[OpportunityItem]:
-    """Electrolyzer / Desalination / large flexible loads."""
-    total, missed = stats["total"], stats["missed"]
-    return [
-        _opp("Off-Peak Load Shifting",
-             "Shift required daily consumption into the cheapest-price windows. Meets the production "
-             "target at a lower unit-electricity cost without changing daily throughput.",
-             0.42, annual, total_gap,
-             difficulty="Quick Win", priority_stars=5, priority_score=100,
-             confidence_pct=round(min(99.5, 85 + (missed / total) * 15), 1),
-             investment_type="No CAPEX", owner="EMS Engineer", operational_risk="Low", payback_days=0,
-             evidence=f"{missed} intervals consumed at above-median prices with cheaper alternatives available in the same day.",
-             intervals_observed=missed),
-        _opp("Renewable Co-Optimisation (Behind-the-Meter)",
-             "Align consumption with on-site or PPA-linked solar/wind surplus. Where the load can be "
-             "matched to renewable generation minute-by-minute, energy cost approaches zero.",
-             0.22, annual, total_gap,
-             difficulty="Strategic Initiative", priority_stars=5, priority_score=92, confidence_pct=90.5,
-             investment_type="Low CAPEX", owner="Asset Manager", operational_risk="Low", payback_days=180,
-             evidence="Renewable surplus profile aligns well with the plant's flexible operating window.",
-             intervals_observed=total),
-        _opp("Demand-Response / Grid-Balancing Enrolment",
-             "Enrol the flexible load into demand-response / interruptible-load markets. Getting paid "
-             "to briefly cut consumption during grid stress is pure economic upside for a load with "
-             "product storage buffer.",
-             0.14, annual, total_gap,
-             difficulty="Market Integration", priority_stars=4, priority_score=80, confidence_pct=87.2,
-             investment_type="Low CAPEX", owner="Trading Desk", operational_risk="Medium", payback_days=90,
-             evidence="Grid-side capacity payments cover the deferred production cost with room to spare.",
-             intervals_observed=0),
-        _opp("Product-Storage Buffer Sizing",
-             "Increase downstream product buffer (H₂ tank, water reservoir) so production timing "
-             "decouples further from delivery. Every hour of buffer is another hour of load-shifting "
-             "flexibility.",
-             0.12, annual, total_gap,
-             difficulty="Strategic Initiative", priority_stars=3, priority_score=72, confidence_pct=84.6,
-             investment_type="Requires Investment", owner="Asset Manager", operational_risk="Low", payback_days=365,
-             evidence="Current buffer capacity limits how much daily production can shift into cheap-hour windows.",
-             intervals_observed=0),
-        _opp("Curtailment Absorption PPA",
-             "Structure a discounted PPA that pays the generator only for otherwise-curtailed MWh. "
-             "Turns the load into the natural sink for a nearby wind/solar plant's negative-price "
-             "hours.",
-             0.10, annual, total_gap,
-             difficulty="Strategic Initiative", priority_stars=3, priority_score=68, confidence_pct=82.0,
-             investment_type="No CAPEX", owner="Asset Manager", operational_risk="Low", payback_days=120,
-             evidence="Adjacent variable-renewable assets show curtailment patterns matching the load's flexible window.",
-             intervals_observed=0),
-    ]
-
-
-_SECTOR_OPS = {
-    "storage":      _ops_storage,
-    "intermittent": _ops_intermittent,
-    "dispatchable": _ops_dispatchable,
-    "load":         _ops_load,
+# Advisory catalog: strategy directions worth investigating, explicitly not
+# quantified by this audit.
+_ADVISORY_IDEAS = {
+    "storage": [
+        ("Reserve / frequency-market stacking",
+         "Idle capacity may qualify for FCR / spinning-reserve products in markets that offer them."),
+        ("Curtailment-absorption charging",
+         "Where colocated generation is curtailed, charging against curtailed energy may add value."),
+    ],
+    "intermittent": [
+        ("Storage colocation for time-shift",
+         "A colocated BESS could move midday oversupply into evening peaks."),
+        ("Ancillary-services enrolment",
+         "IBR-capable inverters may qualify for voltage-support or reactive-power products."),
+    ],
+    "dispatchable": [
+        ("Spinning-reserve enrolment",
+         "Synchronised idle capacity may qualify for operating-reserve products."),
+        ("Fuel-cost hedging",
+         "Forward fuel contracts could stabilise the marginal-cost input of the merit-order rule."),
+    ],
+    "load": [
+        ("Demand-response enrolment",
+         "The flexible load may qualify for interruptible-load or DR programmes."),
+        ("Product-storage buffer sizing",
+         "A larger downstream buffer would widen the feasible load-shifting window."),
+    ],
 }
 
 
 def _build_opportunities(total_gap: float, asset_type: str, decision_log: list = None,
                          annual_factor: float = 365.0, currency: str = "USD") -> List[OpportunityItem]:
-    """
-    Build a prioritised Economic Action Plan™ appropriate to the asset class.
-
-    Routes on dispatch mode so a Solar audit doesn't recommend "Charging Window
-    Optimization." Each mode ships 5 curated opportunities plus a mode-agnostic
-    "Operator Override Governance" card when overrides > 5.
-
-    annual_factor scales the audited-period gap to a year (8760 / span_hours).
-    Default 365 = the legacy "gap covers exactly one day" assumption.
-    """
-    annual = total_gap * annual_factor
+    """Evidence-derived action plan. See the block comment above for the
+    derivation rules; every number reproduces from the exported ledger."""
     log = decision_log or []
-
-    stats = {
-        "total":                max(1, len(log)),
-        "missed":               sum(1 for d in log if d.decision_type == "Missed Arbitrage"),
-        "partial":              sum(1 for d in log if d.decision_type == "Partial Capture"),
-        "curtail":              sum(d.curtailment_mw or 0 for d in log),
-        "curtail_ivals":        sum(1 for d in log if (d.curtailment_mw or 0) > 0),
-        "override":             sum(1 for d in log if d.operator_override),
-        "negative_price_ivals": sum(1 for d in log if (d.price or 0) < 0),
-    }
+    sums, counts = {}, {}
+    for d in log:
+        g = d.gap_step or 0
+        if g <= 0:
+            continue
+        b = _root_cause_bucket(d.decision_type)
+        sums[b] = sums.get(b, 0.0) + g
+        counts[b] = counts.get(b, 0) + 1
+    total_positive = sum(sums.values())
 
     mode = _dispatch_mode(asset_type)
-    builder = _SECTOR_OPS.get(mode, _ops_storage)
-    ops = builder(annual, total_gap, stats)
+    actions = _BUCKET_ACTIONS.get(mode, _BUCKET_ACTIONS["storage"])
 
-    # Mode-agnostic: governance opportunity when operator overrides are material
-    override = stats["override"]
-    if override > 5:
-        ops.insert(2, _opp("Operator Override Governance",
-                           "Implement structured override protocol: require economic justification for "
-                           f"manual interventions. {override} overrides detected — each carries average leakage risk.",
-                           0.08, annual, total_gap,
-                           difficulty="Quick Win", priority_stars=4, priority_score=88, confidence_pct=94.2,
-                           investment_type="No CAPEX", owner="Operations", operational_risk="Low", payback_days=1,
-                           evidence=f"{override} operator overrides detected in audit period. Avg economic cost per override: {_fmt_money(total_gap / override, currency, 0)}.",
-                           intervals_observed=override))
+    ops: List[OpportunityItem] = []
+    for bucket, gain in sorted(sums.items(), key=lambda kv: kv[1], reverse=True):
+        name, description = actions.get(bucket, (bucket, ""))
+        ops.append(OpportunityItem(
+            name=name,
+            description=description,
+            period_gain=round(gain, 2),
+            annual_gain_usd=round(gain * annual_factor, 0),
+            share_of_positive_gap_pct=round(gain / total_positive * 100.0, 1) if total_positive > 0 else None,
+            intervals_observed=counts[bucket],
+            evidence=(f"{counts[bucket]} ledger row(s) classified '{bucket}' with positive gap; "
+                      f"sum of gap_step = {_fmt_money(gain, currency)} for the audited period."),
+            derivation=(f"period_gain = sum of gap_step over ledger rows where decision_type maps to "
+                        f"'{bucket}' and gap_step > 0; annual = period_gain x {annual_factor:.2f} "
+                        "(linear extrapolation of the audited period)."),
+        ))
 
+    # Operator-override governance - derived from override-flagged rows only.
+    ovr_gain = sum((d.gap_step or 0) for d in log if d.operator_override and (d.gap_step or 0) > 0)
+    ovr_count = sum(1 for d in log if d.operator_override and (d.gap_step or 0) > 0)
+    if ovr_count > 0:
+        ops.append(OpportunityItem(
+            name="Operator override governance",
+            description="Manual interventions coincided with value loss - require an economic "
+                        "justification record for each override.",
+            period_gain=round(ovr_gain, 2),
+            annual_gain_usd=round(ovr_gain * annual_factor, 0),
+            share_of_positive_gap_pct=round(ovr_gain / total_positive * 100.0, 1) if total_positive > 0 else None,
+            intervals_observed=ovr_count,
+            evidence=(f"{ovr_count} override-flagged ledger row(s) with positive gap; "
+                      f"sum of gap_step = {_fmt_money(ovr_gain, currency)}. NOTE: these rows are also "
+                      "counted in their classification bucket above - this item is a cross-cut "
+                      "view, not additional value."),
+            derivation="period_gain = sum of gap_step over ledger rows where operator_override = True "
+                       "and gap_step > 0 (cross-cut of the buckets above; do not sum with them).",
+        ))
+
+    # Advisory ideas - explicitly experimental, never quantified.
+    for name, description in _ADVISORY_IDEAS.get(mode, []):
+        ops.append(OpportunityItem(
+            name=name,
+            description=description,
+            experimental=True,
+            experimental_note=_EXPERIMENTAL_NOTE,
+        ))
     return ops
 
 def _build_heat_map(decision_log: List[DecisionRecord]) -> List[HeatMapCell]:
+    """
+    Severity banding derived from the audit's OWN gap distribution — the
+    former bands (gap < price×1 / price×5) used fabricated multipliers
+    (docs/REMOVED_HEURISTICS.md). Definition:
+        optimal    : gap_step ≤ 0
+        acceptable : 0 < gap_step ≤ P50 of this audit's positive gaps
+        poor       : P50 < gap_step ≤ P90
+        critical   : gap_step > P90
+    Percentiles are computed from the ledger itself, so the legend is
+    reproducible for any dataset.
+    """
+    positive = sorted((rec.gap_step or 0) for rec in decision_log if (rec.gap_step or 0) > 0)
+
+    def _pct(p: float) -> float:
+        if not positive:
+            return 0.0
+        k = max(0, min(len(positive) - 1, int(round(p * (len(positive) - 1)))))
+        return positive[k]
+
+    p50, p90 = _pct(0.50), _pct(0.90)
+
     cells = []
     for rec in decision_log:
         h = rec.hour or 0
-        hh = h // 12
-        mm = (h % 12) * 5
-        label = f"{hh:02d}:{mm:02d}"
+        label = f"{h // 12:02d}:{(h % 12) * 5:02d}"
         gap = rec.gap_step or 0
-        opt = rec.optimal_action or 0
-        act = rec.actual_action or 0
-        price = rec.price or 0
-
         if gap <= 0:
             status = "optimal"
-        elif gap < price * 1:
+        elif gap <= p50:
             status = "acceptable"
-        elif gap < price * 5:
+        elif gap <= p90:
             status = "poor"
         else:
             status = "critical"
-
         cells.append(HeatMapCell(
             hour=h, label=label, status=status,
-            gap_usd=round(gap, 2), price=price,
+            gap_usd=round(gap, 2), price=rec.price or 0,
             action_taken=rec.decision_type or "Unknown"
         ))
     return cells
@@ -1183,13 +1163,21 @@ def _build_heat_map(decision_log: List[DecisionRecord]) -> List[HeatMapCell]:
 def _build_eda_metrics(
     decision_log: List[DecisionRecord],
     total_opt: float, total_act: float,
-    asset_type: str
+    asset_type: str,
+    dt_hours: float = 1.0,
 ) -> EDAMetrics:
+    """
+    Only ledger-derivable ratios. The former EIS composite (weights
+    45/30/15/10), decision_delay_index (×10 scale), revenue_stacking_index
+    (2-if-fui>0.3) and battery_opportunity_capture (dispatch accuracy under a
+    misleading name) were fabricated constructs and are withdrawn — the model
+    keeps their keys as None for API compatibility (docs/REMOVED_HEURISTICS.md).
+    """
     total = len(decision_log)
     correct = sum(1 for d in decision_log if "Correct" in (d.decision_type or ""))
     with_forecast = sum(1 for d in decision_log if d.forecast_price is not None)
-    curtailed_mw = sum(d.curtailment_mw or 0 for d in decision_log)
     overrides = sum(1 for d in decision_log if d.operator_override)
+    curtailed_mwh = sum((d.curtailment_mw or 0) for d in decision_log) * dt_hours
 
     # Same Ch. 4.2 rule as dq_score: no opportunity + nothing captured = full
     # efficiency (no leakage), not the literal 0/0 → 0 fallback.
@@ -1200,33 +1188,18 @@ def _build_eda_metrics(
         ede = 1.0
     else:
         ede = 0.0
+    ede = max(0.0, min(1.0, ede))
     elr = 1 - ede
     dispatch_acc = (correct / total) if total > 0 else 0
     fui = (with_forecast / total) if total > 0 else 0
-
-    # EIS: composite 0–100
-    eis = round(
-        (ede * 45) +           # capture efficiency 45pts
-        (dispatch_acc * 30) +  # decision accuracy 30pts
-        (fui * 15) +           # forecast utilization 15pts
-        (min(1, 1 - elr) * 10) # leakage control 10pts
-    ) * 100
-    eis = min(100, max(0, round(eis / 100, 1)))  # normalize
-
-    boc = None
-    if asset_type in ("BESS", "Hydro"):
-        boc = round(dispatch_acc * 100, 1)
 
     return EDAMetrics(
         economic_decision_efficiency=round(ede * 100, 2),
         economic_leakage_ratio=round(elr * 100, 2),
         dispatch_accuracy=round(dispatch_acc * 100, 2),
-        decision_delay_index=round(overrides / max(1, total) * 10, 2),
         forecast_utilization_index=round(fui * 100, 2),
-        curtailment_recovery_ratio=round(curtailed_mw, 2),
-        revenue_stacking_index=2 if fui > 0.3 else 1,
-        economic_intelligence_score=round(eis, 1),
-        battery_opportunity_capture=boc
+        override_rate_pct=round(overrides / total * 100, 2) if total > 0 else None,
+        curtailed_energy_mwh=round(curtailed_mwh, 2),
     )
 
 def _build_ai_commentary(
@@ -1247,18 +1220,19 @@ def _build_ai_commentary(
 
     pct          = round((total_gap / total_opt * 100), 1) if total_opt > 0 else 0
     capture_pct  = round(100 - pct, 1)
-    eis          = eda_metrics.economic_intelligence_score if eda_metrics else round(dq * 100, 1)
-    rating_word  = "CRITICAL" if dq < 0.4 else "MODERATE" if dq < 0.7 else "STRONG"
-    recoverable  = max(0, round(pct * 0.68, 1))
-    top_opp      = (opportunities[0].name if opportunities else "Market-responsive dispatch")
-    top_cause    = (root_causes[0].category if root_causes else "Schedule-based dispatch")
-    top_cause_pct = (root_causes[0].contribution_pct if root_causes else 35)
+    # risk band per the published War-Room thresholds (Ref. Manual Vol III):
+    # a documented banding of DQ, not an invented composite rating.
+    risk_band    = _risk_level(dq)
+    top_opp      = (opportunities[0].name if opportunities else None)
+    top_cause    = (root_causes[0].category if root_causes else None)
+    top_cause_pct = (root_causes[0].contribution_pct if root_causes else None)
 
     L = []
     L.append("EXECUTIVE ASSESSMENT")
     L.append(
-        f"During the audit period, {asset_name} captured only {capture_pct}% of its available economic "
-        f"potential, resulting in a {rating_word} Economic Intelligence Rating."
+        f"During the audit period, {asset_name} captured {capture_pct}% of its Theoretical "
+        f"Economic Ceiling (perfect-foresight upper-bound benchmark). Decision-quality risk "
+        f"band per the published DQ thresholds: {risk_band}."
     )
     L.append(
         "Although the asset remained technically available, dispatch decisions failed to fully respond to "
@@ -1269,25 +1243,29 @@ def _build_ai_commentary(
     )
     L.append("")
     L.append("KEY FINDINGS")
-    L.append(f"✔ Economic Intelligence Score        {eis} / 100")
+    L.append(f"✔ Decision Quality (ECF)             {round(dq * 100, 1)} / 100")
     L.append(f"✔ Ceiling Gap (upper bound)          {_fmt_money(total_gap, currency)}")
     if gap_attribution:
         L.append(f"✔ Recoverable Execution Gap          {_fmt_money(gap_attribution['execution_gap'], currency)}")
     L.append(f"✔ Missed High-Value Intervals         {len(missed)}")
-    L.append(f"✔ Largest Opportunity                 {top_opp}")
+    if top_opp:
+        L.append(f"✔ Largest Evidence-Backed Action      {top_opp}")
     L.append("")
     L.append("ROOT CAUSE ANALYSIS")
-    L.append(
-        f"The audit indicates that the primary source of lost value was decision logic ({top_cause}, "
-        f"{top_cause_pct}% contribution), not equipment performance."
-    )
+    if top_cause is not None:
+        L.append(
+            f"The largest gap category is '{top_cause}' — {top_cause_pct}% of the positive "
+            "step-gap (exact partition of ledger rows by decision classification)."
+        )
+    else:
+        L.append("No positive gap steps were recorded — no root-cause attribution applies.")
     if missed:
         L.append(
-            f"The asset remained available throughout {len(missed)} high-price market windows"
-            + (f" — most notably at {top_times}" if top_times else "")
-            + " — but followed a predefined operating schedule instead of responding dynamically to "
-              "economic signals. No hardware limitations were detected; no availability constraints "
-              "prevented revenue capture. The lost value originated entirely from dispatch strategy."
+            f"The ledger records {len(missed)} high-price windows classified 'Missed Arbitrage'"
+            + (f" — largest at {top_times}" if top_times else "")
+            + " — where dispatch remained below the feasible optimum. Whether hardware, availability "
+              "or contractual constraints contributed is OUTSIDE the scope of this data-only audit; "
+              "the figures quantify the economic difference, not its operational cause."
         )
     L.append("")
     L.append("OPERATIONAL IMPACT")
@@ -1309,33 +1287,31 @@ def _build_ai_commentary(
     L.append("")
     L.append("AUDITOR CONCLUSION")
     L.append(
-        f"The asset is operationally healthy but economically {'under-optimized' if dq < 0.7 else 'well-optimized'}. "
-        + ("Current operating logic prioritizes schedule compliance over value maximization. Replacing "
-           "rule-based dispatch with economic optimization would significantly improve financial "
-           "performance while preserving all operational constraints."
-           if dq < 0.7 else
-           "Current operating logic is largely market-responsive. Incremental tuning of dispatch "
-           "thresholds would close the remaining gap to full economic optimality.")
+        f"Based solely on the audited dataset, the asset captured {round(dq * 100, 1)}% of its "
+        f"perfect-foresight ceiling (risk band: {_risk_level(dq)} per the published DQ thresholds). "
+        "This audit evaluates dispatch economics only; asset health, availability and contractual "
+        "constraints are outside its evidence base."
     )
     L.append("")
-    L.append("RECOMMENDED ACTIONS")
-    if opportunities:
-        for i, op in enumerate(opportunities[:5], 1):
-            L.append(f"")
+    L.append("RECOMMENDED ACTIONS (evidence-derived)")
+    quantified = [op for op in (opportunities or []) if not op.experimental and op.period_gain]
+    advisory   = [op for op in (opportunities or []) if op.experimental]
+    if quantified:
+        for i, op in enumerate(quantified[:5], 1):
+            L.append("")
             L.append(f"Recommendation {i} — {op.name}")
-            L.append(f"  Expected Annual Gain    {_fmt_money(op.annual_gain_usd, currency, 0)}")
-            L.append(f"  Implementation          {op.difficulty}")
-            L.append(f"  Operational Risk        {op.operational_risk}")
-            L.append(f"  Confidence              {op.confidence_pct}%")
-            L.append(f"  Owner                   {op.owner}")
-            L.append(f"  Priority                {op.priority_score}/100")
-            L.append(f"  Status                  Recommended")
+            L.append(f"  Period Value            {_fmt_money(op.period_gain, currency)}")
+            L.append(f"  Annualised (linear est.) {_fmt_money(op.annual_gain_usd, currency, 0)}")
+            L.append(f"  Ledger Intervals        {op.intervals_observed}")
+            L.append(f"  Derivation              {op.derivation}")
     else:
-        L.append("  1. Shift charging window to 00:00–05:00 off-peak hours.")
-        L.append("  2. Raise discharge trigger threshold with dynamic price floor.")
-        L.append("  3. Integrate 4-hour ahead price forecast into dispatch logic.")
-        L.append("  4. Enable automatic market-responsive dispatch; reduce operator overrides.")
-        L.append("  5. Enroll available capacity in ancillary services to stack revenue streams.")
+        L.append("  No positive-gap intervals were recorded — no quantified actions apply.")
+    if advisory:
+        L.append("")
+        L.append("ADVISORY DIRECTIONS — Experimental, not part of EDA Standard v1.0; not "
+                 "quantifiable from the audited dataset:")
+        for op in advisory:
+            L.append(f"  • {op.name}: {op.description}")
 
     return "\n".join(L)
 
@@ -1508,7 +1484,8 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
     # legacy ×365, for a 5-minute SCADA day it stops over-scaling 12×.
     span_hours_eda = len(time_series_list) * dt_hours
     annual_factor = (8760.0 / span_hours_eda) if span_hours_eda > 0 else 365.0
-    eda_metrics  = _build_eda_metrics(decision_log, total_edv_opt, total_edv_act, asset.asset_type)
+    eda_metrics  = _build_eda_metrics(decision_log, total_edv_opt, total_edv_act, asset.asset_type,
+                                      dt_hours=dt_hours)
     root_causes  = _build_root_causes(decision_log, total_gap, total_edv_opt)
     opportunities = _build_opportunities(total_gap, asset.asset_type, decision_log,
                                          annual_factor=annual_factor, currency=currency)
@@ -2597,6 +2574,7 @@ async def audit_from_file(
         if len(df) == 0:
             return JSONResponse(status_code=400, content={
                 "detail": "The file parsed but contains no data rows (header only?)."})
+        raw_shape = df.shape  # provenance: as-parsed dimensions (C2 manifest)
 
         # Resolve column aliases (exact → fuzzy)
         col_info = _resolve_columns_verbose(list(df.columns))
@@ -2712,6 +2690,34 @@ async def audit_from_file(
 
         result = process_calculation(asset, time_series, dt_hours=dt_hours,
                                      currency=currency or "USD")
+
+        # C2 — chain of custody. Every figure in this audit can be re-derived
+        # from the file identified by input_sha256 using the versions below.
+        result.audit_manifest = {
+            "manifest_version":   "1.0",
+            "input_sha256":       _hashlib.sha256(contents).hexdigest(),
+            "original_filename":  file.filename,
+            "file_size_bytes":    len(contents),
+            "rows_parsed":        int(raw_shape[0]),
+            "columns_parsed":     int(raw_shape[1]),
+            "steps_audited":      len(time_series),
+            "timestamp_range":    {"first": ts_format.get("first_ts"),
+                                   "last":  ts_format.get("last_ts")},
+            "uploaded_at_utc":    datetime.utcnow().isoformat() + "Z",
+            "uploaded_by":        lead.email,
+            "parser_version":     PARSER_VERSION,
+            "audit_engine_version": ENGINE_VERSION,
+            "methodology_version":  METHODOLOGY_VERSION,
+            "solver": {
+                "name":            SOLVER_NAME,
+                "library_version": SOLVER_VERSION,
+                "time_limit_s":    45,
+                "status":          _MILP_LAST.get("status"),
+                # CBC "Optimal" = proven optimal at its default tolerance; a
+                # numeric MIP-gap channel is future work — never fabricated.
+                "mip_gap":         None,
+            },
+        }
 
         # Very large files can hit the MILP wall-clock cap — CBC then returns
         # its best incumbent. Disclose it: the optimum becomes a lower bound.
@@ -2929,37 +2935,108 @@ async def get_latest_live_data(lead: TrialLead = Depends(require_trial_token)):
 # ==========================================
 # NEW: EDA Credit Rating
 # ==========================================
-def _eda_rating(dq_score: float, eda_metrics=None) -> tuple:
+# ── C3: Certificate signing + verification ──────────────────────────────────
+# Ed25519 over the canonical certificate payload. The signing key comes from
+# PREDAIOT_CERT_SIGNING_KEY (base64, 32-byte seed). Without a configured key
+# the certificate is HONESTLY issued as unsigned — never a fake signature.
+_CERT_KEY_ENV = "PREDAIOT_CERT_SIGNING_KEY"
+_VERIFY_BASE_URL = os.getenv("PREDAIOT_VERIFY_BASE_URL",
+                             "https://platform.preda-iot.com/api/v1/certificate/verify")
+
+
+def _cert_signing_key():
+    """Returns (private_key, public_key_b64) or (None, None) when unconfigured."""
+    seed_b64 = os.getenv(_CERT_KEY_ENV, "").strip()
+    if not seed_b64:
+        return None, None
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives import serialization
+        seed = _base64.b64decode(seed_b64)
+        key = Ed25519PrivateKey.from_private_bytes(seed[:32])
+        pub = key.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw)
+        return key, _base64.b64encode(pub).decode()
+    except Exception as e:
+        print(f"[cert] signing key invalid — issuing unsigned certificates: {e}")
+        return None, None
+
+
+def _canonical_json(payload: dict) -> bytes:
+    """Deterministic byte serialisation: sorted keys, compact separators."""
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False, default=str).encode("utf-8")
+
+
+def _register_certificate(cert: dict, manifest: Optional[dict]) -> dict:
     """
-    Composite Economic Decision Performance Rating — like Moody's for energy assets.
+    Deterministic identity + signature + registry persistence.
 
-    Weighting (mirrors PREDAIOT EDPC Standard v1.0):
-        Decision Quality Index  40 pts
-        Economic Efficiency     30 pts
-        Revenue Capture         20 pts
-        Governance Compliance   10 pts
+    cert_id = first 16 hex of SHA-256 over the canonical CONTENT payload
+    (metrics, scope, versions — no timestamps), so re-requesting the
+    certificate for the same audit returns the same certificate instead of
+    minting a new ID each call. The registry stores only hashes, signature,
+    versions and scope — no customer identity or economics.
     """
-    dq = dq_score  # 0.0–1.0
+    content = {k: cert.get(k) for k in (
+        "asset_type", "audit_period", "economic_potential", "captured_value",
+        "theoretical_ceiling_gap", "recoverable_execution_gap", "dq_score",
+        "currency", "risk_level", "methodology", "standard", "version")}
+    content["input_sha256"] = (manifest or {}).get("input_sha256")
+    content["methodology_version"] = METHODOLOGY_VERSION
+    content["engine_version"] = ENGINE_VERSION
+    payload_hash = _hashlib.sha256(_canonical_json(content)).hexdigest()
+    cert_id = f"EDPC-{payload_hash[:16].upper()}"
 
-    if eda_metrics:
-        m = eda_metrics if isinstance(eda_metrics, dict) else eda_metrics.dict()
-        eff  = (m.get("economic_decision_efficiency", 0) / 100) * 30
-        cap  = dq * 20
-        gov  = max(0, 10 - m.get("decision_delay_index", 0) * 2)
-    else:
-        eff  = dq * 30
-        cap  = dq * 20
-        gov  = 8.0
+    db = SessionLocal()
+    try:
+        rec = db.query(CertificateRecord).filter_by(payload_sha256=payload_hash).first()
+        if rec is None:
+            key, pub_b64 = _cert_signing_key()
+            sig_b64 = None
+            if key is not None:
+                sig_b64 = _base64.b64encode(key.sign(payload_hash.encode())).decode()
+            rec = CertificateRecord(
+                cert_id=cert_id, payload_sha256=payload_hash,
+                signature_b64=sig_b64, public_key_b64=pub_b64,
+                asset_type=cert.get("asset_type"), audit_period=cert.get("audit_period"),
+                methodology_ver=METHODOLOGY_VERSION, engine_ver=ENGINE_VERSION,
+                solver_ver=f"{SOLVER_NAME} {SOLVER_VERSION}",
+                input_sha256=(manifest or {}).get("input_sha256"),
+            )
+            db.add(rec)
+            db.commit()
+            db.refresh(rec)
+        cert.update({
+            "certificate_id":    rec.cert_id,
+            "payload_sha256":    rec.payload_sha256,
+            "signature_ed25519": rec.signature_b64,
+            "public_key_ed25519": rec.public_key_b64,
+            "signature_status":  ("SIGNED" if rec.signature_b64 else
+                                  "UNSIGNED — no signing key configured on this deployment"),
+            "verification_url":  f"{_VERIFY_BASE_URL}/{rec.cert_id}",
+            "issued_at":         rec.issued_at.isoformat() + "Z",
+            "certificate_status": ("REVOKED" if rec.revoked else "VALID"),
+            "dataset_sha256":    rec.input_sha256,
+            "solver_version":    rec.solver_ver,
+            "methodology_version": rec.methodology_ver,
+            "engine_version":    rec.engine_ver,
+        })
+    finally:
+        db.close()
+    return cert
 
-    composite = round(dq * 40 + eff + cap + gov, 1)  # 0–100
 
-    if composite >= 90: return "AAA", "Outstanding",    "#00E676", composite
-    if composite >= 80: return "AA",  "Excellent",      "#69F0AE", composite
-    if composite >= 70: return "A",   "Good",           "#B9F6CA", composite
-    if composite >= 60: return "BBB", "Acceptable",     "#FFD600", composite
-    if composite >= 50: return "BB",  "Below Average",  "#FF9800", composite
-    if composite >= 40: return "B",   "Poor",           "#FF5722", composite
-    return               "CCC","Critical",              "#FF1744", composite
+# ── Economic Rating: WITHDRAWN ────────────────────────────────────────────────
+# The former AAA–CCC composite (weights 40/30/20/10, hard-coded governance
+# fallback 8.0, thresholds every 10 points) was an unvalidated construct and
+# has been withdrawn under the No-Fabrication rule. Per the hardening
+# directive it is NOT re-derived from DQ alone: an Economic Rating represents
+# a broader construct than DQ measures, and no defensible methodology exists
+# until the EDA Standard defines and validates one.
+# See docs/REMOVED_HEURISTICS.md.
+_RATING_WITHDRAWN_LABEL = "Withdrawn — pending EDA Standard v1.0 definition"
 
 
 # ==========================================
@@ -3047,10 +3124,15 @@ def _live_decision_core(data: Dict[str, Any]) -> Dict[str, Any]:
     captured_value = _value(actual_dis, actual_chg)
     economic_gap   = optimal_value - captured_value
 
+    # Same Ch 4.2 domain rules as the offline DQ. The former formula allowed
+    # 150% and, in the no-opportunity branch, subtracted MONEY from a PERCENT
+    # (100 − |gap|) — scientifically incorrect; corrected here.
     if optimal_value > 0.01:
-        decision_quality = max(0.0, min(150.0, (captured_value / optimal_value) * 100))
+        decision_quality = max(0.0, min(100.0, (captured_value / optimal_value) * 100))
+    elif abs(captured_value) < 0.01:
+        decision_quality = 100.0
     else:
-        decision_quality = 100.0 if abs(captured_value) < 0.5 else max(0.0, 100.0 - abs(economic_gap))
+        decision_quality = 0.0
 
     dec_type, conf = _classify_decision(
         optimal_discharge if optimal_discharge > 0 else optimal_charge,
@@ -3058,11 +3140,16 @@ def _live_decision_core(data: Dict[str, Any]) -> Dict[str, Any]:
         price,
     )
 
-    severity = "HIGH" if economic_gap > 100 else "MEDIUM" if economic_gap > 20 else "LOW"
+    # Derived, dimensionless step severity: the gap as a share of this step's
+    # own optimal value. The former HIGH/MEDIUM/LOW bands used fabricated
+    # absolute money thresholds ($100/$20) — currency-blind and arbitrary
+    # (docs/REMOVED_HEURISTICS.md).
+    gap_pct_of_optimal = round(economic_gap / optimal_value * 100, 1) if optimal_value > 0.01 else 0.0
     rec_power = optimal_discharge if action == "DISCHARGE" else optimal_charge
 
     recommendation_text = (
-        f"{action} {rec_power:.0f} MW — {action_detail}. Expected gain ${economic_gap:.0f}."
+        f"{action} {rec_power:.0f} MW — {action_detail}. "
+        f"Expected gain {economic_gap:.0f} per hour (market-price units)."
         if economic_gap > 10 else "✓ Current dispatch near-optimal — no action required."
     )
     if forecast_note:
@@ -3080,9 +3167,13 @@ def _live_decision_core(data: Dict[str, Any]) -> Dict[str, Any]:
         "gap_step":           round(economic_gap, 2),   # back-compat alias
         "decision_quality":   round(decision_quality, 1),
         "decision_type":      dec_type,
-        "confidence":         round(conf * 100, 1),
-        "severity":           severity,
-        "alert":              economic_gap > 100,
+        # confidence WITHDRAWN (fabricated per-class constants); key kept None
+        "confidence":         None,
+        # severity replaced by a derived ratio; "alert" = the documented
+        # display policy "gap exceeds half of this step's optimal value"
+        "gap_pct_of_optimal": gap_pct_of_optimal,
+        "severity":           None,
+        "alert":              bool(optimal_value > 0.01 and economic_gap > 0.5 * optimal_value),
         "recommended_action": action,
         "recommended_power":  round(rec_power, 2),
         "expected_gain":      round(economic_gap, 2),
@@ -3157,7 +3248,6 @@ async def websocket_live_stream(websocket: WebSocket):
             cumulative_opt += max(0.0, step["optimal_value"])
             cumulative_act += step["captured_value"]
             dq_live = (cumulative_act / cumulative_opt * 100) if cumulative_opt > 0 else 100.0
-            rating, rating_label, _, _ = _eda_rating(max(0.0, min(1.0, dq_live / 100)))
 
             step.update({
                 "step":            step_count,
@@ -3165,8 +3255,9 @@ async def websocket_live_stream(websocket: WebSocket):
                 "cumulative_opt":  round(cumulative_opt, 2),
                 "cumulative_act":  round(cumulative_act, 2),
                 "dq_score_live":   round(dq_live, 1),
-                "rating":          rating,
-                "rating_label":    rating_label,
+                # Economic Rating withdrawn — see _RATING_WITHDRAWN_LABEL.
+                "rating":          None,
+                "rating_label":    _RATING_WITHDRAWN_LABEL,
             })
             await websocket.send_json(step)
     except WebSocketDisconnect:
@@ -3350,9 +3441,11 @@ def _build_certificate(data: dict) -> dict:
     opt        = data.get("edv_optimal_total", 0)
     act        = data.get("edv_actual_total", 0)
     m          = data.get("eda_metrics") or {}
-    rating, rating_label, rating_color, composite = _eda_rating(dq, m)
-    eis        = m.get("economic_intelligence_score", 0) if isinstance(m, dict) else 0
-    efficiency = dq * 100
+    # Economic Rating WITHDRAWN (No-Fabrication rule + hardening constraint 4):
+    # the AAA–CCC composite used unvalidated weights and is not re-derived
+    # from DQ alone. Keys retained for API compatibility.
+    rating, rating_label, rating_color = None, _RATING_WITHDRAWN_LABEL, "#8B93A7"
+    efficiency = dq * 100  # alias of DQ (derived), kept for API compatibility
     # Span-correct annualisation: the audit result already computed
     # projection_12m from the actual period covered (8760 / span_hours).
     # Fall back to the legacy ×365 for results cached before that field.
@@ -3364,40 +3457,28 @@ def _build_certificate(data: dict) -> dict:
     # Ch 8.2 attribution when the audited file carried a forecast column —
     # lets the certificate distinguish recoverable vs forecast-unreachable gap.
     _ga = data.get("gap_attribution") or None
-    cert_id    = f"PREDAIOT-EDPC-{datetime.utcnow().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+    # cert identity + signature assigned by _register_certificate (C3):
+    # deterministic content-hash ID, Ed25519 signature, registry persistence.
 
-    # Rating narrative (Moody's style)
-    if rating == "AAA":
-        narrative = (
-            f"Outstanding economic decision performance. Only {round((1-dq)*100,1)}% of achievable value was lost. "
-            "Dispatch decisions consistently matched the optimal counterfactual strategy."
+    # Factual narrative — states only what the ledger evidences. Grading
+    # adjectives ("Outstanding"/"Critical") followed the withdrawn rating and
+    # were removed with it.
+    narrative = (
+        f"The asset captured {round(dq * 100, 1)}% of its Theoretical Economic Ceiling "
+        f"(perfect-foresight upper-bound benchmark) over the audited period; ceiling gap "
+        f"{_fmt_money(total_gap, cur)}. "
+        + (
+            f"Recoverable Execution Gap (achievable with information available at decision "
+            f"time): {_fmt_money(_ga['execution_gap'], cur)}. "
+            if _ga else
+            "The recoverable portion could not be isolated (no day-ahead forecast column in "
+            "the source data). "
         )
-    elif rating in ("AA", "A"):
-        narrative = (
-            f"Strong economic performance with minor optimization opportunities identified. "
-            f"{round((1-dq)*100,1)}% leakage is within acceptable bounds. "
-            "Targeted schedule adjustments would further improve revenue capture."
-        )
-    elif rating == "BBB":
-        narrative = (
-            f"Moderate economic leakage detected ({round((1-dq)*100,1)}% of potential). "
-            "Operator overrides and schedule-based dispatch are the primary value destroyers. "
-            "Economic audit and EMS reconfiguration recommended within 30 days."
-        )
-    elif rating in ("BB", "B"):
-        narrative = (
-            f"Significant economic underperformance detected: {round((1-dq)*100,1)}% of the "
-            "Theoretical Economic Ceiling (upper-bound benchmark) was not captured. "
-            "Immediate review of dispatch strategy and operator protocols required. "
-            f"Estimated annual ceiling gap: {_fmt_money(annual_leakage, cur, 0)}."
-        )
-    else:  # CCC
-        narrative = (
-            f"Critical economic underperformance. Asset captured only {round(dq*100,1)}% of its "
-            "Theoretical Economic Ceiling (upper-bound benchmark). "
-            f"Estimated annual ceiling gap: {_fmt_money(annual_leakage, cur, 0)}. "
-            "Immediate operational review and EMS reconfiguration required."
-        )
+        + f"Decision-quality risk band per the published DQ thresholds: "
+        + str(data.get("risk_level", "Moderate")) + ". "
+        "An AAA–CCC Economic Rating is not issued: the rating methodology is withdrawn "
+        "pending formal definition and validation in EDA Standard v1.0."
+    )
 
     # ── ISSUED BY / ISSUED TO / AUDIT SCOPE (Coverage Tasks Fix B) ─────
     # Big-4-style engagement-letter framing. The letterhead's company name
@@ -3423,9 +3504,7 @@ def _build_certificate(data: dict) -> dict:
         "period":         data.get("audit_period_label", "24h"),
     }
 
-    return {
-        "certificate_id":       cert_id,
-        "issued_at":            datetime.utcnow().isoformat() + "Z",
+    cert = {
         "issuer":               issuer,
         "recipient":            recipient,
         "audit_scope":          audit_scope,
@@ -3443,8 +3522,9 @@ def _build_certificate(data: dict) -> dict:
         "forecast_unreachable_gap":  (round(_ga["forecast_gap"], 2) if _ga else None),
         "gap_basis":            ("execution" if _ga else "ceiling"),
         "dq_score":             round(dq * 100, 1),
-        "eis_score":            round(eis, 1),
-        "composite_score":      round(composite, 1),
+        # WITHDRAWN composites — keys kept as None for API compatibility
+        "eis_score":            None,
+        "composite_score":      None,
         "rating":               rating,
         "rating_label":         rating_label,
         "rating_color":         rating_color,
@@ -3465,17 +3545,16 @@ def _build_certificate(data: dict) -> dict:
                 "includes forecast-unreachable value)."
             )
         ),
-        "rating_components": {
-            "decision_quality_40":    round(dq * 40, 1),
-            "economic_efficiency_30": round((m.get("economic_decision_efficiency", 0) / 100 if isinstance(m, dict) else dq) * 30, 1),
-            "revenue_capture_20":     round(dq * 20, 1),
-            "governance_10":          round(max(0, 10 - (m.get("decision_delay_index", 0) if isinstance(m, dict) else 0) * 2), 1),
-        },
+        # rating_components (fabricated 40/30/20/10 weights) removed with the
+        # rating — see docs/REMOVED_HEURISTICS.md.
+        "rating_components":    None,
         "certified_by":         "PREDAIOT Economic Decision Audit Engine",
-        "methodology":          "MILP Counterfactual Optimization (patent-pending)",
-        "standard":             "PREDAIOT EDPC Standard v1.0",
-        "version":              "2.0.0",
+        "methodology":          "MILP counterfactual optimization (hindsight ETL benchmark, Ch 8.2 attribution)",
+        "standard":             "PREDAIOT EDA Methodology (pre-standard; EDA Standard v1.0 in preparation)",
+        "version":              ENGINE_VERSION,
     }
+    # C3: deterministic ID, Ed25519 signature, registry row, verification URL
+    return _register_certificate(cert, data.get("audit_manifest"))
 
 
 @app.get("/api/v1/certificate")
@@ -3494,6 +3573,54 @@ async def get_certificate_for_latest(lead: TrialLead = Depends(require_trial_tok
 async def generate_certificate_for_audit(data: AuditResponse):
     """Generate a certificate for a provided audit result."""
     return _build_certificate(data.dict())
+
+
+@app.get("/api/v1/certificate/verify/{cert_id}")
+async def verify_certificate(cert_id: str):
+    """
+    Public verification portal endpoint (C3) — the target of the certificate
+    QR code. Deliberately UNGATED and deliberately minimal: it confirms the
+    certificate's existence, integrity, signature and revocation state plus
+    the software versions that produced it. It never returns customer
+    identity, asset names, or economic figures.
+    """
+    db = SessionLocal()
+    try:
+        rec = db.query(CertificateRecord).filter_by(cert_id=cert_id.strip()).first()
+    finally:
+        db.close()
+    if rec is None:
+        return JSONResponse(status_code=404, content={
+            "certificate_id": cert_id, "valid": False,
+            "reason": "No certificate with this ID exists in the registry."})
+
+    signature_ok = None  # None = issued unsigned (disclosed), True/False when signed
+    if rec.signature_b64 and rec.public_key_b64:
+        try:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            pub = Ed25519PublicKey.from_public_bytes(_base64.b64decode(rec.public_key_b64))
+            pub.verify(_base64.b64decode(rec.signature_b64), rec.payload_sha256.encode())
+            signature_ok = True
+        except Exception:
+            signature_ok = False
+
+    return {
+        "certificate_id":      rec.cert_id,
+        "valid":               (not rec.revoked) and (signature_ok is not False),
+        "revoked":             rec.revoked,
+        "revocation_reason":   rec.revocation_reason,
+        "signature_status":    ("VERIFIED" if signature_ok else
+                                "INVALID" if signature_ok is False else
+                                "UNSIGNED — issued without a signing key"),
+        "payload_sha256":      rec.payload_sha256,
+        "dataset_sha256":      rec.input_sha256,
+        "audit_scope":         {"asset_type": rec.asset_type, "audit_period": rec.audit_period},
+        "methodology_version": rec.methodology_ver,
+        "engine_version":      rec.engine_ver,
+        "solver_version":      rec.solver_ver,
+        "issued_at":           rec.issued_at.isoformat() + "Z",
+        "verified_at":         datetime.utcnow().isoformat() + "Z",
+    }
 
 
 # ==========================================
@@ -3722,21 +3849,26 @@ def _build_audit_pdf(audit: dict) -> bytes:
     c.line(60, y - 4, 535, y - 4)
     y -= 20
 
-    opps = audit.get("opportunities") or []
+    # Quantified, ledger-derived items only — advisory/experimental ideas
+    # carry no figures and do not appear on the certified one-pager.
+    def _opf(op, key):
+        return op.get(key) if isinstance(op, dict) else getattr(op, key, None)
+    opps = [op for op in (audit.get("opportunities") or [])
+            if not _opf(op, "experimental") and _opf(op, "period_gain")]
     c.setFillColorRGB(0.18, 0.18, 0.2)
     c.setFont("Helvetica", 10)
     for i, op in enumerate(opps[:3], 1):
-        name = op.get("name") if isinstance(op, dict) else getattr(op, "name", "")
-        gain = op.get("annual_gain_usd") if isinstance(op, dict) else getattr(op, "annual_gain_usd", 0)
-        diff = op.get("difficulty") if isinstance(op, dict) else getattr(op, "difficulty", "")
-        c.drawString(72, y, f"{i}. {name}")
+        c.drawString(72, y, f"{i}. {_opf(op, 'name')}")
         c.setFillColorRGB(0.55, 0.55, 0.6)
-        c.setFont("Helvetica-Oblique", 9)
-        c.drawString(80, y - 12, str(diff))
+        c.setFont("Helvetica-Oblique", 8)
+        c.drawString(80, y - 11,
+                     f"{_opf(op, 'intervals_observed')} ledger intervals · "
+                     f"{_fmt_money(_opf(op, 'period_gain'), cur)} audited period · "
+                     "annualised = linear extrapolation")
         c.setFillColorRGB(0.18, 0.18, 0.2)
         c.setFont("Helvetica", 10)
-        c.drawRightString(535, y, _fmt_money(gain, cur, 0))
-        y -= 28
+        c.drawRightString(535, y, _fmt_money(_opf(op, "annual_gain_usd"), cur, 0))
+        y -= 26
 
     # ── Certification block ───────────────────────────────────────────
     cert = _build_certificate(audit)
@@ -3749,15 +3881,32 @@ def _build_audit_pdf(audit: dict) -> bytes:
     c.setFillColorRGB(0.18, 0.18, 0.2)
     c.setFont("Helvetica", 9)
     cert_lines = [
-        f"Certificate ID:  {cert.get('certificate_id', '—')}",
+        f"Certificate ID:  {cert.get('certificate_id', '—')}    Status: {cert.get('certificate_status', '—')}    Signature: {('Ed25519' if cert.get('signature_ed25519') else 'UNSIGNED')}",
         f"Issued:          {cert.get('issued_at', '—')}",
-        f"Rating:          {cert.get('rating', '—')}  ({cert.get('rating_label', '')})    Composite {cert.get('composite_score', 0)}/100",
-        f"Methodology:     {cert.get('methodology', '—')}",
-        f"Standard:        {cert.get('standard', '—')}",
+        f"Economic Rating: {cert.get('rating_label', '—')}",
+        f"DQ / ECF:        {cert.get('dq_score', '—')} / 100    Risk band: {str(cert.get('risk_level', '—')).upper()}",
+        f"Dataset SHA-256: {cert.get('dataset_sha256') or 'n/a (direct JSON audit)'}",
+        f"Versions:        engine {cert.get('engine_version', '—')} · {cert.get('methodology_version', '—')} · {cert.get('solver_version', '—')}",
+        f"Verify:          {cert.get('verification_url', '—')}",
     ]
     for line in cert_lines:
         c.drawString(72, y, line)
-        y -= 13
+        y -= 12
+
+    # QR to the public verification portal (C3)
+    try:
+        from reportlab.graphics.barcode.qr import QrCodeWidget
+        from reportlab.graphics.shapes import Drawing
+        from reportlab.graphics import renderPDF
+        qr = QrCodeWidget(cert.get("verification_url", ""))
+        b = qr.getBounds()
+        size = 62.0
+        d = Drawing(size, size, transform=[size / (b[2] - b[0]), 0, 0,
+                                           size / (b[3] - b[1]), 0, 0])
+        d.add(qr)
+        renderPDF.draw(d, c, 470, y - 2)
+    except Exception:
+        pass  # QR is an enhancement; the URL line above remains authoritative
 
     # Auditor signature strip (handoff line — no pricing, per Sec. 2.2)
     y -= 6
@@ -3821,7 +3970,7 @@ async def get_audit_ledger_csv(lead: TrialLead = Depends(require_trial_token)):
                 "optimal_action_mw", "actual_action_mw",
                 f"edv_optimal_step_{cur}", f"edv_actual_step_{cur}",
                 f"gap_step_{cur}", f"cumulative_gap_{cur}",
-                "decision_type", "confidence", "soc",
+                "decision_type", "soc",
                 "curtailment_mw", "operator_override"])
     cum = 0.0
     for i, r in enumerate(data["decision_log"], 1):
@@ -3831,20 +3980,20 @@ async def get_audit_ledger_csv(lead: TrialLead = Depends(require_trial_token)):
                     r.get("optimal_action"), r.get("actual_action"),
                     r.get("edv_optimal_step"), r.get("edv_actual_step"),
                     round(g, 2), round(cum, 2),
-                    r.get("decision_type"), r.get("confidence"), r.get("soc"),
+                    r.get("decision_type"), r.get("soc"),
                     r.get("curtailment_mw"), r.get("operator_override")])
     # Trailer: totals for one-glance reconciliation against the PDF.
     w.writerow([])
     w.writerow(["TOTALS", "", "", "", "", "",
                 data.get("edv_optimal_total"), data.get("edv_actual_total"),
                 data.get("total_gap_usd"), round(cum, 2),
-                f"dq_score={data.get('dq_score')}", "", "", "", ""])
+                f"dq_score={data.get('dq_score')}", "", "", ""])
     ga = data.get("gap_attribution") or {}
     if ga:
         w.writerow(["GAP ATTRIBUTION (Ch 8.2)", "", "", "", "", "",
                     f"forecast_gap={ga.get('forecast_gap')}",
                     f"execution_gap={ga.get('execution_gap')}",
-                    "", "", "", "", "", "", ""])
+                    "", "", "", "", "", ""])
     return Response(
         content=buf.getvalue(), media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="predaiot_audit_ledger.csv"'},

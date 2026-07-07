@@ -966,9 +966,9 @@ function LiveTelemetryStrip({ assetName, soc, power, temp }) {
         <div style={{ color: OPS.sub, fontSize: 10, letterSpacing: '0.05em', marginTop: 2 }}>Live Telemetry</div>
       </div>
       <div style={{ display: 'flex', gap: 22 }}>
-        {cell('SoC',   `${(soc ?? 0).toFixed(0)}%`,    OPS.green)}
-        {cell('Power', `${(power ?? 0).toFixed(0)} MW`, OPS.green)}
-        {cell('Temp',  `${(temp ?? 0).toFixed(0)}°C`,  OPS.green)}
+        {cell('SoC',   soc   != null ? `${soc.toFixed(0)}%`    : '—', soc   != null ? OPS.green : OPS.sub)}
+        {cell('Power', power != null ? `${power.toFixed(0)} MW` : '—', power != null ? OPS.green : OPS.sub)}
+        {cell('Temp',  temp  != null ? `${temp.toFixed(0)}°C`  : '—', temp  != null ? OPS.green : OPS.sub)}
       </div>
     </div>
   );
@@ -1007,14 +1007,14 @@ function DecisionDiscrepancyStrip({ log }) {
 }
 
 function AssetPerformanceTiles({ data, log, m }) {
-  const opsEff = m?.economic_decision_efficiency ?? (data.dq_score * 100 || 0);
-  const overrides = (log || []).filter((r) => r.operator_override).length;
-  const availability = Math.max(85, 100 - (overrides / Math.max(1, log.length)) * 100);
-  const dailyRevenue = data.edv_actual_total || 0;
-  const mtdRevenue   = dailyRevenue * 30;
-  const totalDis = (log || []).reduce((a, r) => a + Math.max(0, r.actual_action || 0), 0);
-  const totalCh  = (log || []).reduce((a, r) => a + Math.abs(Math.min(0, r.actual_action || 0)), 0) || 1;
-  const dcRatio = totalDis / totalCh;
+  // Ledger-derived tiles only. The former "Availability" (max(85, 100 −
+  // override%)) and "MTD Revenue" (period × 30) were fabricated constructs;
+  // the discharge/charge ratio was structurally meaningless for file audits
+  // (actual_action carries discharge only). Removed — docs/REMOVED_HEURISTICS.md.
+  const opsEff = m?.economic_decision_efficiency ?? ((data.dq_score || 0) * 100);
+  const overrideRate = m?.override_rate_pct;
+  const curtailedMwh = m?.curtailed_energy_mwh;
+  const captured = data.edv_actual_total;
 
   const tile = (label, value, color) => (
     <div style={{
@@ -1029,10 +1029,10 @@ function AssetPerformanceTiles({ data, log, m }) {
   );
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-      {tile('Operational Efficiency', `${opsEff.toFixed(1)}%`, OPS.green)}
-      {tile('Availability',           `${availability.toFixed(1)}%`, OPS.green)}
-      {tile('MTD Revenue',            fmtUSD(mtdRevenue), OPS.green)}
-      {tile('Discharge/Charge Ratio', dcRatio.toFixed(2), OPS.blue)}
+      {tile('Capture Efficiency (EDE)', `${(opsEff || 0).toFixed(1)}%`, OPS.green)}
+      {tile('Override Rate', overrideRate != null ? `${overrideRate.toFixed(1)}%` : '—', OPS.blue)}
+      {tile('Curtailed Energy', curtailedMwh != null ? `${curtailedMwh.toFixed(1)} MWh` : '—', OPS.sub)}
+      {tile('Captured Value (Period)', captured != null ? fmtMoney(captured, data.currency) : '—', captured >= 0 ? OPS.green : OPS.red)}
     </div>
   );
 }
@@ -1052,9 +1052,11 @@ function OpsConsoleExec({ data, log, m, ingestionNotes, onDismissNotes }) {
   const last       = (log || [])[log.length - 1] || {};
   // SoC arrives as 0–1 fraction from some feeds and 0–100 percent from
   // others (real SCADA exports use percent) — normalise by magnitude.
-  const liveSoc    = last.soc != null ? (last.soc > 1.5 ? last.soc : last.soc * 100) : 68;
-  const livePower  = Math.abs(last.actual_action || 120);
-  const liveTemp   = 24;
+  // Absent telemetry renders '—': the former placeholders (68% SoC, 120 MW,
+  // 24 °C) were fabricated readings (docs/REMOVED_HEURISTICS.md).
+  const liveSoc    = last.soc != null ? (last.soc > 1.5 ? last.soc : last.soc * 100) : null;
+  const livePower  = last.actual_action != null ? Math.abs(last.actual_action) : null;
+  const liveTemp   = null; // no temperature channel in the audit ledger
   const isMobile   = useIsMobile();
   return (
     <div>
@@ -1469,7 +1471,7 @@ export default function App() {
       const capturePct = data.edv_optimal_total > 0 ? (data.edv_actual_total / data.edv_optimal_total) * 100 : 0;
       const missedCount = (data.decision_log || []).filter(d => d.decision_type === 'Missed Arbitrage').length;
       const opsBlock = (data.opportunities || []).slice(0, 5).map((o, i) =>
-        `${i + 1}. ${o.name} — Annual Gain: $${o.annual_gain_usd?.toLocaleString()} | Implementation: ${o.difficulty} | Risk: ${o.operational_risk} | Confidence: ${o.confidence_pct}% | Owner: ${o.owner} | Priority: ${o.priority_score}/100 | Investment: ${o.investment_type} | Evidence: ${o.evidence}`
+        `${i + 1}. ${o.name}${o.experimental ? ' [EXPERIMENTAL — not quantified]' : ` — Period Value: ${o.period_gain} | Annualised (linear est.): ${o.annual_gain_usd} | Ledger intervals: ${o.intervals_observed} | Derivation: ${o.derivation}`} | Evidence: ${o.evidence || '—'}`
       ).join('\n');
       const causesBlock = (data.root_causes || []).slice(0, 5).map(r => `${r.category}: ${r.contribution_pct}% ($${r.loss_usd?.toLocaleString()})`).join(', ');
 
@@ -1792,15 +1794,20 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
               <SectionHeader tag="02" title="Economic Value Flow" />
               {!hasData ? <EmptyMsg>Run an audit to populate the economic flow.</EmptyMsg> : (
                 <div style={{ maxWidth: 560, margin: '0 auto' }}>
+                  {/* Every stage below is a COMPUTED quantity from the audit
+                      engine. The former intermediate stages (×0.92 grid,
+                      ×0.87 SOC, ×0.97 settlement, ×0.12 unrecoverable) were
+                      fabricated multipliers — removed (docs/REMOVED_HEURISTICS.md). */}
                   {[
-                    { label: 'Market Potential', value: fmtUSD(data.edv_optimal_total), color: DS.warning, desc: 'MILP-optimal upper bound — physically achievable, economically optimal' },
-                    { label: 'Available Window', value: fmtUSD(data.edv_optimal_total * 0.92), color: DS.blue, desc: 'After grid constraints, network limits, and interconnection rules' },
-                    { label: 'Dispatch Opportunity', value: fmtUSD(data.edv_optimal_total * 0.87), color: DS.cyan, desc: 'Within asset SOC range, ramp capability, and market rules' },
-                    { label: 'Decision Taken', value: fmtUSD(data.edv_actual_total), color: DS.optimal, desc: 'Operator / EMS decisions actually executed' },
-                    { label: 'Captured Value', value: fmtUSD(data.edv_actual_total * 0.97), color: DS.optimal, desc: 'Net settlement revenue after metering and settlement losses' },
-                    { label: 'Economic Leakage', value: `−${fmtUSD(data.total_gap_usd)}`, color: DS.loss, desc: 'Revenue permanently destroyed by sub-optimal dispatch timing' },
-                    { label: 'Unrecoverable Loss', value: `−${fmtUSD(data.total_gap_usd * 0.12)}`, color: DS.dim, desc: 'Physical constraints and regulatory hard limits' },
-                  ].map((step, i) => (
+                    { label: 'Theoretical Ceiling (Upper Bound)', value: fmtMoney(data.edv_optimal_total, data.currency), color: DS.warning, desc: 'Perfect-foresight MILP benchmark — not an achievable operating target' },
+                    ...(data.gap_attribution ? [
+                      { label: 'Forecast-Unreachable Gap', value: `−${fmtMoney(data.gap_attribution.forecast_gap, data.currency)}`, color: DS.dim, desc: 'Reachable only with perfect price foresight (Ch 8.2) — not operator-attributable' },
+                      { label: 'Recoverable Execution Gap', value: `−${fmtMoney(data.gap_attribution.execution_gap, data.currency)}`, color: DS.loss, desc: 'Achievable with the day-ahead forecast available at decision time' },
+                    ] : [
+                      { label: 'Ceiling Gap (Upper Bound)', value: `−${fmtMoney(data.total_gap_usd, data.currency)}`, color: DS.loss, desc: 'Includes forecast-unreachable value; forecast column required to split' },
+                    ]),
+                    { label: 'Captured Value', value: fmtMoney(data.edv_actual_total, data.currency), color: DS.optimal, desc: 'EDV of the dispatch actually executed (Σ edv_actual_step from the ledger)' },
+                  ].map((step, i, arr) => (
                     <div key={step.label}>
                       <div style={{
                         display: 'flex', alignItems: 'center', gap: 16, padding: '14px 18px',
@@ -1813,7 +1820,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                           <div style={{ color: DS.dim, fontSize: 10, marginTop: 3 }}>{step.desc}</div>
                         </div>
                       </div>
-                      {i < 6 && <div style={{ textAlign: 'center', color: DS.dim, lineHeight: '22px', fontSize: 18 }}>↓</div>}
+                      {i < arr.length - 1 && <div style={{ textAlign: 'center', color: DS.dim, lineHeight: '22px', fontSize: 18 }}>↓</div>}
                     </div>
                   ))}
                 </div>
@@ -2038,17 +2045,20 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
               <SectionHeader tag="06" title="Economic Decision Quality Metrics" />
               {!m ? <EmptyMsg>Run an audit to generate metrics.</EmptyMsg> : (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 16 }}>
+                  {/* Ledger-derived ratios only. EIS composite, Decision Delay
+                      Index, Revenue Stacking Index and Battery Opportunity
+                      Capture were withdrawn under the No-Fabrication rule —
+                      see docs/REMOVED_HEURISTICS.md. */}
                   {[
-                    { label: 'Economic Decision Efficiency (EDE)', value: fmtPct(m.economic_decision_efficiency), note: 'Captured ÷ Potential', color: qualColor(m.economic_decision_efficiency), pct: m.economic_decision_efficiency },
-                    { label: 'Economic Leakage Ratio (ELR)', value: fmtPct(m.economic_leakage_ratio), note: 'Lost ÷ Potential (lower is better)', color: m.economic_leakage_ratio <= 30 ? DS.optimal : m.economic_leakage_ratio <= 60 ? DS.warning : DS.loss, pct: m.economic_leakage_ratio },
-                    { label: 'Dispatch Accuracy', value: fmtPct(m.dispatch_accuracy), note: 'Correct dispatches ÷ Total', color: qualColor(m.dispatch_accuracy), pct: m.dispatch_accuracy },
-                    { label: 'Forecast Utilization Index', value: fmtPct(m.forecast_utilization_index), note: '% of steps with forecast data provided', color: qualColor(m.forecast_utilization_index), pct: m.forecast_utilization_index },
-                    { label: 'Decision Delay Index', value: `${m.decision_delay_index}`, note: 'Avg override ratio × 10 (0 = perfect)', color: m.decision_delay_index < 1 ? DS.optimal : m.decision_delay_index < 3 ? DS.warning : DS.loss, pct: null },
-                    { label: 'Curtailment Recovery Ratio', value: `${m.curtailment_recovery_ratio} MWh`, note: 'Potentially rescuable curtailed energy', color: DS.cyan, pct: null },
-                    { label: 'Revenue Stacking Index', value: `${m.revenue_stacking_index} services`, note: 'Distinct revenue streams being utilized', color: m.revenue_stacking_index >= 3 ? DS.optimal : DS.warning, pct: null },
-                    { label: 'Economic Intelligence Score', value: `${m.economic_intelligence_score} / 100`, note: 'ISO-style composite performance index', color: qualColor(m.economic_intelligence_score), pct: m.economic_intelligence_score },
-                    ...(m.battery_opportunity_capture != null
-                      ? [{ label: 'Battery Opportunity Capture', value: fmtPct(m.battery_opportunity_capture), note: 'BESS-specific arbitrage capture rate', color: DS.blue, pct: m.battery_opportunity_capture }]
+                    { label: 'Economic Decision Efficiency (EDE)', value: fmtPct(m.economic_decision_efficiency), note: 'EDV_actual ÷ EDV_ceiling × 100 (Ch 4.2 domain rules)', color: qualColor(m.economic_decision_efficiency), pct: m.economic_decision_efficiency },
+                    { label: 'Economic Leakage Ratio (ELR)', value: fmtPct(m.economic_leakage_ratio), note: '100 − EDE', color: m.economic_leakage_ratio <= 30 ? DS.optimal : m.economic_leakage_ratio <= 60 ? DS.warning : DS.loss, pct: m.economic_leakage_ratio },
+                    { label: 'Dispatch Accuracy', value: fmtPct(m.dispatch_accuracy), note: 'Steps classified Correct ÷ Total × 100', color: qualColor(m.dispatch_accuracy), pct: m.dispatch_accuracy },
+                    { label: 'Forecast Utilization Index', value: fmtPct(m.forecast_utilization_index), note: 'Steps with a forecast value ÷ Total × 100', color: qualColor(m.forecast_utilization_index), pct: m.forecast_utilization_index },
+                    ...(m.override_rate_pct != null
+                      ? [{ label: 'Override Rate', value: fmtPct(m.override_rate_pct), note: 'Override-flagged steps ÷ Total × 100', color: DS.blue, pct: m.override_rate_pct }]
+                      : []),
+                    ...(m.curtailed_energy_mwh != null
+                      ? [{ label: 'Curtailed Energy', value: `${m.curtailed_energy_mwh} MWh`, note: 'Σ curtailment_mw × Δt (descriptive; not a gap attribution)', color: DS.cyan, pct: null }]
                       : []),
                   ].map((metric) => (
                     <Card key={metric.label}>
@@ -2177,19 +2187,26 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
               {(data.opportunities || []).length > 0 && (() => {
                 const ops   = data.opportunities || [];
                 const total = ops.reduce((s, o) => s + (o.annual_gain_usd || 0), 0);
-                const qw    = ops.filter(o => o.difficulty === 'Quick Win').length;
-                const strat = ops.filter(o => o.difficulty === 'Strategic Initiative').length;
-                const mkt   = ops.filter(o => o.difficulty === 'Market Integration').length;
-                const avgConf = ops.reduce((s, o) => s + (o.confidence_pct || 0), 0) / ops.length;
+                // Header stats derived strictly from the ledger-backed items.
+                // Former "Portfolio Confidence" (mean of fabricated per-item
+                // confidences) and difficulty timeline claims removed.
+                const quantified = ops.filter(o => !o.experimental && o.period_gain != null);
+                const advisory   = ops.filter(o => o.experimental);
+                const periodTotal = quantified
+                  .filter(o => o.name !== 'Operator override governance') // cross-cut, excluded from sum
+                  .reduce((s, o) => s + (o.period_gain || 0), 0);
+                const intervalsTotal = quantified
+                  .filter(o => o.name !== 'Operator override governance')
+                  .reduce((s, o) => s + (o.intervals_observed || 0), 0);
                 return (
                   <div style={{ background: `linear-gradient(135deg, rgba(0,230,118,0.06) 0%, rgba(75,191,255,0.04) 100%)`, border: `1px solid ${DS.optimal}25`, borderRadius: DS.r16, padding: 24, marginBottom: 24 }}>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 20 }}>
                       {[
-                        { label: 'Total Annual Recovery', v: fmtUSD(total), c: DS.optimal, big: true },
-                        { label: 'Quick Wins', v: qw, c: DS.optimal, sub: 'immediate' },
-                        { label: 'Strategic Initiatives', v: strat, c: DS.warning, sub: '1–8 weeks' },
-                        { label: 'Market Integrations', v: mkt, c: DS.blue, sub: '1–3 months' },
-                        { label: 'Portfolio Confidence', v: `${avgConf.toFixed(1)}%`, c: DS.cyan, big: false },
+                        { label: 'Period Gap Attributed', v: fmtMoney(periodTotal, data.currency), c: DS.optimal, big: true, sub: 'Σ over classified ledger rows' },
+                        { label: 'Annualised (Linear Est.)', v: fmtMoney(periodTotal * 365, data.currency), c: DS.warning, sub: 'ceiling basis' },
+                        { label: 'Quantified Actions', v: quantified.length, c: DS.optimal, sub: 'ledger-derived' },
+                        { label: 'Ledger Intervals', v: intervalsTotal, c: DS.blue, sub: 'evidence rows' },
+                        { label: 'Advisory (Experimental)', v: advisory.length, c: DS.dim, sub: 'not quantified' },
                       ].map(f => (
                         <div key={f.label}>
                           <Label style={{ fontSize: 9, marginBottom: 4 }}>{f.label}</Label>
@@ -2204,35 +2221,37 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
 
               {(data.opportunities || []).length === 0 ? <EmptyMsg>Run an audit to generate the Economic Action Plan.</EmptyMsg> : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  {(data.opportunities || []).map((op, i) => {
-                    const diffColor = op.difficulty === 'Quick Win' ? DS.optimal : op.difficulty === 'Strategic Initiative' ? DS.warning : DS.blue;
-                    const riskColor2 = op.operational_risk === 'Low' ? DS.optimal : op.operational_risk === 'Medium' ? DS.warning : DS.loss;
-                    return (
-                      <div key={i} style={{ background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: DS.r12, overflow: 'hidden' }}>
-                        {/* Card header */}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '18px 22px 14px', borderBottom: `1px solid ${DS.border}` }}>
-                          <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-                            <div style={{ color: DS.dim, fontFamily: DS.mono, fontSize: 20, fontWeight: 800, lineHeight: 1, minWidth: 30 }}>#{i+1}</div>
-                            <div>
-                              <div style={{ color: DS.text, fontWeight: 700, fontSize: 14, marginBottom: 5 }}>{op.name}</div>
-                              <div style={{ color: DS.sub, fontSize: 11, lineHeight: 1.6, maxWidth: 520 }}>{op.description}</div>
+                  {(data.opportunities || []).map((op, i) => (
+                    <div key={i} style={{ background: DS.surface, border: `1px solid ${op.experimental ? DS.dim : DS.border}`, borderRadius: DS.r12, overflow: 'hidden', opacity: op.experimental ? 0.85 : 1 }}>
+                      {/* Card header */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '18px 22px 14px', borderBottom: `1px solid ${DS.border}` }}>
+                        <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+                          <div style={{ color: DS.dim, fontFamily: DS.mono, fontSize: 20, fontWeight: 800, lineHeight: 1, minWidth: 30 }}>#{i+1}</div>
+                          <div>
+                            <div style={{ color: DS.text, fontWeight: 700, fontSize: 14, marginBottom: 5 }}>
+                              {op.name}
+                              {op.experimental && <Pill label="EXPERIMENTAL — NOT PART OF EDA STANDARD v1.0" color={DS.dim} style={{ marginLeft: 10 }} />}
                             </div>
-                          </div>
-                          <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 20 }}>
-                            <BigNum v={fmtUSD(op.annual_gain_usd)} color={DS.optimal} size={22} />
-                            <div style={{ color: DS.dim, fontSize: 9, letterSpacing: '0.12em', marginTop: 2 }}>ANNUAL RECOVERY</div>
+                            <div style={{ color: DS.sub, fontSize: 11, lineHeight: 1.6, maxWidth: 520 }}>{op.description}</div>
                           </div>
                         </div>
+                        {!op.experimental && op.period_gain != null && (
+                          <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 20 }}>
+                            <BigNum v={fmtMoney(op.period_gain, data.currency)} color={DS.optimal} size={22} />
+                            <div style={{ color: DS.dim, fontSize: 9, letterSpacing: '0.12em', marginTop: 2 }}>AUDITED PERIOD</div>
+                            <div style={{ color: DS.warning, fontFamily: DS.mono, fontSize: 12, marginTop: 4 }}>{fmtMoney(op.annual_gain_usd, data.currency)}</div>
+                            <div style={{ color: DS.dim, fontSize: 8.5, letterSpacing: '0.08em' }}>ANNUALISED · LINEAR EST.</div>
+                          </div>
+                        )}
+                      </div>
 
-                        {/* Metrics grid */}
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 0, padding: '12px 22px' }}>
+                      {/* Derived metrics (quantified items only) */}
+                      {!op.experimental && op.period_gain != null && (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 0, padding: '12px 22px' }}>
                           {[
-                            { label: 'Confidence', v: `${op.confidence_pct || '—'}%`, c: DS.cyan },
-                            { label: 'Implementation', v: op.difficulty, c: diffColor },
-                            { label: 'Investment', v: op.investment_type, c: op.investment_type === 'No CAPEX' ? DS.optimal : DS.warning },
-                            { label: 'Owner', v: op.owner, c: DS.sub },
-                            { label: 'Risk', v: op.operational_risk, c: riskColor2 },
-                            { label: 'Priority Score', v: `${op.priority_score}/100`, c: DS.warning },
+                            { label: 'Ledger Intervals', v: op.intervals_observed, c: DS.blue },
+                            { label: 'Share of Positive Gap', v: op.share_of_positive_gap_pct != null ? `${op.share_of_positive_gap_pct}%` : '—', c: DS.cyan },
+                            { label: 'Reproducible From', v: 'Ledger CSV (decision_type filter)', c: DS.sub },
                           ].map(f => (
                             <div key={f.label} style={{ borderRight: `1px solid ${DS.border}`, padding: '4px 12px 4px 0', marginRight: 12 }}>
                               <Label style={{ fontSize: 9, marginBottom: 3 }}>{f.label}</Label>
@@ -2240,19 +2259,26 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                             </div>
                           ))}
                         </div>
+                      )}
 
-                        {/* Evidence footer */}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 22px', background: `rgba(255,255,255,0.015)`, borderTop: `1px solid ${DS.border}` }}>
-                          <div style={{ color: DS.dim, fontSize: 11 }}>
+                      {/* Evidence + derivation footer */}
+                      <div style={{ padding: '10px 22px', background: `rgba(255,255,255,0.015)`, borderTop: `1px solid ${DS.border}` }}>
+                        {op.evidence && (
+                          <div style={{ color: DS.dim, fontSize: 11, marginBottom: op.derivation ? 4 : 0 }}>
                             <span style={{ color: DS.sub }}>Evidence:</span> {op.evidence}
                           </div>
-                          <div style={{ color: DS.dim, fontSize: 10, flexShrink: 0, marginLeft: 16 }}>
-                            Payback: <span style={{ color: op.payback_days === 0 ? DS.optimal : DS.warning }}>{op.payback_days === 0 ? 'Immediate' : `${op.payback_days} days`}</span>
+                        )}
+                        {op.derivation && (
+                          <div style={{ color: DS.dim, fontSize: 10, fontFamily: DS.mono }}>
+                            <span style={{ color: DS.sub, fontFamily: 'inherit' }}>Derivation:</span> {op.derivation}
                           </div>
-                        </div>
+                        )}
+                        {op.experimental && (
+                          <div style={{ color: DS.dim, fontSize: 10 }}>{op.experimental_note}</div>
+                        )}
                       </div>
-                    );
-                  })}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -2267,11 +2293,13 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
               {hasData && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 12, marginBottom: 20 }}>
                   {[
-                    { label: 'Economic Status', v: data.risk_level === 'Severe' ? 'CRITICAL' : (data.risk_level || 'MODERATE').toUpperCase(), c: riskColor(data.risk_level) },
-                    { label: 'Current Capture', v: fmtPct(captureRate), c: qualColor(captureRate) },
-                    { label: 'Recoverable Revenue', v: fmtPct(Math.min(99, (100 - captureRate) * 0.68)), c: DS.optimal },
-                    { label: 'Annual Recovery', v: fmtUSD(data.total_gap_usd * 365 * 0.68), c: DS.optimal },
-                    { label: 'Audit Confidence', v: m ? `${m.dispatch_accuracy?.toFixed(1)}%` : '—', c: DS.cyan },
+                    { label: 'Risk Band (DQ Thresholds)', v: (data.risk_level || '—').toUpperCase(), c: riskColor(data.risk_level) },
+                    { label: 'Ceiling Capture (ECF)', v: fmtPct(captureRate), c: qualColor(captureRate) },
+                    ...(data.gap_attribution
+                      ? [{ label: 'Recoverable Execution Gap', v: fmtMoney(data.gap_attribution.execution_gap, data.currency), c: DS.optimal }]
+                      : [{ label: 'Ceiling Gap (Upper Bound)', v: fmtMoney(data.total_gap_usd, data.currency), c: DS.warning }]),
+                    { label: 'Dispatch Accuracy', v: m ? `${m.dispatch_accuracy?.toFixed(1)}%` : '—', c: DS.cyan },
+                    { label: 'Forecast Coverage', v: m ? `${m.forecast_utilization_index?.toFixed(0)}%` : '—', c: DS.blue },
                   ].map(f => (
                     <Card key={f.label} style={{ textAlign: 'center' }} glow={f.c === riskColor(data.risk_level) && data.risk_level === 'Severe' ? DS.loss : undefined}>
                       <Label style={{ fontSize: 9 }}>{f.label}</Label>
@@ -2432,18 +2460,22 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   })() : <EmptyMsg>Run an audit to populate governance data.</EmptyMsg>}
                 </Card>
                 <Card>
-                  <Label style={{ marginBottom: 16 }}>Compliance Checklist</Label>
+                  {/* Recorded facts only. The former "Compliance Checklist"
+                      issued PASS verdicts on unverified items (market rules,
+                      SOC limits) and invented DQ thresholds — removed
+                      (docs/REMOVED_HEURISTICS.md). */}
+                  <Label style={{ marginBottom: 16 }}>Recorded Audit Facts</Label>
                   {[
-                    { check: 'Dispatch policy followed', pass: data.dq_score > 0.6 },
-                    { check: 'Market rules observed', pass: true },
-                    { check: 'SOC limits respected', pass: true },
-                    { check: 'Forecast data integrated', pass: (m?.forecast_utilization_index || 0) > 0 },
-                    { check: 'Decision justification logged', pass: log.length > 0 },
-                    { check: 'Revenue optimization active', pass: data.dq_score > 0.5 },
-                  ].map(({ check, pass }, i) => (
+                    { fact: 'Decision intervals in ledger', v: log.length },
+                    { fact: 'Operator overrides recorded', v: log.filter(r => r.operator_override).length },
+                    { fact: 'Overrides with positive gap', v: log.filter(r => r.operator_override && (r.gap_step || 0) > 0).length },
+                    { fact: 'Steps with forecast value', v: `${(m?.forecast_utilization_index ?? 0).toFixed(0)}%` },
+                    { fact: 'Steps with SoC telemetry', v: `${log.length ? ((log.filter(r => r.soc != null).length / log.length) * 100).toFixed(0) : 0}%` },
+                    { fact: 'Risk band (published DQ thresholds)', v: (data.risk_level || '—').toUpperCase() },
+                  ].map(({ fact, v }, i) => (
                     <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 0', borderBottom: `1px solid ${DS.border}` }}>
-                      <span style={{ color: DS.sub, fontSize: 12 }}>{check}</span>
-                      <Pill label={pass ? 'PASS' : 'REVIEW'} color={pass ? DS.optimal : DS.loss} />
+                      <span style={{ color: DS.sub, fontSize: 12 }}>{fact}</span>
+                      <span style={{ color: DS.text, fontFamily: DS.mono, fontSize: 12, fontWeight: 700 }}>{v}</span>
                     </div>
                   ))}
                 </Card>
@@ -2499,10 +2531,10 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                       units: 'Dimensionless [0, 1]',
                     },
                     {
-                      name: 'Economic Intelligence Score (EIS)',
-                      formula: 'EIS = 0.45·EDE + 0.30·DA + 0.15·FUI + 0.10·(1−ELR)',
-                      desc: 'Composite 0–100 score blending Economic Decision Efficiency (EDE), Dispatch Accuracy (DA), Forecast Utilization Index (FUI), and one minus Economic Leakage Ratio (ELR). Note: EDE ≡ DQ by construction — both equal EDV_actual / EDV_optimal under the same audit pipeline, so the 45% capture weight is functionally a “DQ-weighted-twice” signal in the current implementation.',
-                      units: 'Score [0, 100]',
+                      name: 'Economic Intelligence Score (EIS) — WITHDRAWN',
+                      formula: '(formerly 0.45·EDE + 0.30·DA + 0.15·FUI + 0.10·(1−ELR))',
+                      desc: 'WITHDRAWN under the No-Fabrication rule: the 45/30/15/10 weights were never validated, and EDE ≡ DQ by construction made the composite a DQ-weighted-twice signal. A composite index will only return if EDA Standard v1.0 formally defines and validates one. See docs/REMOVED_HEURISTICS.md.',
+                      units: 'Not issued',
                     },
                     {
                       name: 'Annual Leakage Projection',
@@ -2648,15 +2680,18 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                         <Label>Latest Advisory Recommendation</Label>
                         <div style={{ color: DS.text, fontSize: 15, fontWeight: 700, marginTop: 2 }}>{last.recommendation}</div>
                       </div>
-                      <Pill label={`${last.severity} SEVERITY`} color={sevColor} />
+                      {last.alert && <Pill label="⚠ GAP > 50% OF STEP OPTIMUM" color={DS.loss} />}
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: 12 }}>
+                      {/* Withdrawn: per-step "Confidence" (fabricated constants)
+                          and HIGH/MED/LOW severity (fabricated $ thresholds) —
+                          replaced by the derived gap-share ratio. */}
                       {[
                         { l: 'Market Price', v: `$${last.price}/MWh`, c: DS.warning },
                         { l: 'Recommended Action', v: last.recommended_action, c: DS.cyan },
                         { l: 'Recommended Power', v: `${last.recommended_power} MW`, c: DS.blue },
                         { l: 'Expected Gain', v: fmtUSD(last.expected_gain || 0), c: DS.optimal },
-                        { l: 'Confidence', v: `${last.confidence}%`, c: DS.cyan },
+                        { l: 'Gap % of Step Optimum', v: last.gap_pct_of_optimal != null ? `${last.gap_pct_of_optimal}%` : '—', c: DS.orange },
                         { l: 'Decision Quality', v: `${last.decision_quality}%`, c: qualColor(last.decision_quality) },
                       ].map(f => (
                         <div key={f.l}>
@@ -2739,7 +2774,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                 <strong style={{ color: DS.sub }}>WebSocket:</strong> <code style={{ color: DS.cyan }}>ws://your-server/ws/live</code> — one JSON message per interval.<br />
                 <strong style={{ color: DS.sub }}>REST polling alternative:</strong> <code style={{ color: DS.cyan }}>POST /api/v1/live/step</code> — same payload, no persistent connection needed.<br />
                 <strong style={{ color: DS.sub }}>Payload:</strong> <code style={{ color: DS.cyan, fontSize: 9 }}>{'{ market_price, actual_discharge, actual_charge, soc, p_max, e_max, eta_charge, eta_discharge, deg_cost, curtailment, forecast_price, grid_limit }'}</code><br />
-                <strong style={{ color: DS.sub }}>Response includes:</strong> captured_value, optimal_value, economic_gap, decision_quality, recommended_action, recommended_power, expected_gain, confidence, severity.
+                <strong style={{ color: DS.sub }}>Response includes:</strong> captured_value, optimal_value, economic_gap, decision_quality, recommended_action, recommended_power, expected_gain, gap_pct_of_optimal.
               </div>
             </div>
           )}
@@ -2835,41 +2870,32 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                       </div>
                     </div>
 
-                    {/* Rating + composite breakdown */}
+                    {/* Economic Rating: WITHDRAWN. The AAA–CCC composite used
+                        unvalidated 40/30/20/10 weights and is not re-derived
+                        from DQ alone (hardening constraint 4). DQ — the one
+                        validated metric — is shown instead. */}
                     <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 32, marginBottom: 32, alignItems: 'center' }}>
-                      {/* Rating badge */}
                       <div style={{ textAlign: 'center' }}>
                         <div style={{
                           width: 160, height: 160, borderRadius: '50%', margin: '0 auto 16px',
-                          border: `5px solid ${certificate.rating_color}`,
+                          border: `5px solid ${qualColor(certificate.dq_score)}`,
                           display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                          boxShadow: `0 0 50px ${certificate.rating_color}25`,
-                          background: `${certificate.rating_color}06`,
+                          background: `${qualColor(certificate.dq_score)}06`,
                         }}>
-                          <div style={{ color: certificate.rating_color, fontSize: 48, fontWeight: 900, fontFamily: DS.mono, lineHeight: 1 }}>{certificate.rating}</div>
-                          <div style={{ color: DS.sub, fontSize: 10, marginTop: 6, letterSpacing: '0.12em' }}>{(certificate.rating_label || '').toUpperCase()}</div>
+                          <div style={{ color: qualColor(certificate.dq_score), fontSize: 40, fontWeight: 900, fontFamily: DS.mono, lineHeight: 1 }}>{certificate.dq_score}</div>
+                          <div style={{ color: DS.sub, fontSize: 10, marginTop: 6, letterSpacing: '0.12em' }}>DQ / ECF · /100</div>
                         </div>
-                        <div style={{ color: DS.dim, fontSize: 10, letterSpacing: '0.12em' }}>COMPOSITE SCORE</div>
-                        <div style={{ color: certificate.rating_color, fontFamily: DS.mono, fontSize: 22, fontWeight: 800 }}>{certificate.composite_score} / 100</div>
+                        <div style={{ color: DS.dim, fontSize: 10, letterSpacing: '0.12em' }}>RISK BAND (DQ THRESHOLDS)</div>
+                        <div style={{ color: riskColor(certificate.risk_level), fontFamily: DS.mono, fontSize: 18, fontWeight: 800 }}>{(certificate.risk_level || '—').toUpperCase()}</div>
                       </div>
-
-                      {/* Composite breakdown */}
-                      <div>
-                        <div style={{ color: DS.sub, fontSize: 10, fontWeight: 700, letterSpacing: '0.15em', marginBottom: 14 }}>RATING COMPOSITION</div>
-                        {[
-                          { label: 'Decision Quality Index (40%)', pts: certificate.rating_components?.decision_quality_40 || 0, max: 40 },
-                          { label: 'Economic Efficiency (30%)',    pts: certificate.rating_components?.economic_efficiency_30 || 0, max: 30 },
-                          { label: 'Revenue Capture (20%)',        pts: certificate.rating_components?.revenue_capture_20 || 0, max: 20 },
-                          { label: 'Governance Compliance (10%)', pts: certificate.rating_components?.governance_10 || 0, max: 10 },
-                        ].map(comp => (
-                          <div key={comp.label} style={{ marginBottom: 12 }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
-                              <span style={{ color: DS.sub }}>{comp.label}</span>
-                              <span style={{ color: certificate.rating_color, fontFamily: DS.mono, fontWeight: 700 }}>{comp.pts} / {comp.max}</span>
-                            </div>
-                            <ProgressBar pct={(comp.pts / comp.max) * 100} color={certificate.rating_color} />
-                          </div>
-                        ))}
+                      <div style={{ padding: '16px 20px', background: 'rgba(255,255,255,0.02)', border: `1px dashed ${DS.border}`, borderRadius: DS.r12 }}>
+                        <div style={{ color: DS.sub, fontSize: 10, fontWeight: 700, letterSpacing: '0.15em', marginBottom: 10 }}>ECONOMIC RATING (AAA–CCC)</div>
+                        <div style={{ color: DS.dim, fontSize: 12, lineHeight: 1.7 }}>
+                          {certificate.rating_label || 'Withdrawn — pending EDA Standard v1.0 definition'}.
+                          The previous composite rating relied on unvalidated weightings and has been
+                          withdrawn under the No-Fabrication rule. A rating will only be issued once the
+                          EDA Standard formally defines and validates its methodology.
+                        </div>
                       </div>
                     </div>
 
@@ -2881,12 +2907,14 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                         { label: 'Asset Name',          v: certificate.asset_name,           c: DS.text },
                         { label: 'Asset Type',           v: certificate.asset_type,           c: DS.cyan },
                         { label: 'Audit Period',         v: certificate.audit_period,         c: DS.sub },
-                        { label: 'Economic Potential',   v: fmtUSD(certificate.economic_potential), c: DS.warning },
-                        { label: 'Captured Value',       v: fmtUSD(certificate.captured_value),     c: DS.optimal },
-                        { label: 'Destroyed Value',      v: fmtUSD(certificate.destroyed_value),    c: DS.loss },
-                        { label: 'DQ Score',             v: `${certificate.dq_score} / 100`,  c: qualColor(certificate.dq_score) },
-                        { label: 'EIS Score',            v: `${certificate.eis_score} / 100`, c: qualColor(certificate.eis_score) },
-                        { label: 'Annual Leakage',       v: fmtUSD(certificate.annual_leakage), c: DS.orange },
+                        { label: 'Theoretical Ceiling (Upper Bound)', v: fmtMoney(certificate.economic_potential, certificate.currency), c: DS.warning },
+                        { label: 'Captured Value',       v: fmtMoney(certificate.captured_value, certificate.currency),     c: DS.optimal },
+                        { label: 'Ceiling Gap',          v: fmtMoney(certificate.theoretical_ceiling_gap ?? certificate.destroyed_value, certificate.currency),    c: DS.loss },
+                        ...(certificate.recoverable_execution_gap != null
+                          ? [{ label: 'Recoverable Execution Gap', v: fmtMoney(certificate.recoverable_execution_gap, certificate.currency), c: DS.loss }]
+                          : []),
+                        { label: 'DQ / ECF',             v: `${certificate.dq_score} / 100`,  c: qualColor(certificate.dq_score) },
+                        { label: 'Annual Ceiling Gap (Linear Est.)', v: fmtMoney(certificate.annual_leakage, certificate.currency), c: DS.orange },
                       ].map(f => (
                         <div key={f.label} style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.02)', border: `1px solid ${DS.border}`, borderRadius: DS.r8 }}>
                           <Label style={{ fontSize: 9, marginBottom: 3 }}>{f.label}</Label>
@@ -2963,13 +2991,13 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                 ['4. Root Cause Intelligence',
                   'Every dollar of leakage is automatically traced back to its operational cause: fixed dispatch thresholds, incorrect charging windows, missed arbitrage, curtailment losses, forecast errors, or reserve market exclusion. PREDAIOT identifies the decision responsible — not just the symptom.'],
                 ['5. Economic Action Plan™',
-                  'After identifying leakage, PREDAIOT ranks all improvement opportunities by annual economic value, implementation complexity, operational risk, payback period, and confidence score. This transforms the audit into an executable roadmap ordered by return on action.'],
+                  'After identifying leakage, PREDAIOT derives each improvement opportunity directly from the decision ledger: the value shown is the sum of the gap over the ledger rows matching that opportunity\'s classification, with the exact filter published alongside the figure. Strategy directions that cannot be quantified from the audited data are listed separately as Experimental.'],
                 ['6. Universal Asset Intelligence',
                   'The PREDAIOT engine is fully asset-agnostic. Three primitives define any asset: (1) Physical Model — constraints and physics, (2) Economic Model — revenue and cost functions, (3) Decision Space — feasible control actions. Any energy asset with operational data can be economically audited: BESS, Solar, Wind, Gas, Hydro, Hydrogen, Desalination, CHP, or any industrial energy infrastructure.'],
                 ['7. Explainability, Repeatability & Independence',
                   'Every recommendation is fully traceable to the original operational data, optimization model, and dispatch interval. Running the audit multiple times on identical data produces identical results. PREDAIOT does not control the asset — it independently evaluates operational decisions without interfering with existing EMS, SCADA, or DCS systems. This is an Economic Advisory Observer, not a control system.'],
-                ['8. Patent-Pending Counterfactual Engine™',
-                  'The proprietary PREDAIOT methodology evaluates every operational decision against its mathematically optimal alternative. Rather than asking "What happened?", PREDAIOT answers "What should have happened?" The resulting Counterfactual Gap™ is the core of PREDAIOT\'s Economic Decision Audit™ patent filing.'],
+                ['8. Counterfactual Engine',
+                  'The PREDAIOT methodology evaluates every operational decision against its mathematically optimal alternative. Rather than asking "What happened?", PREDAIOT answers "What should have happened?" — the resulting Counterfactual Gap is the core quantity of the Economic Decision Audit methodology.'],
               ].map(([title, body]) => (
                 <div key={title} style={{ padding: '14px 18px', background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: DS.r8 }}>
                   <div style={{ color: DS.text, fontWeight: 700, fontSize: 12, marginBottom: 6 }}>{title}</div>
