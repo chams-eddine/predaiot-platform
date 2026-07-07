@@ -231,6 +231,19 @@ class AuditResponse(BaseModel):
     # Ch 8.2 split: {forecast_gap, execution_gap, recommended_value, method}.
     # Present only for storage audits whose file carries a forecast column.
     gap_attribution: Optional[Dict[str, Any]] = None
+    # Presentation hierarchy (Scientific Hardening item 2). The perfect-
+    # foresight optimum is a BENCHMARK, not an achievable target:
+    #   theoretical_ceiling_gap   — alias of total_gap_usd under its honest
+    #                               name: gap vs the Theoretical Economic
+    #                               Ceiling (Upper Bound Benchmark).
+    #   recoverable_execution_gap — gap_attribution.execution_gap: value
+    #                               achievable using information available at
+    #                               decision time. None when no forecast
+    #                               column exists — never fabricated.
+    #   headline_gap_basis        — which figure the UI should headline.
+    theoretical_ceiling_gap: Optional[float] = None
+    recoverable_execution_gap: Optional[float] = None
+    headline_gap_basis: Optional[str] = "ceiling"  # "execution" | "ceiling"
     decision_log: List[DecisionRecord]
     # Extended EDA sections
     asset_name: Optional[str] = "Energy Asset"
@@ -1221,6 +1234,7 @@ def _build_ai_commentary(
     decision_log: List[DecisionRecord], dq: float,
     eda_metrics=None, opportunities: list = None, root_causes: list = None,
     annual_factor: float = 365.0, currency: str = "USD",
+    gap_attribution: dict = None,
 ) -> str:
     """
     Generates the default (non-Claude) Economic Intelligence Report™.
@@ -1256,7 +1270,9 @@ def _build_ai_commentary(
     L.append("")
     L.append("KEY FINDINGS")
     L.append(f"✔ Economic Intelligence Score        {eis} / 100")
-    L.append(f"✔ Economic Leakage                   {_fmt_money(total_gap, currency)}")
+    L.append(f"✔ Ceiling Gap (upper bound)          {_fmt_money(total_gap, currency)}")
+    if gap_attribution:
+        L.append(f"✔ Recoverable Execution Gap          {_fmt_money(gap_attribution['execution_gap'], currency)}")
     L.append(f"✔ Missed High-Value Intervals         {len(missed)}")
     L.append(f"✔ Largest Opportunity                 {top_opp}")
     L.append("")
@@ -1275,12 +1291,21 @@ def _build_ai_commentary(
         )
     L.append("")
     L.append("OPERATIONAL IMPACT")
-    L.append(
-        f"Had the dispatch strategy followed the economically optimal schedule, the asset could have "
-        f"recovered approximately {recoverable}% additional revenue during the audited period without "
-        f"additional hardware investment. Annualised, this represents an estimated "
-        f"{_fmt_money(total_gap * annual_factor * 0.68, currency, 0)} in recoverable value."
-    )
+    if gap_attribution:
+        L.append(
+            f"The Recoverable Execution Gap for the audited period is "
+            f"{_fmt_money(gap_attribution['execution_gap'], currency)} — value that was achievable "
+            f"using the day-ahead forecast available at decision time, with no additional hardware. "
+            f"The remaining {_fmt_money(gap_attribution['forecast_gap'], currency)} of the ceiling gap "
+            f"was reachable only with perfect price foresight and is NOT operator-attributable."
+        )
+    else:
+        L.append(
+            f"The gap of {_fmt_money(total_gap, currency)} is measured against the Theoretical "
+            f"Economic Ceiling — a perfect-foresight upper-bound benchmark. It includes value that "
+            f"no forecast-based operation could fully capture; the operationally recoverable portion "
+            f"cannot be isolated for this dataset because no day-ahead forecast column was provided."
+        )
     L.append("")
     L.append("AUDITOR CONCLUSION")
     L.append(
@@ -1491,16 +1516,17 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
     ai_commentary = _build_ai_commentary(
         asset.asset_name, total_gap, total_edv_opt, decision_log, dq_score,
         eda_metrics=eda_metrics, opportunities=opportunities, root_causes=root_causes,
-        annual_factor=annual_factor, currency=currency,
+        annual_factor=annual_factor, currency=currency, gap_attribution=gap_attribution,
     )
     if gap_attribution:
         ai_commentary += (
             "\n\nGAP ATTRIBUTION (Ref. Manual Ch 8.2)\n"
-            f"Forecast gap   {_fmt_money(gap_attribution['forecast_gap'], currency)}"
-            "  — value unreachable because the day-ahead forecast was imperfect "
-            "(not operator-attributable).\n"
-            f"Execution gap  {_fmt_money(gap_attribution['execution_gap'], currency)}"
-            "  — value lost by not following the forecast-based recommendation "
+            f"Theoretical Ceiling Gap    {_fmt_money(total_gap, currency)}"
+            "  — vs the perfect-foresight upper-bound benchmark.\n"
+            f"  Forecast-Unreachable     {_fmt_money(gap_attribution['forecast_gap'], currency)}"
+            "  — capturable only with perfect price foresight (not operator-attributable).\n"
+            f"  Recoverable Execution    {_fmt_money(gap_attribution['execution_gap'], currency)}"
+            "  — achievable with information available at decision time "
             "(operator / automation attributable)."
         )
 
@@ -1526,6 +1552,11 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
         dq_score_raw=round(dq_score_raw, 4),
         gap_attribution=gap_attribution,
         total_gap_usd=round(total_gap, 2),
+        # Presentation hierarchy: same verified numbers under honest names.
+        theoretical_ceiling_gap=round(total_gap, 2),
+        recoverable_execution_gap=(round(gap_attribution["execution_gap"], 2)
+                                   if gap_attribution else None),
+        headline_gap_basis=("execution" if gap_attribution else "ceiling"),
         decision_log=decision_log,
         # Extended EDA
         asset_name=asset.asset_name,
@@ -1540,10 +1571,20 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
         ai_commentary=ai_commentary,
         currency=(currency or "USD").upper(),
         counterfactual_summary=(
-            f"Under optimal dispatch, {asset.asset_name} would have captured "
-            f"{_fmt_money(total_edv_opt, currency)} vs actual {_fmt_money(total_edv_act, currency)}. "
-            f"The counterfactual gap of {_fmt_money(total_gap, currency)} represents decisions that "
-            f"were physically feasible but economically sub-optimal."
+            f"Against the Theoretical Economic Ceiling (perfect-foresight upper-bound "
+            f"benchmark), {asset.asset_name} could have captured {_fmt_money(total_edv_opt, currency)} "
+            f"vs actual {_fmt_money(total_edv_act, currency)} — a ceiling gap of "
+            f"{_fmt_money(total_gap, currency)}. "
+            + (
+                f"Of this, the Recoverable Execution Gap — value achievable using information "
+                f"available at decision time — is {_fmt_money(gap_attribution['execution_gap'], currency)}; "
+                f"the remaining {_fmt_money(gap_attribution['forecast_gap'], currency)} was reachable "
+                f"only with perfect price foresight."
+                if gap_attribution else
+                "The ceiling gap is an upper bound: it includes value reachable only with perfect "
+                "price foresight. A day-ahead forecast column is required to isolate the "
+                "operationally recoverable portion."
+            )
         ),
         # Echo ISSUED TO fields from AssetSpecs
         asset_id=asset.asset_id,
@@ -3320,6 +3361,9 @@ def _build_certificate(data: dict) -> dict:
     if annual_leakage is None:
         annual_leakage = total_gap * 365
     cur = (data.get("currency") or "USD").upper()
+    # Ch 8.2 attribution when the audited file carried a forecast column —
+    # lets the certificate distinguish recoverable vs forecast-unreachable gap.
+    _ga = data.get("gap_attribution") or None
     cert_id    = f"PREDAIOT-EDPC-{datetime.utcnow().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
 
     # Rating narrative (Moody's style)
@@ -3342,14 +3386,16 @@ def _build_certificate(data: dict) -> dict:
         )
     elif rating in ("BB", "B"):
         narrative = (
-            f"Significant economic underperformance detected. {round((1-dq)*100,1)}% of achievable value destroyed. "
+            f"Significant economic underperformance detected: {round((1-dq)*100,1)}% of the "
+            "Theoretical Economic Ceiling (upper-bound benchmark) was not captured. "
             "Immediate review of dispatch strategy and operator protocols required. "
-            f"Estimated annual leakage: {_fmt_money(annual_leakage, cur, 0)}."
+            f"Estimated annual ceiling gap: {_fmt_money(annual_leakage, cur, 0)}."
         )
     else:  # CCC
         narrative = (
-            f"Critical economic underperformance. Asset captured only {round(dq*100,1)}% of its achievable potential. "
-            f"Estimated annual value destruction: {_fmt_money(annual_leakage, cur, 0)}. "
+            f"Critical economic underperformance. Asset captured only {round(dq*100,1)}% of its "
+            "Theoretical Economic Ceiling (upper-bound benchmark). "
+            f"Estimated annual ceiling gap: {_fmt_money(annual_leakage, cur, 0)}. "
             "Immediate operational review and EMS reconfiguration required."
         )
 
@@ -3387,8 +3433,15 @@ def _build_certificate(data: dict) -> dict:
         "asset_type":           data.get("asset_type", "Generic"),
         "audit_period":         data.get("audit_period_label", "24h"),
         "economic_potential":   round(opt, 2),
+        # Benchmark semantics (Scientific Hardening item 2): the potential is
+        # the perfect-foresight upper bound, not an achievable target.
+        "benchmark_label":      "Theoretical Economic Ceiling (Upper Bound Benchmark)",
         "captured_value":       round(act, 2),
-        "destroyed_value":      round(total_gap, 2),
+        "destroyed_value":      round(total_gap, 2),   # legacy key = ceiling gap
+        "theoretical_ceiling_gap": round(total_gap, 2),
+        "recoverable_execution_gap": (round(_ga["execution_gap"], 2) if _ga else None),
+        "forecast_unreachable_gap":  (round(_ga["forecast_gap"], 2) if _ga else None),
+        "gap_basis":            ("execution" if _ga else "ceiling"),
         "dq_score":             round(dq * 100, 1),
         "eis_score":            round(eis, 1),
         "composite_score":      round(composite, 1),
@@ -3402,8 +3455,15 @@ def _build_certificate(data: dict) -> dict:
         "risk_level":           data.get("risk_level", "Moderate"),
         "key_finding": (
             f"During the audit period, {data.get('asset_name','the asset')} captured "
-            f"{round(dq*100,1)}% of its achievable economic value. "
-            f"Estimated annual value destruction: {_fmt_money(annual_leakage, cur, 0)}."
+            f"{round(dq*100,1)}% of its Theoretical Economic Ceiling (perfect-foresight "
+            f"upper-bound benchmark). "
+            + (
+                f"Recoverable Execution Gap — achievable with information available at "
+                f"decision time: {_fmt_money(_ga['execution_gap'], cur)} for the period."
+                if _ga else
+                f"Ceiling gap for the period: {_fmt_money(total_gap, cur)} (upper bound; "
+                "includes forecast-unreachable value)."
+            )
         ),
         "rating_components": {
             "decision_quality_40":    round(dq * 40, 1),
@@ -3593,20 +3653,42 @@ def _build_audit_pdf(audit: dict) -> bytes:
     c.setLineWidth(0.6)
     c.line(60, y - 4, 535, y - 4)
 
+    # Benchmark hierarchy (Scientific Hardening item 2): the optimum is a
+    # perfect-foresight UPPER BOUND; only the execution gap (when a forecast
+    # column allowed the Ch 8.2 split) may be presented as recoverable.
+    ga = audit.get("gap_attribution") or None
     rows = [
-        ("Economic Potential",      _fmt_money(edv_opt, cur)),
-        ("Captured Value",          _fmt_money(edv_act, cur)),
-        ("Destroyed Value (Gap)",   _fmt_money(gap, cur)),
-        ("Decision Quality (DQ)",   f"{dq_pct:.1f} / 100"),
-        ("Risk Level",              risk.upper()),
+        ("Theoretical Ceiling (Upper Bound)", _fmt_money(edv_opt, cur)),
+        ("Captured Value",                    _fmt_money(edv_act, cur)),
+        ("Ceiling Gap (vs Upper Bound)",      _fmt_money(gap, cur)),
+    ]
+    if ga:
+        rows += [
+            ("Recoverable Execution Gap",     _fmt_money(ga.get("execution_gap"), cur)),
+            ("Forecast-Unreachable Gap",      _fmt_money(ga.get("forecast_gap"), cur)),
+        ]
+    rows += [
+        ("Decision Quality (DQ)",             f"{dq_pct:.1f} / 100"),
+        ("Risk Level",                        risk.upper()),
     ]
     y -= 22
     c.setFillColorRGB(0.18, 0.18, 0.2)
     c.setFont("Helvetica", 11)
     for label, value in rows:
+        emphasize = label == "Recoverable Execution Gap"
+        c.setFont("Helvetica-Bold" if emphasize else "Helvetica", 11)
         c.drawString(72, y, label)
         c.drawRightString(535, y, value)
-        y -= 18
+        y -= 16
+    c.setFont("Helvetica-Oblique", 8)
+    c.setFillColorRGB(0.45, 0.45, 0.5)
+    c.drawString(72, y, (
+        "Ceiling = perfect-foresight benchmark. Recoverable Execution Gap = achievable with "
+        "information available at decision time." if ga else
+        "Ceiling = perfect-foresight benchmark (upper bound). Recoverable portion requires a "
+        "day-ahead forecast column in the source data."))
+    y -= 14
+    c.setFillColorRGB(0.18, 0.18, 0.2)
 
     # ── Top Root Causes ────────────────────────────────────────────────
     y -= 12

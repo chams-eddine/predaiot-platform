@@ -1038,12 +1038,14 @@ function AssetPerformanceTiles({ data, log, m }) {
 }
 
 function OpsConsoleExec({ data, log, m, ingestionNotes, onDismissNotes }) {
-  // Ref. Manual semantics — potential (ETL) / captured (actual) / destroyed
-  // (gap). These were previously mislabeled: the "Captured Value" tile showed
-  // the OPTIMAL total, which misstates the audit to the customer.
+  // Benchmark hierarchy (Scientific Hardening item 2): the optimum is the
+  // Theoretical Economic Ceiling — a perfect-foresight UPPER BOUND, not an
+  // achievable target. Only the execution gap (Ch 8.2 split, present when the
+  // source data carried a forecast column) is presented as recoverable.
   const potential  = data.edv_optimal_total || 0;
   const captured   = data.edv_actual_total || 0;
   const destroyed  = data.total_gap_usd || 0;
+  const execGap    = data.gap_attribution?.execution_gap ?? null;
   const cur        = data.currency;
   const dqPct      = (data.dq_score || 0) * 100;
   const count      = (log || []).length;
@@ -1074,9 +1076,18 @@ function OpsConsoleExec({ data, log, m, ingestionNotes, onDismissNotes }) {
           <div style={{ color: OPS.text, fontSize: 12, fontWeight: 700, letterSpacing: '0.15em', marginBottom: 14 }}>
             FINANCIAL IMPACT
           </div>
-          <OpsFinancialCard label="Economic Potential" value={fmtMoney(potential, cur)} color={OPS.green} />
-          <OpsFinancialCard label="Captured Value"     value={fmtMoney(captured, cur)}  color={captured >= 0 ? OPS.green : OPS.red} glow />
-          <OpsFinancialCard label="Destroyed Value"    value={fmtMoney(destroyed, cur)} color={OPS.red} arrow="↓" />
+          {execGap != null ? (
+            <OpsFinancialCard label="Recoverable Execution Gap" value={fmtMoney(execGap, cur)} color={OPS.red} glow arrow="↓" />
+          ) : (
+            <OpsFinancialCard label="Ceiling Gap (Upper Bound)" value={fmtMoney(destroyed, cur)} color={OPS.red} glow arrow="↓" />
+          )}
+          <OpsFinancialCard label="Theoretical Ceiling (Benchmark)" value={fmtMoney(potential, cur)} color={OPS.sub} />
+          <OpsFinancialCard label="Captured Value" value={fmtMoney(captured, cur)} color={captured >= 0 ? OPS.green : OPS.red} />
+          <div style={{ color: OPS.sub, fontSize: 9.5, lineHeight: 1.5, marginTop: 6 }}>
+            {execGap != null
+              ? 'Recoverable = achievable with information available at decision time (Ch 8.2). Ceiling = perfect-foresight upper bound.'
+              : 'Ceiling gap is an upper bound vs a perfect-foresight benchmark; a forecast column is required to isolate the recoverable portion.'}
+          </div>
         </div>
 
         <div style={{
@@ -1977,9 +1988,11 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
               <SectionHeader tag="05" title='Counterfactual Simulation — "What Would Have Happened?"' />
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16, marginBottom: 20 }}>
                 {[
-                  { label: 'Actual Revenue', value: fmtUSD(data.edv_actual_total), color: DS.blue },
-                  { label: 'Optimal Revenue', value: fmtUSD(data.edv_optimal_total), color: DS.optimal },
-                  { label: 'Lost Opportunity', value: `−${fmtUSD(data.total_gap_usd)}`, color: DS.loss },
+                  { label: 'Actual Revenue', value: fmtMoney(data.edv_actual_total, data.currency), color: DS.blue },
+                  { label: 'Theoretical Ceiling (Upper Bound)', value: fmtMoney(data.edv_optimal_total, data.currency), color: DS.optimal },
+                  ...(data.gap_attribution
+                    ? [{ label: 'Recoverable Execution Gap', value: `−${fmtMoney(data.gap_attribution.execution_gap, data.currency)}`, color: DS.loss }]
+                    : [{ label: 'Ceiling Gap (Upper Bound)', value: `−${fmtMoney(data.total_gap_usd, data.currency)}`, color: DS.loss }]),
                 ].map((f) => (
                   <Card key={f.label} style={{ textAlign: 'center' }}>
                     <Label>{f.label}</Label>
@@ -2054,18 +2067,29 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {hasData && activeSection === 'leakage' && (
             <div>
               <SectionHeader tag="07" title="Financial Value Leakage" />
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 16, marginBottom: 20 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 16, marginBottom: 8 }}>
                 {[
-                  { label: '24-Hour', value: fmtUSD(data.total_gap_usd), color: DS.loss },
-                  { label: '7-Day (Est.)', value: data.total_gap_usd > 0 ? fmtUSD(data.total_gap_usd * 7) : '—', color: DS.orange },
-                  { label: '30-Day (Est.)', value: data.total_gap_usd > 0 ? fmtUSD(data.total_gap_usd * 30) : '—', color: DS.warning },
-                  { label: '12-Month Projection', value: data.total_gap_usd > 0 ? fmtUSD(data.total_gap_usd * 365) : '—', color: DS.loss },
+                  ...(data.gap_attribution
+                    ? [{ label: 'Recoverable Execution Gap — Audit Period', value: fmtMoney(data.gap_attribution.execution_gap, data.currency), color: DS.loss }]
+                    : []),
+                  { label: 'Ceiling Gap — Audit Period', value: fmtMoney(data.total_gap_usd, data.currency), color: data.gap_attribution ? DS.orange : DS.loss },
+                  { label: '7-Day (Linear Est., Ceiling Basis)', value: data.total_gap_usd > 0 ? fmtMoney(data.total_gap_usd * 7, data.currency) : '—', color: DS.orange },
+                  { label: '30-Day (Linear Est., Ceiling Basis)', value: data.total_gap_usd > 0 ? fmtMoney(data.total_gap_usd * 30, data.currency) : '—', color: DS.warning },
+                  { label: '12-Month (Linear Est., Ceiling Basis)', value: data.total_gap_usd > 0 ? fmtMoney(data.total_gap_usd * 365, data.currency) : '—', color: DS.loss },
                 ].map((f) => (
                   <Card key={f.label} style={{ textAlign: 'center', borderColor: `${f.color}25` }}>
                     <Label>{f.label}</Label>
                     <BigNum v={f.value} color={f.color} />
                   </Card>
                 ))}
+              </div>
+              <div style={{ color: DS.dim, fontSize: 10, lineHeight: 1.5, marginBottom: 20 }}>
+                Ceiling basis = gap vs the Theoretical Economic Ceiling (perfect-foresight upper-bound
+                benchmark). Multi-period figures are linear extrapolations of the audited period, not
+                statistical forecasts.
+                {data.gap_attribution
+                  ? ' The Recoverable Execution Gap is the portion achievable with information available at decision time (Ch 8.2).'
+                  : ' A day-ahead forecast column is required to isolate the operationally recoverable portion.'}
               </div>
               <Card>
                 <Label style={{ marginBottom: 16 }}>Top Leakage Sources</Label>
