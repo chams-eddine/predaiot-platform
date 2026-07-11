@@ -4628,6 +4628,38 @@ def health():
     return {"ok": True}
 
 
+@app.get("/health/db")
+def health_db():
+    """
+    Direct evidence of the storage backend — no inference, no credentials.
+    dialect 'sqlite' = ephemeral (data lost on redeploy); 'postgresql' =
+    persistent. Row counts double as a persistence signal across deploys.
+    """
+    info = {
+        "dialect": engine.dialect.name,
+        "persistent": engine.dialect.name != "sqlite",
+        "auth_secret_configured": bool(os.environ.get("PREDAIOT_AUTH_SECRET")),
+        "cert_signing_key_configured": bool(os.environ.get("PREDAIOT_CERT_SIGNING_KEY")),
+    }
+    try:
+        with engine.connect() as conn:
+            try:
+                info["alembic_version"] = conn.exec_driver_sql(
+                    "SELECT version_num FROM alembic_version").scalar()
+            except Exception:
+                info["alembic_version"] = None
+            for t in ("users", "organizations", "assets", "certificate_registry"):
+                try:
+                    info[f"rows_{t}"] = conn.exec_driver_sql(
+                        f"SELECT count(*) FROM {t}").scalar()
+                except Exception:
+                    info[f"rows_{t}"] = None
+        info["status"] = "connected"
+    except Exception as e:
+        info["status"] = f"error: {type(e).__name__}"
+    return info
+
+
 try:
     # Resolve relative to THIS file, not the process CWD — uvicorn launched
     # with --app-dir (or from any directory) must still find the build.
