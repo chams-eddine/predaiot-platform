@@ -4638,6 +4638,7 @@ def health_db():
     info = {
         "dialect": engine.dialect.name,
         "persistent": engine.dialect.name != "sqlite",
+        "database_url_configured": bool(os.environ.get("DATABASE_URL")),
         "auth_secret_configured": bool(os.environ.get("PREDAIOT_AUTH_SECRET")),
         "cert_signing_key_configured": bool(os.environ.get("PREDAIOT_CERT_SIGNING_KEY")),
     }
