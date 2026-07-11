@@ -777,6 +777,20 @@ def _persist_audit_record(lead: TrialLead, result: "AuditResponse",
         db.close()
 
 
+def require_audit_runner(
+    x_trial_token: Optional[str] = Header(default=None, alias="X-Trial-Token"),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+) -> TrialLead:
+    """Dual-accept for endpoints that RUN audits: viewer accounts are
+    read-only and get 403 here; every other role and trial tokens pass."""
+    if authorization and authorization.startswith("Bearer "):
+        claims = _decode_jwt(authorization[7:])
+        if claims and claims.get("role") == "viewer":
+            raise HTTPException(status_code=403, detail={"code": "forbidden",
+                                "message": "Viewer accounts are read-only. Ask an admin to run audits or change your role."})
+    return require_trial_or_user(x_trial_token, authorization)
+
+
 def require_trial_or_user(
     x_trial_token: Optional[str] = Header(default=None, alias="X-Trial-Token"),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
@@ -2091,6 +2105,92 @@ async def list_assets(user: User = Depends(require_user)):
         db.close()
 
 
+# ---- Sprint 2: RBAC — org user management ----------------------------------
+class MemberCreateRequest(BaseModel):
+    email: str
+    role: str = "viewer"
+    password: Optional[str] = None   # omitted -> generated, returned once
+
+
+class MemberRoleRequest(BaseModel):
+    role: str
+
+
+@app.post("/api/v1/org/users")
+async def org_add_member(req: MemberCreateRequest,
+                         user: User = Depends(require_role("admin"))):
+    """Owner/admin adds an org member. The password is returned ONCE."""
+    email = req.email.strip().lower()
+    if "@" not in email:
+        raise HTTPException(status_code=422, detail={"code": "invalid_email",
+                            "message": "A valid email is required."})
+    if req.role not in _ROLES:
+        raise HTTPException(status_code=422, detail={"code": "invalid_role",
+                            "message": f"Role must be one of: {', '.join(_ROLES)}."})
+    if req.role == "owner":
+        raise HTTPException(status_code=422, detail={"code": "invalid_role",
+                            "message": "Ownership is transferred, not granted at creation."})
+    pw = req.password or secrets.token_urlsafe(12)
+    if len(pw) < 8:
+        raise HTTPException(status_code=422, detail={"code": "weak_password",
+                            "message": "Password must be at least 8 characters."})
+    db = SessionLocal()
+    try:
+        if db.query(User).filter(User.email == email).first():
+            raise HTTPException(status_code=409, detail={"code": "email_taken",
+                                "message": "An account with this email already exists."})
+        member = User(org_id=user.org_id, email=email,
+                      password_hash=_hash_password(pw), role=req.role)
+        db.add(member)
+        db.commit()
+        db.refresh(member)
+        _security_log("org.member.create", actor=user.email, org_id=user.org_id,
+                      object_ref=f"user:{member.id}|role:{member.role}")
+        return {"email": member.email, "role": member.role,
+                "temporary_password": (None if req.password else pw),
+                "note": "Share the temporary password securely; it is not stored in clear and cannot be shown again."}
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/org/users")
+async def org_list_members(user: User = Depends(require_user)):
+    db = SessionLocal()
+    try:
+        rows = (db.query(User).filter(User.org_id == user.org_id)
+                .order_by(User.created_at.asc()).all())
+        return {"users": [{"id": u.id, "email": u.email, "role": u.role,
+                           "created_at": u.created_at.isoformat() + "Z"} for u in rows]}
+    finally:
+        db.close()
+
+
+@app.patch("/api/v1/org/users/{member_id}")
+async def org_change_role(member_id: int, req: MemberRoleRequest,
+                          user: User = Depends(require_role("admin"))):
+    if req.role not in _ROLES or req.role == "owner":
+        raise HTTPException(status_code=422, detail={"code": "invalid_role",
+                            "message": "Role must be a non-owner role."})
+    db = SessionLocal()
+    try:
+        m = (db.query(User).filter(User.id == member_id,
+                                   User.org_id == user.org_id).first())
+        if m is None:
+            raise HTTPException(status_code=404, detail={"code": "member_not_found",
+                                "message": "No such member in your organization."})
+        if m.role == "owner":
+            raise HTTPException(status_code=403, detail={"code": "forbidden",
+                                "message": "The owner role cannot be changed here."})
+        old_role = m.role
+        m.role = req.role
+        db.commit()
+        _security_log("org.member.role_change", actor=user.email, org_id=user.org_id,
+                      object_ref=f"user:{m.id}|{old_role}->{req.role}")
+        return {"id": m.id, "email": m.email, "role": m.role}
+    finally:
+        db.close()
+
+
 # ---- Sprint 2: Audit History + Economic Memory (L3, blueprint §3) ----------
 @app.get("/api/v1/audits")
 async def list_audits(user: User = Depends(require_user)):
@@ -2219,7 +2319,7 @@ async def calculate_gap(
     request: Request,   # noqa: ARG001 — used by rate limiter
     audit_req: AuditRequest,
     background: BackgroundTasks,
-    lead: TrialLead = Depends(require_trial_or_user),
+    lead: TrialLead = Depends(require_audit_runner),
 ):
     result = process_calculation(audit_req.asset, [ts.dict() for ts in audit_req.time_series],
                                  dt_hours=audit_req.dt_hours or 1.0)
@@ -3285,7 +3385,7 @@ async def audit_from_file(
     request: Request,   # noqa: ARG001 — used by rate limiter
     background: BackgroundTasks,
     file: UploadFile = File(...),
-    lead: TrialLead = Depends(require_trial_or_user),
+    lead: TrialLead = Depends(require_audit_runner),
 ):
     """
     Universal file ingestion. Accepts real-world exports from any SCADA / EMS /
