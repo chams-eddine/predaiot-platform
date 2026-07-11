@@ -886,6 +886,25 @@ async def _api_access_log(request, call_next):
         print(f"[access-log] non-fatal: {type(e).__name__}: {e}")
     return response
 
+def _alembic_stamp_head():
+    """
+    Record the current Alembic head in alembic_version after create_all +
+    additive migrations have brought the schema to head state. Keeps the
+    production DB's declared revision in lockstep with the codebase without
+    requiring an external `alembic upgrade` step. Never fatal.
+    """
+    try:
+        from alembic.config import Config as _AlembicConfig
+        from alembic import command as _alembic_command
+        base = os.path.dirname(os.path.abspath(__file__))
+        cfg = _AlembicConfig(os.path.join(base, "alembic.ini"))
+        cfg.set_main_option("script_location", os.path.join(base, "alembic"))
+        _alembic_command.stamp(cfg, "head")
+        print("[startup] Alembic version stamped to head.")
+    except Exception as e:
+        print(f"[startup] WARNING: alembic stamp failed (non-fatal): {e}")
+
+
 def _apply_additive_migrations(bind_engine):
     """
     Idempotent additive-column migration. create_all() creates missing TABLES
@@ -936,6 +955,7 @@ async def init_database_tables():
         try:
             Base.metadata.create_all(bind=engine)
             _apply_additive_migrations(engine)
+            _alembic_stamp_head()
             print("[startup] Database tables ready.")
         except Exception as e:
             print(f"[startup] WARNING: could not initialize database tables: {e}")
@@ -4818,7 +4838,7 @@ def health_db():
                     "SELECT version_num FROM alembic_version").scalar()
             except Exception:
                 info["alembic_version"] = None
-            for t in ("users", "organizations", "assets", "certificate_registry"):
+            for t in ("users", "organizations", "assets", "certificate_registry", "audit_records"):
                 try:
                     info[f"rows_{t}"] = conn.exec_driver_sql(
                         f"SELECT count(*) FROM {t}").scalar()
