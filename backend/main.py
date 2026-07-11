@@ -164,6 +164,45 @@ class AuditRecord(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True, nullable=False)
 
 
+class SecurityAuditLog(Base):
+    """
+    Tamper-evident security event log (ISO 27001 A.12.4 direction).
+    Each row's hash covers its content AND the previous row's hash, so any
+    retroactive edit or deletion breaks the chain from that point forward.
+    Chain validity is independently checkable via /api/v1/security/log/verify.
+    """
+    __tablename__ = "security_audit_log"
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, index=True, nullable=True)   # NULL = platform-level event
+    actor = Column(String, nullable=True)                  # email or token prefix
+    action = Column(String, nullable=False)                # e.g. auth.login.ok
+    object_ref = Column(String, nullable=True)             # e.g. asset:3, cert:EDPC-…
+    at = Column(DateTime, default=datetime.utcnow, index=True, nullable=False)
+    prev_hash = Column(String, nullable=False)
+    row_hash = Column(String, nullable=False, index=True)
+
+
+def _security_log(action: str, actor: Optional[str] = None,
+                  object_ref: Optional[str] = None, org_id: Optional[int] = None) -> None:
+    """Append one hash-chained security event. Never fatal to the caller."""
+    try:
+        db = SessionLocal()
+        try:
+            last = db.query(SecurityAuditLog).order_by(SecurityAuditLog.id.desc()).first()
+            prev = last.row_hash if last else "GENESIS"
+            at = datetime.utcnow()
+            body = f"{prev}|{org_id}|{actor}|{action}|{object_ref}|{at.isoformat()}"
+            row = SecurityAuditLog(org_id=org_id, actor=actor, action=action,
+                                   object_ref=object_ref, at=at, prev_hash=prev,
+                                   row_hash=_hashlib.sha256(body.encode()).hexdigest())
+            db.add(row)
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[seclog] WARNING: could not append security event ({action}): {e}")
+
+
 class APIAccessLog(Base):
     """
     Forensic access log. One row per /api/v1/* request. Foundation for
@@ -732,6 +771,8 @@ def _persist_audit_record(lead: TrialLead, result: "AuditResponse",
         )
         db.add(rec)
         db.commit()
+        _security_log("audit.run", actor=user.email, org_id=user.org_id,
+                      object_ref=f"audit:{rec.id}|sha:{input_sha256[:12]}")
     finally:
         db.close()
 
@@ -1973,6 +2014,8 @@ async def auth_register(request: Request, req: RegisterRequest):  # noqa: ARG001
         db.add(user)
         db.commit()
         db.refresh(user)
+        _security_log("auth.register", actor=email, org_id=org.id,
+                      object_ref=f"org:{org.slug}")
         return {"token": _issue_jwt(user), "email": user.email, "role": user.role,
                 "organization": {"id": org.id, "name": org.name, "slug": org.slug}}
     finally:
@@ -1987,8 +2030,10 @@ async def auth_login(request: Request, req: LoginRequest):  # noqa: ARG001
     try:
         user = db.query(User).filter(User.email == email).first()
         if user is None or not _verify_password(req.password, user.password_hash):
+            _security_log("auth.login.failed", actor=email)
             raise HTTPException(status_code=401, detail={"code": "bad_credentials",
                                 "message": "Email or password is incorrect."})
+        _security_log("auth.login.ok", actor=email, org_id=user.org_id)
         org = db.query(Organization).filter(Organization.id == user.org_id).first()
         return {"token": _issue_jwt(user), "email": user.email, "role": user.role,
                 "organization": {"id": org.id, "name": org.name, "slug": org.slug} if org else None}
@@ -2028,6 +2073,8 @@ async def create_asset(req: AssetCreateRequest,
         db.add(a)
         db.commit()
         db.refresh(a)
+        _security_log("asset.create", actor=user.email, org_id=user.org_id,
+                      object_ref=f"asset:{a.id}")
         return _asset_dict(a)
     finally:
         db.close()
@@ -2123,6 +2170,44 @@ async def economic_memory(user: User = Depends(require_user)):
             "assets_audited": sorted({r.asset_name for r in rows if r.asset_name}),
             "mixed_currencies": currencies if not single_ccy and currencies else None,
         }
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/security/log/verify")
+async def security_log_verify():
+    """Public tamper-evidence check: recomputes the whole hash chain.
+    Returns validity + counts only — no event content."""
+    db = SessionLocal()
+    try:
+        rows = db.query(SecurityAuditLog).order_by(SecurityAuditLog.id.asc()).all()
+        prev = "GENESIS"
+        broken_at = None
+        for r in rows:
+            body = f"{r.prev_hash}|{r.org_id}|{r.actor}|{r.action}|{r.object_ref}|{r.at.isoformat()}"
+            if r.prev_hash != prev or _hashlib.sha256(body.encode()).hexdigest() != r.row_hash:
+                broken_at = r.id
+                break
+            prev = r.row_hash
+        return {"entries": len(rows), "chain_valid": broken_at is None,
+                "broken_at_id": broken_at,
+                "head_hash": (rows[-1].row_hash if rows else None)}
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/security/log")
+async def security_log_view(user: User = Depends(require_role("admin"))):
+    """Org-scoped security events (owner/admin only), newest first."""
+    db = SessionLocal()
+    try:
+        rows = (db.query(SecurityAuditLog)
+                .filter(SecurityAuditLog.org_id == user.org_id)
+                .order_by(SecurityAuditLog.id.desc()).limit(200).all())
+        return {"events": [{
+            "id": r.id, "at": r.at.isoformat() + "Z", "actor": r.actor,
+            "action": r.action, "object": r.object_ref, "row_hash": r.row_hash[:16],
+        } for r in rows]}
     finally:
         db.close()
 
@@ -3706,6 +3791,8 @@ def _register_certificate(cert: dict, manifest: Optional[dict],
             db.add(rec)
             db.commit()
             db.refresh(rec)
+            _security_log("certificate.issue", object_ref=f"cert:{rec.cert_id}",
+                          actor=None)
         cert.update({
             "certificate_id":    rec.cert_id,
             "payload_sha256":    rec.payload_sha256,
