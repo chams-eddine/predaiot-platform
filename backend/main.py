@@ -3727,6 +3727,10 @@ def _cert_signing_key():
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         from cryptography.hazmat.primitives import serialization
+    except ImportError as e:
+        print(f'[cert] cryptography library unavailable - issuing unsigned certificates: {e}')
+        return None, None
+    try:
         seed = _base64.b64decode(seed_b64 + "=" * (-len(seed_b64) % 4))
         if len(seed) < 32:
             raise ValueError(f"decoded seed is {len(seed)} bytes; need 32")
@@ -4919,16 +4923,23 @@ def health_db():
         "valid" if _sk else
         ("present_but_invalid" if os.environ.get(_CERT_KEY_ENV) else "absent"))
     if info["cert_signing_key_status"] == "present_but_invalid":
-        # Corruption class only — never the value. Same normalisation as the loader.
-        raw = os.environ.get(_CERT_KEY_ENV, "")
-        cleaned = "".join(raw.strip().strip('"').strip("'").split())
         try:
-            seed = _base64.b64decode(cleaned + "=" * (-len(cleaned) % 4))
-            info["cert_signing_key_problem"] = (
-                f"decodes_to_{len(seed)}_bytes_need_32 (value length {len(cleaned)} chars)")
-        except Exception:
-            info["cert_signing_key_problem"] = (
-                f"not_valid_base64 (value length {len(cleaned)} chars)")
+            import cryptography as _cg_check  # noqa: F401
+            _lib_ok = True
+        except ImportError:
+            info["cert_signing_key_problem"] = "cryptography_library_not_installed"
+            _lib_ok = False
+        # Corruption class only — never the value. Same normalisation as the loader.
+        raw = os.environ.get(_CERT_KEY_ENV, "") if _lib_ok else ""
+        cleaned = "".join(raw.strip().strip('"').strip("'").split())
+        if _lib_ok:
+            try:
+                seed = _base64.b64decode(cleaned + "=" * (-len(cleaned) % 4))
+                info["cert_signing_key_problem"] = (
+                    f"decodes_to_{len(seed)}_bytes_need_32 (value length {len(cleaned)} chars)")
+            except Exception:
+                info["cert_signing_key_problem"] = (
+                    f"not_valid_base64 (value length {len(cleaned)} chars)")
     try:
         with engine.connect() as conn:
             try:
