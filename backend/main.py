@@ -133,6 +133,37 @@ class Asset(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class AuditRecord(Base):
+    """
+    L3 Economic Knowledge Layer (blueprint §3, MOAT): one row per completed
+    account audit — the persisted Economic State of that audit. The full
+    AuditResponse is stored verbatim (result_json) so any past audit can be
+    reloaded into the dashboard bit-for-bit; headline figures are denormalised
+    into columns for cheap history/memory queries.
+    """
+    __tablename__ = "audit_records"
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, index=True, nullable=False)
+    user_id = Column(Integer, index=True, nullable=False)
+    asset_id = Column(Integer, index=True, nullable=True)   # linked when upload names one
+    asset_name = Column(String, nullable=True)
+    asset_type = Column(String, nullable=True)
+    input_sha256 = Column(String, index=True, nullable=False)
+    filename = Column(String, nullable=True)
+    engine_version = Column(String, nullable=True)
+    methodology_version = Column(String, nullable=True)
+    currency = Column(String, nullable=True)
+    gap_total = Column(Float, nullable=True)          # Theoretical-ceiling gap
+    gap_recoverable = Column(Float, nullable=True)    # Recoverable Execution Gap
+    dqi = Column(Float, nullable=True)
+    dqi_grade = Column(String, nullable=True)
+    aei = Column(Float, nullable=True)                # Audit Confidence value
+    aei_grade = Column(String, nullable=True)
+    top_root_cause = Column(String, nullable=True)
+    result_json = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True, nullable=False)
+
+
 class APIAccessLog(Base):
     """
     Forensic access log. One row per /api/v1/* request. Foundation for
@@ -666,6 +697,41 @@ def _lead_for_user(user: "User") -> TrialLead:
             db.refresh(lead)
         db.expunge(lead)
         return lead
+    finally:
+        db.close()
+
+
+def _persist_audit_record(lead: TrialLead, result: "AuditResponse",
+                          input_sha256: str, filename: Optional[str]) -> None:
+    """Store the audit's Economic State for the account's organization (L3)."""
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == lead.user_id).first()
+        if user is None:
+            return
+        d = result.dict()
+        dqi = d.get("data_quality_index") or {}
+        aei = d.get("audit_confidence") or {}
+        attribution = d.get("gap_attribution") or {}
+        rcs = d.get("root_causes") or []
+        top_rc = max(rcs, key=lambda r: r.get("contribution_pct") or 0)["category"] if rcs else None
+        manifest = d.get("audit_manifest") or {}
+        rec = AuditRecord(
+            org_id=user.org_id, user_id=user.id,
+            asset_name=d.get("asset_name"), asset_type=d.get("asset_type"),
+            input_sha256=input_sha256, filename=filename,
+            engine_version=manifest.get("audit_engine_version"),
+            methodology_version=manifest.get("methodology_version"),
+            currency=d.get("currency"),
+            gap_total=d.get("total_gap_usd"),
+            gap_recoverable=attribution.get("execution_gap"),
+            dqi=dqi.get("value"), dqi_grade=dqi.get("grade"),
+            aei=aei.get("value"), aei_grade=aei.get("grade"),
+            top_root_cause=top_rc,
+            result_json=json.dumps(_json_safe(d), default=str),
+        )
+        db.add(rec)
+        db.commit()
     finally:
         db.close()
 
@@ -1954,6 +2020,89 @@ async def list_assets(user: User = Depends(require_user)):
         rows = (db.query(Asset).filter(Asset.org_id == user.org_id)
                 .order_by(Asset.created_at.desc()).all())
         return {"assets": [_asset_dict(a) for a in rows]}
+    finally:
+        db.close()
+
+
+# ---- Sprint 2: Audit History + Economic Memory (L3, blueprint §3) ----------
+@app.get("/api/v1/audits")
+async def list_audits(user: User = Depends(require_user)):
+    """Org-scoped audit history — newest first, headline Economic State only."""
+    db = SessionLocal()
+    try:
+        rows = (db.query(AuditRecord).filter(AuditRecord.org_id == user.org_id)
+                .order_by(AuditRecord.created_at.desc()).limit(100).all())
+        return {"audits": [{
+            "id": r.id, "created_at": r.created_at.isoformat() + "Z",
+            "asset_name": r.asset_name, "asset_type": r.asset_type,
+            "filename": r.filename, "input_sha256": r.input_sha256,
+            "currency": r.currency,
+            "gap_total": r.gap_total, "gap_recoverable": r.gap_recoverable,
+            "dqi": r.dqi, "dqi_grade": r.dqi_grade,
+            "audit_confidence": r.aei, "confidence_grade": r.aei_grade,
+            "top_root_cause": r.top_root_cause,
+            "engine_version": r.engine_version,
+            "methodology_version": r.methodology_version,
+        } for r in rows]}
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/audits/{audit_id}")
+async def get_audit(audit_id: int, user: User = Depends(require_user)):
+    """Reload a past audit's full result (bit-for-bit as originally issued)."""
+    db = SessionLocal()
+    try:
+        r = (db.query(AuditRecord)
+             .filter(AuditRecord.id == audit_id, AuditRecord.org_id == user.org_id)
+             .first())
+        if r is None:
+            raise HTTPException(status_code=404, detail={"code": "audit_not_found",
+                                "message": "No such audit in your organization."})
+        return json.loads(r.result_json)
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/memory")
+async def economic_memory(user: User = Depends(require_user)):
+    """
+    Economic Memory v1 (L3, blueprint law 4 — learn from stored Economic
+    States). Deterministic aggregations of this organization's audit history;
+    every figure states its method. No modelling, no weights, no projections.
+    """
+    db = SessionLocal()
+    try:
+        rows = (db.query(AuditRecord).filter(AuditRecord.org_id == user.org_id)
+                .order_by(AuditRecord.created_at.asc()).all())
+        if not rows:
+            return {"audits": 0, "note": "No audit history yet — run an audit while signed in."}
+        currencies = sorted({r.currency for r in rows if r.currency})
+        single_ccy = currencies[0] if len(currencies) == 1 else None
+        dqis = [r.dqi for r in rows if r.dqi is not None]
+        rc_counts: Dict[str, int] = {}
+        for r in rows:
+            if r.top_root_cause:
+                rc_counts[r.top_root_cause] = rc_counts.get(r.top_root_cause, 0) + 1
+        recurring = max(rc_counts.items(), key=lambda kv: kv[1]) if rc_counts else None
+        return {
+            "method_note": "All values are deterministic aggregations (count/sum/mean) of stored audit results.",
+            "audits": len(rows),
+            "first_audit": rows[0].created_at.isoformat() + "Z",
+            "last_audit": rows[-1].created_at.isoformat() + "Z",
+            "currency": single_ccy,
+            # Sums are only meaningful in one currency — never mix units.
+            "total_gap_identified": (round(sum(r.gap_total or 0 for r in rows), 2)
+                                     if single_ccy else None),
+            "total_recoverable_identified": (round(sum(r.gap_recoverable or 0 for r in rows), 2)
+                                             if single_ccy else None),
+            "mean_dqi": round(sum(dqis) / len(dqis), 4) if dqis else None,
+            "latest_dqi": rows[-1].dqi, "latest_dqi_grade": rows[-1].dqi_grade,
+            "recurring_top_root_cause": ({"cause": recurring[0], "audits": recurring[1]}
+                                         if recurring else None),
+            "assets_audited": sorted({r.asset_name for r in rows if r.asset_name}),
+            "mixed_currencies": currencies if not single_ccy and currencies else None,
+        }
     finally:
         db.close()
 
@@ -3283,6 +3432,16 @@ async def audit_from_file(
 
         _latest_by_token[lead.token] = result.dict()   # per-tenant cache — no cross-leak
         background.add_task(_bump_audit_count, lead.token)
+
+        # L3 Economic Knowledge Layer: account users' audits are persisted —
+        # the platform remembers. (Blueprint law 1: this row IS the stored
+        # Economic State of the audit.) Trial audits stay ephemeral by design.
+        # Persistence failure must never break the audit itself.
+        try:
+            if getattr(lead, "user_id", None):
+                _persist_audit_record(lead, result, input_sha256, file.filename)
+        except Exception as _pe:
+            print(f"[history] WARNING: audit persistence failed (audit unaffected): {_pe}")
 
         # Non-fatal ingestion notes — surfaced on the response for the frontend
         # to display "we auto-corrected X, confirm before quoting the audit."
