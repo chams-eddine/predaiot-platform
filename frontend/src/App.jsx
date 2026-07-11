@@ -23,7 +23,24 @@ const trialStore = {
   clear: () => { try { localStorage.removeItem(TRIAL_STORAGE_KEY); } catch {} },
 };
 
+const AUTH_STORAGE_KEY = 'predaiot.auth.v1';
+
+const authStore = {
+  get: () => {
+    try { return JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY) || 'null'); }
+    catch { return null; }
+  },
+  set: (v) => { try { localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(v)); } catch {} },
+  clear: () => { try { localStorage.removeItem(AUTH_STORAGE_KEY); } catch {} },
+};
+
 axios.interceptors.request.use((cfg) => {
+  // Signed-in account takes precedence; legacy trial token otherwise.
+  const a = authStore.get();
+  if (a?.token) {
+    cfg.headers['Authorization'] = `Bearer ${a.token}`;
+    return cfg;
+  }
   const t = trialStore.get();
   if (t?.token) cfg.headers['X-Trial-Token'] = t.token;
   return cfg;
@@ -489,14 +506,71 @@ const primaryBtn = {
   fontSize: 13,
 };
 
-function TrialGate({ busy, error, onSubmit, onDismiss }) {
+function TrialGate({ busy, error, onSubmit, onDismiss, onSignIn, onRegister, initialMode }) {
+  const [mode, setMode] = useState(initialMode || 'trial'); // trial | signin | register
   const [email, setEmail] = useState('');
   const [assetName, setAssetName] = useState('');
+  const [password, setPassword] = useState('');
+  const [orgName, setOrgName] = useState('');
   const submit = (e) => {
     e.preventDefault();
     if (!email.trim()) return;
+    if (mode === 'signin') { onSignIn(email.trim(), password); return; }
+    if (mode === 'register') { onRegister(email.trim(), password, orgName.trim() || email.trim()); return; }
     onSubmit(email.trim(), assetName.trim());
   };
+  const switchLink = (label, m) => (
+    <button type="button" onClick={() => setMode(m)}
+      style={{ background: 'transparent', border: 'none', color: DS.cyan, cursor: 'pointer', fontSize: 11, padding: 0 }}>
+      {label}
+    </button>
+  );
+  if (mode === 'signin' || mode === 'register') {
+    return (
+      <div style={overlayStyle} role="dialog" aria-modal="true">
+        <div style={cardStyle}>
+          <div style={{ fontSize: 10, letterSpacing: '0.2em', color: DS.cyan, marginBottom: 6 }}>
+            {mode === 'signin' ? 'SIGN IN' : 'CREATE ORGANIZATION ACCOUNT'}
+          </div>
+          <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>
+            {mode === 'signin' ? 'Welcome back' : 'Your assets, remembered'}
+          </div>
+          <div style={{ fontSize: 12, color: DS.sub, marginBottom: 20, lineHeight: 1.5 }}>
+            {mode === 'signin'
+              ? 'Access your organization’s assets and audit history.'
+              : 'An account keeps every audit, certificate and asset under your organization.'}
+          </div>
+          <form onSubmit={submit}>
+            {mode === 'register' && (
+              <input style={inputStyle} type="text" placeholder="Organization name"
+                value={orgName} onChange={(e) => setOrgName(e.target.value)} disabled={busy} />
+            )}
+            <input style={inputStyle} type="email" placeholder="Work email" value={email}
+              onChange={(e) => setEmail(e.target.value)} required autoFocus disabled={busy} />
+            <input style={inputStyle} type="password"
+              placeholder={mode === 'register' ? 'Password (min. 8 characters)' : 'Password'}
+              value={password} onChange={(e) => setPassword(e.target.value)} required disabled={busy} />
+            {error && (
+              <div style={{ color: DS.loss, fontSize: 11, marginBottom: 12 }}>{String(error)}</div>
+            )}
+            <button type="submit" style={{ ...primaryBtn, opacity: busy ? 0.6 : 1 }} disabled={busy}>
+              {busy ? 'Working…' : (mode === 'signin' ? 'Sign in →' : 'Create account →')}
+            </button>
+          </form>
+          <div style={{ marginTop: 14, fontSize: 11, color: DS.sub, display: 'flex', gap: 14, justifyContent: 'center' }}>
+            {mode === 'signin'
+              ? <>New here? {switchLink('Create an account', 'register')} {switchLink('Free diagnostic', 'trial')}</>
+              : <>Have an account? {switchLink('Sign in', 'signin')} {switchLink('Free diagnostic', 'trial')}</>}
+          </div>
+          <button onClick={onDismiss}
+            style={{ marginTop: 10, width: '100%', padding: '8px', background: 'transparent',
+                     color: DS.sub, border: 'none', cursor: 'pointer', fontSize: 11 }}>
+            Just looking around
+          </button>
+        </div>
+      </div>
+    );
+  }
   return (
     <div style={overlayStyle} role="dialog" aria-modal="true">
       <div style={cardStyle}>
@@ -536,10 +610,13 @@ function TrialGate({ busy, error, onSubmit, onDismiss }) {
             {busy ? 'Starting…' : 'Start free diagnostic →'}
           </button>
         </form>
+        <div style={{ marginTop: 14, fontSize: 11, color: DS.sub, display: 'flex', gap: 14, justifyContent: 'center' }}>
+          Have an account? {switchLink('Sign in', 'signin')} {switchLink('Create one', 'register')}
+        </div>
         <button
           onClick={onDismiss}
           style={{
-            marginTop: 12, width: '100%', padding: '8px',
+            marginTop: 10, width: '100%', padding: '8px',
             background: 'transparent', color: DS.sub,
             border: 'none', cursor: 'pointer', fontSize: 11,
           }}
@@ -1374,6 +1451,45 @@ export default function App() {
     });
   }, []); // intentional one-shot on mount
 
+  const [account, setAccount] = useState(() => authStore.get());
+  const [gateMode, setGateMode] = useState('trial');
+
+  const signIn = async (email, password) => {
+    setGateBusy(true);
+    setGateError('');
+    try {
+      const r = await axios.post('/api/v1/auth/login', { email, password });
+      authStore.set(r.data);
+      setAccount(r.data);
+      setGateOpen(false);
+      setExpiredInfo(null);
+    } catch (err) {
+      setGateError(err?.response?.data?.detail?.message || 'Sign-in failed. Check your credentials.');
+    }
+    setGateBusy(false);
+  };
+
+  const registerAccount = async (email, password, organization) => {
+    setGateBusy(true);
+    setGateError('');
+    try {
+      const r = await axios.post('/api/v1/auth/register', { email, password, organization });
+      authStore.set(r.data);
+      setAccount(r.data);
+      setGateOpen(false);
+      setExpiredInfo(null);
+    } catch (err) {
+      setGateError(err?.response?.data?.detail?.message || 'Could not create the account.');
+    }
+    setGateBusy(false);
+  };
+
+  const signOut = () => {
+    authStore.clear();
+    setAccount(null);
+    window.location.reload();
+  };
+
   const startTrial = async (email, assetName) => {
     setGateBusy(true);
     setGateError('');
@@ -1667,7 +1783,10 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           busy={gateBusy}
           error={gateError}
           onSubmit={startTrial}
-          onDismiss={() => setGateOpen(false)}
+          onSignIn={signIn}
+          onRegister={registerAccount}
+          initialMode={gateMode}
+          onDismiss={() => { setGateOpen(false); setGateMode('trial'); }}
         />
       )}
 
@@ -1740,6 +1859,22 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
           {!isMobile && (
             <BtnOutline color={DS.dim} onClick={() => setShowMethodology(true)}>METHODOLOGY</BtnOutline>
+          )}
+          {account?.token ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {!isMobile && (
+                <span style={{ fontSize: 10, color: DS.sub, maxWidth: 160, overflow: 'hidden',
+                               textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      title={account.email}>
+                  {account.organization?.name || account.email}
+                </span>
+              )}
+              <BtnOutline color={DS.dim} onClick={signOut}>{isMobile ? '⎋' : 'SIGN OUT'}</BtnOutline>
+            </div>
+          ) : (
+            <BtnOutline color={DS.cyan} onClick={() => { setGateMode('signin'); setGateError(''); setGateOpen(true); }}>
+              {isMobile ? '⎆' : 'SIGN IN'}
+            </BtnOutline>
           )}
           <SessionBadge liveMode={liveMode} simRunning={simRunning} dataSource={dataSource} />
         </div>
