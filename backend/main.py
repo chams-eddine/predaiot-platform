@@ -3453,13 +3453,19 @@ _VERIFY_BASE_URL = os.getenv("PREDAIOT_VERIFY_BASE_URL",
 
 def _cert_signing_key():
     """Returns (private_key, public_key_b64) or (None, None) when unconfigured."""
-    seed_b64 = os.getenv(_CERT_KEY_ENV, "").strip()
+    # Tolerate the classic env-paste corruptions: surrounding quotes, stray
+    # whitespace/newlines, and lost base64 "=" padding. Never tolerate a bad
+    # seed silently — decode failures still yield honest UNSIGNED certs.
+    seed_b64 = os.getenv(_CERT_KEY_ENV, "").strip().strip('"').strip("'")
+    seed_b64 = "".join(seed_b64.split())
     if not seed_b64:
         return None, None
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         from cryptography.hazmat.primitives import serialization
-        seed = _base64.b64decode(seed_b64)
+        seed = _base64.b64decode(seed_b64 + "=" * (-len(seed_b64) % 4))
+        if len(seed) < 32:
+            raise ValueError(f"decoded seed is {len(seed)} bytes; need 32")
         key = Ed25519PrivateKey.from_private_bytes(seed[:32])
         pub = key.public_key().public_bytes(
             encoding=serialization.Encoding.Raw,
@@ -4642,6 +4648,10 @@ def health_db():
         "auth_secret_configured": bool(os.environ.get("PREDAIOT_AUTH_SECRET")),
         "cert_signing_key_configured": bool(os.environ.get("PREDAIOT_CERT_SIGNING_KEY")),
     }
+    _sk, _ = _cert_signing_key()
+    info["cert_signing_key_status"] = (
+        "valid" if _sk else
+        ("present_but_invalid" if os.environ.get(_CERT_KEY_ENV) else "absent"))
     try:
         with engine.connect() as conn:
             try:
