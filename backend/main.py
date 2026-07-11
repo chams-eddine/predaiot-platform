@@ -84,6 +84,53 @@ class TrialLead(Base):
     expires_at = Column(DateTime, nullable=False)
     audit_run_count = Column(Integer, default=0, nullable=False)
     crm_synced = Column(Boolean, default=False, nullable=False)
+    # Sprint 1: account users get a linked lead row (token "acct-<user_id>")
+    # so every existing audit endpoint works unchanged with per-user isolation.
+    user_id = Column(Integer, nullable=True, index=True)
+
+
+class Organization(Base):
+    """
+    Tenancy root (blueprint §3/§11). Every business row carries org_id;
+    all queries are scoped by the org resolved from the caller's JWT.
+    """
+    __tablename__ = "organizations"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    slug = Column(String, unique=True, index=True, nullable=False)
+    plan = Column(String, default="trial", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class User(Base):
+    """
+    Account identity (blueprint: auth is COMMODITY — minimal robust JWT+bcrypt,
+    no external IdP dependency so sovereign/on-prem deployments work).
+    role ∈ {owner, admin, asset_manager, operator, finance, viewer}.
+    """
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, index=True, nullable=False)
+    email = Column(String, unique=True, index=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    role = Column(String, default="owner", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class Asset(Base):
+    """
+    Asset registry (blueprint L3 — the Economic Knowledge Layer's anchor).
+    Audits, decisions and economic states all hang off an asset row.
+    """
+    __tablename__ = "assets"
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, index=True, nullable=False)
+    name = Column(String, nullable=False)
+    asset_type = Column(String, default="storage", nullable=False)
+    capacity_mw = Column(Float, nullable=True)
+    currency = Column(String, nullable=True)
+    specs_json = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class APIAccessLog(Base):
@@ -517,6 +564,134 @@ def _bump_audit_count(token: str) -> None:
 
 
 # ==========================================
+# Sprint 1: Account auth (COMMODITY per blueprint §0 — minimal robust
+# JWT + bcrypt, org-scoped; no external IdP so on-prem/sovereign works).
+# Existing trial-token funnel is untouched; account users are dual-accepted
+# on every audit endpoint via a linked TrialLead row ("acct-<user_id>").
+# ==========================================
+import bcrypt as _bcrypt
+import jwt as _pyjwt
+
+_AUTH_SECRET = os.environ.get("PREDAIOT_AUTH_SECRET", "")
+if not _AUTH_SECRET:
+    # Dev fallback: deterministic per-machine secret. Production MUST set
+    # PREDAIOT_AUTH_SECRET (startup log warns; tokens don't survive redeploys
+    # of ephemeral filesystems otherwise).
+    _AUTH_SECRET = _hashlib.sha256(f"predaiot-dev-{os.path.abspath(__file__)}".encode()).hexdigest()
+    print("[startup] WARNING: PREDAIOT_AUTH_SECRET not set — using dev-only derived secret.")
+
+_JWT_TTL_HOURS = int(os.environ.get("PREDAIOT_JWT_TTL_HOURS", "24"))
+_ROLES = ("owner", "admin", "asset_manager", "operator", "finance", "viewer")
+
+
+def _hash_password(pw: str) -> str:
+    return _bcrypt.hashpw(pw.encode("utf-8"), _bcrypt.gensalt()).decode("ascii")
+
+
+def _verify_password(pw: str, pw_hash: str) -> bool:
+    try:
+        return _bcrypt.checkpw(pw.encode("utf-8"), pw_hash.encode("ascii"))
+    except Exception:
+        return False
+
+
+def _issue_jwt(user: "User") -> str:
+    now = datetime.utcnow()
+    return _pyjwt.encode(
+        {"sub": str(user.id), "org": user.org_id, "role": user.role,
+         "email": user.email, "iat": now, "exp": now + timedelta(hours=_JWT_TTL_HOURS)},
+        _AUTH_SECRET, algorithm="HS256")
+
+
+def _decode_jwt(token: str) -> Optional[dict]:
+    try:
+        return _pyjwt.decode(token, _AUTH_SECRET, algorithms=["HS256"])
+    except Exception:
+        return None
+
+
+def require_user(
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+) -> "User":
+    """JWT-only dependency for account endpoints (assets, org)."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail={"code": "auth_required",
+                            "message": "Sign in to access this resource."})
+    claims = _decode_jwt(authorization[7:])
+    if not claims:
+        raise HTTPException(status_code=401, detail={"code": "auth_invalid",
+                            "message": "Session expired or invalid. Sign in again."})
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == int(claims["sub"])).first()
+        if user is None:
+            raise HTTPException(status_code=401, detail={"code": "auth_invalid",
+                                "message": "Account not found."})
+        db.expunge(user)
+        return user
+    finally:
+        db.close()
+
+
+def require_role(*roles: str):
+    """RBAC dependency factory. Owner passes every check."""
+    def _dep(user: "User" = Depends(require_user)) -> "User":
+        if user.role != "owner" and user.role not in roles:
+            raise HTTPException(status_code=403, detail={"code": "forbidden",
+                                "message": f"Requires role: {', '.join(roles)}."})
+        return user
+    return _dep
+
+
+def _lead_for_user(user: "User") -> TrialLead:
+    """
+    Dual-accept bridge: get/create the TrialLead row linked to an account so
+    every existing audit endpoint (keyed by lead.token) works unchanged.
+    Account leads never expire (far-future expiry, refreshed on touch).
+    """
+    db = SessionLocal()
+    try:
+        lead = db.query(TrialLead).filter(TrialLead.user_id == user.id).first()
+        if lead is None:
+            lead = TrialLead(token=f"acct-{user.id}-{secrets.token_urlsafe(16)}",
+                             email=user.email, asset_name=None,
+                             expires_at=datetime.utcnow() + timedelta(days=3650),
+                             user_id=user.id)
+            db.add(lead)
+            db.commit()
+            db.refresh(lead)
+        elif lead.expires_at < datetime.utcnow() + timedelta(days=365):
+            lead.expires_at = datetime.utcnow() + timedelta(days=3650)
+            db.commit()
+            db.refresh(lead)
+        db.expunge(lead)
+        return lead
+    finally:
+        db.close()
+
+
+def require_trial_or_user(
+    x_trial_token: Optional[str] = Header(default=None, alias="X-Trial-Token"),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+) -> TrialLead:
+    """
+    Dual-accept gate for audit endpoints: a signed-in account (Bearer JWT)
+    OR a legacy trial token. Account takes precedence when both present.
+    """
+    if authorization and authorization.startswith("Bearer "):
+        claims = _decode_jwt(authorization[7:])
+        if claims:
+            db = SessionLocal()
+            try:
+                user = db.query(User).filter(User.id == int(claims["sub"])).first()
+            finally:
+                db.close()
+            if user is not None:
+                return _lead_for_user(user)
+    return require_trial_token(x_trial_token)
+
+
+# ==========================================
 # 3. FastAPI Setup  (safety hardening applied)
 # ==========================================
 # Rate limiter — lazy-imported so a deploy without slowapi still boots and
@@ -658,6 +833,9 @@ def _apply_additive_migrations(bind_engine):
         "certificate_registry": [
             ("dqi_grade", "VARCHAR"),
             ("confidence_grade", "VARCHAR"),
+        ],
+        "trial_leads": [
+            ("user_id", "INTEGER"),
         ],
     }
     insp_sql_existing = {}
@@ -1657,6 +1835,129 @@ async def trial_status(lead: TrialLead = Depends(require_trial_token)):
         is_expired=lead.expires_at < datetime.utcnow(),
     )
 
+
+# ---- Sprint 1: account + organization + asset registry ---------------------
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    organization: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class AssetCreateRequest(BaseModel):
+    name: str
+    asset_type: str = "storage"
+    capacity_mw: Optional[float] = None
+    currency: Optional[str] = None
+    specs: Optional[Dict[str, Any]] = None
+
+
+def _slugify(name: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "org"
+    return s[:40]
+
+
+@app.post("/api/v1/auth/register")
+@limiter.limit("5/minute")
+async def auth_register(request: Request, req: RegisterRequest):  # noqa: ARG001
+    email = req.email.strip().lower()
+    if "@" not in email or len(req.password) < 8:
+        raise HTTPException(status_code=422, detail={"code": "invalid_input",
+                            "message": "Valid email and a password of at least 8 characters are required."})
+    db = SessionLocal()
+    try:
+        if db.query(User).filter(User.email == email).first():
+            raise HTTPException(status_code=409, detail={"code": "email_taken",
+                                "message": "An account with this email already exists. Sign in instead."})
+        base = _slugify(req.organization)
+        slug = base
+        n = 1
+        while db.query(Organization).filter(Organization.slug == slug).first():
+            n += 1
+            slug = f"{base}-{n}"
+        org = Organization(name=req.organization.strip() or email, slug=slug)
+        db.add(org)
+        db.flush()
+        user = User(org_id=org.id, email=email,
+                    password_hash=_hash_password(req.password), role="owner")
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        return {"token": _issue_jwt(user), "email": user.email, "role": user.role,
+                "organization": {"id": org.id, "name": org.name, "slug": org.slug}}
+    finally:
+        db.close()
+
+
+@app.post("/api/v1/auth/login")
+@limiter.limit("10/minute")
+async def auth_login(request: Request, req: LoginRequest):  # noqa: ARG001
+    email = req.email.strip().lower()
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == email).first()
+        if user is None or not _verify_password(req.password, user.password_hash):
+            raise HTTPException(status_code=401, detail={"code": "bad_credentials",
+                                "message": "Email or password is incorrect."})
+        org = db.query(Organization).filter(Organization.id == user.org_id).first()
+        return {"token": _issue_jwt(user), "email": user.email, "role": user.role,
+                "organization": {"id": org.id, "name": org.name, "slug": org.slug} if org else None}
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/auth/me")
+async def auth_me(user: User = Depends(require_user)):
+    db = SessionLocal()
+    try:
+        org = db.query(Organization).filter(Organization.id == user.org_id).first()
+        n_assets = db.query(Asset).filter(Asset.org_id == user.org_id).count()
+        return {"email": user.email, "role": user.role,
+                "organization": {"id": org.id, "name": org.name, "slug": org.slug} if org else None,
+                "assets": n_assets}
+    finally:
+        db.close()
+
+
+def _asset_dict(a: "Asset") -> dict:
+    return {"id": a.id, "name": a.name, "asset_type": a.asset_type,
+            "capacity_mw": a.capacity_mw, "currency": a.currency,
+            "specs": (json.loads(a.specs_json) if a.specs_json else None),
+            "created_at": a.created_at.isoformat() + "Z"}
+
+
+@app.post("/api/v1/assets")
+async def create_asset(req: AssetCreateRequest,
+                       user: User = Depends(require_role("admin", "asset_manager"))):
+    db = SessionLocal()
+    try:
+        a = Asset(org_id=user.org_id, name=req.name.strip(),
+                  asset_type=req.asset_type, capacity_mw=req.capacity_mw,
+                  currency=req.currency,
+                  specs_json=(json.dumps(req.specs) if req.specs else None))
+        db.add(a)
+        db.commit()
+        db.refresh(a)
+        return _asset_dict(a)
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/assets")
+async def list_assets(user: User = Depends(require_user)):
+    db = SessionLocal()
+    try:
+        rows = (db.query(Asset).filter(Asset.org_id == user.org_id)
+                .order_by(Asset.created_at.desc()).all())
+        return {"assets": [_asset_dict(a) for a in rows]}
+    finally:
+        db.close()
+
+
 # ---- Audit endpoints (gated by trial token) --------------------------------
 @app.post("/api/v1/audit", response_model=AuditResponse)
 @limiter.limit("10/minute")
@@ -1664,7 +1965,7 @@ async def calculate_gap(
     request: Request,   # noqa: ARG001 — used by rate limiter
     audit_req: AuditRequest,
     background: BackgroundTasks,
-    lead: TrialLead = Depends(require_trial_token),
+    lead: TrialLead = Depends(require_trial_or_user),
 ):
     result = process_calculation(audit_req.asset, [ts.dict() for ts in audit_req.time_series],
                                  dt_hours=audit_req.dt_hours or 1.0)
@@ -2730,7 +3031,7 @@ async def audit_from_file(
     request: Request,   # noqa: ARG001 — used by rate limiter
     background: BackgroundTasks,
     file: UploadFile = File(...),
-    lead: TrialLead = Depends(require_trial_token),
+    lead: TrialLead = Depends(require_trial_or_user),
 ):
     """
     Universal file ingestion. Accepts real-world exports from any SCADA / EMS /
@@ -3130,7 +3431,7 @@ async def get_shared_audit(token: str):
     return JSONResponse(status_code=404, content={"detail": "Report link expired or not found"})
 
 @app.get("/api/latest")
-async def get_latest_live_data(lead: TrialLead = Depends(require_trial_token)):
+async def get_latest_live_data(lead: TrialLead = Depends(require_trial_or_user)):
     """
     Returns the caller's most recent audit result. Gated on the trial token
     per the tenant-isolation fix — previously this endpoint returned the
@@ -3636,7 +3937,7 @@ async def _mqtt_shutdown():
 
 
 @app.get("/api/v1/integrations/mqtt/status")
-async def mqtt_status(lead: TrialLead = Depends(require_trial_token)):
+async def mqtt_status(lead: TrialLead = Depends(require_trial_or_user)):
     """Bridge status. Gated on trial token so a stranger can't probe our broker."""
     return dict(_mqtt_state, has_paho=True if _mqtt_client is not None else _mqtt_state.get("last_error") != "paho-mqtt not installed")
 
@@ -3795,7 +4096,7 @@ def _build_certificate(data: dict) -> dict:
 
 
 @app.get("/api/v1/certificate")
-async def get_certificate_for_latest(lead: TrialLead = Depends(require_trial_token)):
+async def get_certificate_for_latest(lead: TrialLead = Depends(require_trial_or_user)):
     """
     Returns an Economic Decision Certificate for the caller's most recent
     audit. Gated on the trial token per the tenant-isolation fix.
@@ -4203,7 +4504,7 @@ def _build_audit_pdf(audit: dict) -> bytes:
 async def generate_audit_pdf(
     request: Request,   # noqa: ARG001 — used by rate limiter
     data: AuditResponse,
-    lead: TrialLead = Depends(require_trial_token),
+    lead: TrialLead = Depends(require_trial_or_user),
 ):
     """
     Produce a branded PDF of the supplied audit result, rendered over the
@@ -4220,7 +4521,7 @@ async def generate_audit_pdf(
 
 
 @app.get("/api/v1/audit/ledger.csv")
-async def get_audit_ledger_csv(lead: TrialLead = Depends(require_trial_token)):
+async def get_audit_ledger_csv(lead: TrialLead = Depends(require_trial_or_user)):
     """
     Economic Energy Ledger (Reference Manual Ch 8.1): the caller's most
     recent audit as a step-by-step CSV. Every headline number on the PDF is
@@ -4270,7 +4571,7 @@ async def get_audit_ledger_csv(lead: TrialLead = Depends(require_trial_token)):
 
 
 @app.get("/api/v1/audit/pdf/latest")
-async def get_latest_audit_pdf(lead: TrialLead = Depends(require_trial_token)):
+async def get_latest_audit_pdf(lead: TrialLead = Depends(require_trial_or_user)):
     """PDF for the caller's most recent audit. Per-tenant cache, no cross-leak."""
     data = _latest_by_token.get(lead.token)
     if not data or data.get("dq_score") is None:
