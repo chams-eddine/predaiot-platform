@@ -4918,6 +4918,17 @@ def health_db():
     info["cert_signing_key_status"] = (
         "valid" if _sk else
         ("present_but_invalid" if os.environ.get(_CERT_KEY_ENV) else "absent"))
+    if info["cert_signing_key_status"] == "present_but_invalid":
+        # Corruption class only — never the value. Same normalisation as the loader.
+        raw = os.environ.get(_CERT_KEY_ENV, "")
+        cleaned = "".join(raw.strip().strip('"').strip("'").split())
+        try:
+            seed = _base64.b64decode(cleaned + "=" * (-len(cleaned) % 4))
+            info["cert_signing_key_problem"] = (
+                f"decodes_to_{len(seed)}_bytes_need_32 (value length {len(cleaned)} chars)")
+        except Exception:
+            info["cert_signing_key_problem"] = (
+                f"not_valid_base64 (value length {len(cleaned)} chars)")
     try:
         with engine.connect() as conn:
             try:
