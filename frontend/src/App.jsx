@@ -506,6 +506,92 @@ const primaryBtn = {
   fontSize: 13,
 };
 
+function AuditHistoryPanel({ isSignedIn, onLoad, onSignIn, busyId }) {
+  const [rows, setRows] = useState(null);
+  const [memory, setMemory] = useState(null);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    if (!isSignedIn) return;
+    Promise.all([axios.get('/api/v1/audits'), axios.get('/api/v1/memory')])
+      .then(([a, m]) => { setRows(a.data.audits); setMemory(m.data); })
+      .catch(() => setErr('Could not load audit history.'));
+  }, [isSignedIn]);
+  if (!isSignedIn) {
+    return (
+      <div style={{ padding: 40, textAlign: 'center' }}>
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Your audits, remembered</div>
+        <div style={{ fontSize: 12, color: DS.sub, marginBottom: 18, lineHeight: 1.6 }}>
+          Sign in and every Economic Decision Audit you run is stored under your organization &mdash;
+          reload any past audit bit-for-bit, and see what your assets keep leaking.
+        </div>
+        <button onClick={onSignIn} style={primaryBtn}>Sign in &rarr;</button>
+      </div>
+    );
+  }
+  const money = (v, ccy) => (v == null ? '\u2014' : `${Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${ccy || ''}`);
+  const th = { textAlign: 'left', padding: '8px 10px', fontSize: 9, letterSpacing: '0.14em', color: DS.dim, borderBottom: `1px solid ${DS.border}` };
+  const td = { padding: '9px 10px', fontSize: 11, borderBottom: `1px solid ${DS.border}22`, whiteSpace: 'nowrap' };
+  return (
+    <div>
+      <SectionHeader tag="EDA-15" title="AUDIT HISTORY \u2014 ECONOMIC MEMORY" />
+      {err && <EmptyMsg>{err}</EmptyMsg>}
+      {memory && memory.audits > 0 && (
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', margin: '14px 0 18px' }}>
+          {[
+            ['AUDITS ON RECORD', memory.audits],
+            ['LEAKAGE IDENTIFIED', money(memory.total_gap_identified, memory.currency)],
+            ['RECOVERABLE IDENTIFIED', money(memory.total_recoverable_identified, memory.currency)],
+            ['MEAN DQI', memory.mean_dqi != null ? `${(memory.mean_dqi * 100).toFixed(1)}%` : '\u2014'],
+            ['RECURRING ROOT CAUSE', memory.recurring_top_root_cause ? `${memory.recurring_top_root_cause.cause} (${memory.recurring_top_root_cause.audits}\u00d7)` : '\u2014'],
+          ].map(([label, val]) => (
+            <div key={label} style={{ background: DS.panel, border: `1px solid ${DS.border}`, borderRadius: DS.r8, padding: '12px 16px', minWidth: 150 }}>
+              <div style={{ fontSize: 9, letterSpacing: '0.14em', color: DS.dim, marginBottom: 6 }}>{label}</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: DS.cyan }}>{String(val)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {memory && memory.audits > 0 && (
+        <div style={{ fontSize: 10, color: DS.dim, marginBottom: 14 }}>{memory.method_note}</div>
+      )}
+      {rows === null && !err && <EmptyMsg>Loading history&hellip;</EmptyMsg>}
+      {rows && rows.length === 0 && <EmptyMsg>No audits stored yet &mdash; run an audit while signed in and it will appear here.</EmptyMsg>}
+      {rows && rows.length > 0 && (
+        <div style={{ overflowX: 'auto', background: DS.panel, border: `1px solid ${DS.border}`, borderRadius: DS.r8 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={th}>DATE (UTC)</th><th style={th}>FILE</th><th style={th}>GAP</th>
+              <th style={th}>RECOVERABLE</th><th style={th}>DQI</th><th style={th}>CONFIDENCE</th>
+              <th style={th}>TOP ROOT CAUSE</th><th style={th}></th>
+            </tr></thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id}>
+                  <td style={td}>{(r.created_at || '').replace('T', ' ').slice(0, 16)}</td>
+                  <td style={{ ...td, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.filename}>{r.filename || '\u2014'}</td>
+                  <td style={{ ...td, color: DS.loss, fontWeight: 700 }}>{money(r.gap_total, r.currency)}</td>
+                  <td style={{ ...td, color: DS.optimal, fontWeight: 700 }}>{money(r.gap_recoverable, r.currency)}</td>
+                  <td style={{ ...td, color: _gradeColor(r.dqi_grade), fontWeight: 700 }}>{r.dqi_grade || '\u2014'}</td>
+                  <td style={{ ...td, color: _gradeColor(r.confidence_grade), fontWeight: 700 }}>{r.confidence_grade || '\u2014'}</td>
+                  <td style={td}>{r.top_root_cause || '\u2014'}</td>
+                  <td style={td}>
+                    <button onClick={() => onLoad(r.id)} disabled={busyId === r.id}
+                      style={{ background: 'transparent', border: `1px solid ${DS.cyan}66`, color: DS.cyan,
+                               borderRadius: 6, padding: '4px 12px', fontSize: 10, cursor: 'pointer',
+                               opacity: busyId === r.id ? 0.5 : 1 }}>
+                      {busyId === r.id ? 'LOADING\u2026' : 'OPEN'}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TrialGate({ busy, error, onSubmit, onDismiss, onSignIn, onRegister, initialMode }) {
   const [mode, setMode] = useState(initialMode || 'trial'); // trial | signin | register
   const [email, setEmail] = useState('');
@@ -1419,7 +1505,9 @@ export default function App() {
 
   // ── Trial gate state ──────────────────────────────────────────────
   const [trial, setTrial]                 = useState(() => trialStore.get());
-  const [gateOpen, setGateOpen]           = useState(() => !trialStore.get());
+  // Auto-open the gate only when the visitor has NEITHER a trial token NOR
+  // a signed-in account — an authenticated user must never see the gate.
+  const [gateOpen, setGateOpen]           = useState(() => !trialStore.get() && !authStore.get()?.token);
   const [gateBusy, setGateBusy]           = useState(false);
   const [gateError, setGateError]         = useState('');
   const [expiredInfo, setExpiredInfo]     = useState(null); // { booking_url, message } when 402
@@ -1482,6 +1570,20 @@ export default function App() {
       setGateError(err?.response?.data?.detail?.message || 'Could not create the account.');
     }
     setGateBusy(false);
+  };
+
+  const [historyBusyId, setHistoryBusyId] = useState(null);
+  const loadPastAudit = async (id) => {
+    setHistoryBusyId(id);
+    try {
+      const r = await axios.get(`/api/v1/audits/${id}`);
+      setData(r.data);
+      setDataSource('historical');
+      setShowUpload(false);
+      setAiText('');
+      setActiveSection('exec');
+    } catch (_) { /* row stays; user can retry */ }
+    setHistoryBusyId(null);
   };
 
   const signOut = () => {
@@ -1769,6 +1871,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
     { id: 'appendix',  label: 'Math Appendix',                tag: '12' },
     { id: 'live',      label: 'Live Monitor',                 tag: '⚡' },
     { id: 'cert',      label: 'EDPC Certificate',             tag: '🏆' },
+    { id: 'history',   label: 'Audit History',                tag: '\u2630' },
   ];
 
   // ══════════════════════════════════════════════════════════════════
@@ -1954,7 +2057,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {/* Welcome / empty state — only shown when on a data-dependent section
               with no audit loaded. Skipped for live/appendix/govern which work
               independently of audit data. */}
-          {!hasData && !showUpload && !['live', 'appendix', 'govern'].includes(activeSection) && (
+          {!hasData && !showUpload && !['live', 'appendix', 'govern', 'history'].includes(activeSection) && (
             <div style={{ textAlign: 'center', padding: '70px 40px' }}>
               <div style={{ fontSize: 48, marginBottom: 16 }}>⚡</div>
               <div style={{ color: DS.text, fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Economic Decision Audit™</div>
@@ -2771,6 +2874,15 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
 
           {/* ══ S13: Live Monitor ══════════════════════════════ */}
+          {activeSection === 'history' && (
+            <AuditHistoryPanel
+              isSignedIn={!!account?.token}
+              onLoad={loadPastAudit}
+              busyId={historyBusyId}
+              onSignIn={() => { setGateMode('signin'); setGateError(''); setGateOpen(true); }}
+            />
+          )}
+
           {activeSection === 'live' && (
             <div>
               <SectionHeader tag="⚡" title="Real-Time Live Monitor — Economic Advisory Observer" />
