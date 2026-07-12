@@ -25,13 +25,14 @@ DESIGN CONTRACT (enforced by the review-board hardening phase):
 This module is PURE: no I/O, no framework, no asset physics. Unit-testable in
 isolation. main.py imports it; the numeric optimizer is untouched.
 """
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 # ── Versions (future EDA Standard v1.0 compatibility) ───────────────────────
 DQI_VERSION         = "EDA-DQI-1.0"
 AC_VERSION          = "EDA-AC-1.0"
 GRADE_SCALE_VERSION = "EDA-GRADE-1.0"
 FORECAST_REL_VERSION = "EDA-FR-1.0-experimental"
+ECONOMIC_STATE_VERSION = "EDA-ES-1.0"
 
 _EPS = 1e-9  # floating-point guard only (not a modelling coefficient)
 
@@ -328,8 +329,120 @@ def forecast_reliability(mape: Optional[float]) -> Optional[dict]:
     }
 
 
+# ── Economic State (EDA-ES-1.0) — canonical business object ─────────────────
+# The single money-denominated state of an asset over a window, derived ONLY
+# from an audit's already-published quantities. No invented coefficient. Every
+# field either reproduces from the audit result or is Not Applicable (None).
+#
+# economic_health — the one derived ratio. Definition (published, honest):
+#     achievable = captured + recoverable_execution_gap
+#                = EDV_actual + execution_gap
+#                = the value achievable with information available AT DECISION
+#                  TIME (the MILP-under-forecast decision value, Ch 8.2).
+#     economic_health = clamp( captured / achievable , 0, 1 )
+# Rationale: the honest benchmark is the *recoverable* (decision-time) value,
+# NOT the perfect-foresight ceiling. So health = fraction of the decision-time
+# achievable value that was actually captured. Raw (unclamped) is preserved.
+# N/A when the recoverable execution gap is unavailable or achievable ≤ 0.
+def _num(v):
+    """Coerce to float or None; never raise on bad audit payloads."""
+    try:
+        return None if v is None else float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_economic_state(audit: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Deterministically build the EDA-ES-1.0 Economic State from an audit result
+    dict (AuditResponse.dict()). Reproducible: same audit ⟹ same state.
+
+    Inputs consumed (all already published by the audit):
+      edv_actual_total, edv_optimal_total, total_gap_usd,
+      recoverable_execution_gap (or gap_attribution.execution_gap),
+      currency, data_quality_index.value, audit_confidence.value,
+      audit_manifest.timestamp_range, data_quality_manifest.span_hours,
+      audit_manifest.input_sha256.
+    Outputs: money-denominated state + economic_health ∈ [0,1]∪{None}.
+    Units: currency for values; currency/hour for leakage_rate.
+    """
+    captured   = _num(audit.get("edv_actual_total"))
+    optimal    = _num(audit.get("edv_optimal_total"))
+    ceiling_gap = _num(audit.get("total_gap_usd"))
+    attribution = audit.get("gap_attribution") or {}
+    recoverable = _num(audit.get("recoverable_execution_gap"))
+    if recoverable is None:
+        recoverable = _num(attribution.get("execution_gap"))
+
+    dq_manifest = audit.get("data_quality_manifest") or {}
+    manifest    = audit.get("audit_manifest") or {}
+    span_hours  = _num(dq_manifest.get("span_hours"))
+    ts_range    = manifest.get("timestamp_range") or {}
+
+    dqi_obj = audit.get("data_quality_index") or {}
+    ac_obj  = audit.get("audit_confidence") or {}
+    dqi = _num(dqi_obj.get("value"))
+    aei = _num(ac_obj.get("value"))
+
+    # leakage_rate (currency/h) — ceiling-basis gap ledger total over the span.
+    leakage_rate = (round(ceiling_gap / span_hours, 6)
+                    if (ceiling_gap is not None and span_hours not in (None, 0)) else None)
+
+    # economic_health — recoverable (decision-time achievable) basis.
+    health = None
+    health_raw = None
+    if captured is not None and recoverable is not None:
+        achievable = captured + recoverable
+        if achievable > _EPS:
+            health_raw = round(captured / achievable, 6)
+            health = round(min(1.0, max(0.0, captured / achievable)), 6)
+
+    return {
+        "metric": "EconomicState",
+        "version": ECONOMIC_STATE_VERSION,
+        "currency": audit.get("currency"),
+        "window_start": ts_range.get("first"),
+        "window_end": ts_range.get("last"),
+        "span_hours": span_hours,
+        "captured_value": captured,
+        "economic_potential": optimal,           # perfect-foresight ceiling (disclosed)
+        "leakage_rate": leakage_rate,            # currency/hour, ceiling basis
+        "recoverable_value": recoverable,        # execution-gap basis (decision-time)
+        "dqi": dqi,
+        "audit_confidence": aei,
+        "economic_health": health,               # ∈ [0,1] ∪ {None}
+        "economic_health_raw": health_raw,       # unclamped, preserved
+        "economic_health_grade": grade(health)["grade"],
+        "economic_health_basis": "captured / (captured + recoverable_execution_gap); "
+                                 "recoverable (decision-time achievable) benchmark",
+        "provisional": False,                    # batch audit = certified source
+        "evidence_sha256": manifest.get("input_sha256"),
+    }
+
+
 # ── Self-describing metric registry (future EDA Standard v1.0) ──────────────
 METRIC_REGISTRY = {
+    "EconomicState": {
+        "name": "Economic State (canonical business object)", "version": ECONOMIC_STATE_VERSION,
+        "equation": "captured=EDV_actual; recoverable=execution_gap; "
+                    "leakage_rate=ceiling_gap/span_hours; "
+                    "economic_health=clamp(captured/(captured+recoverable),0,1)",
+        "inputs": "AuditResponse: edv_actual_total, edv_optimal_total, total_gap_usd, "
+                  "recoverable_execution_gap, currency, DQI.value, AuditConfidence.value, "
+                  "span_hours, timestamp_range, input_sha256.",
+        "outputs": "money-denominated state; economic_health ∈ [0,1]∪{None}; "
+                   "evidence_sha256 anchoring it to the dataset.",
+        "dependencies": ["EconomicAudit", "DataQualityIndex", "AuditConfidence"],
+        "validation_rules": [
+            "Derived ONLY from published audit quantities — no invented coefficient.",
+            "economic_health uses the recoverable (decision-time) benchmark, not the "
+            "perfect-foresight ceiling; raw (unclamped) preserved.",
+            "Any input unavailable ⟹ that field is None (Not Applicable), never fabricated.",
+            "Reproducible: identical audit ⟹ identical Economic State.",
+            "provisional=False for batch (certified) audits; live windows set True until "
+            "covered by a certified audit.",
+        ],
+    },
     "DataQualityIndex": {
         "name": "Data Quality Index (DQI)", "version": DQI_VERSION,
         "equation": "DQI = (∏_{x∈A} x)^(1/|A|), A = applicable components ⊆ "

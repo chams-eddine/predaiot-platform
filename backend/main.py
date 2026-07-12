@@ -164,6 +164,39 @@ class AuditRecord(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True, nullable=False)
 
 
+class EconomicState(Base):
+    """
+    EDA-ES-1.0 — the canonical business object (blueprint Amendment 1). One row
+    per audit's Economic State, produced by eda_metrics.build_economic_state()
+    from the audit's already-published quantities. Deterministic and
+    evidence-anchored (evidence_sha256 = dataset hash). Decision Intelligence
+    (L5) consumes this; Live Streaming (L6) later refreshes it via the SAME
+    EDA-ES-1.0 definition — never a parallel truth.
+    """
+    __tablename__ = "economic_states"
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, index=True, nullable=False)
+    audit_id = Column(Integer, index=True, nullable=True)   # → audit_records.id
+    asset_id = Column(Integer, index=True, nullable=True)
+    version = Column(String, nullable=False)                # EDA-ES-1.0
+    currency = Column(String, nullable=True)
+    window_start = Column(String, nullable=True)
+    window_end = Column(String, nullable=True)
+    span_hours = Column(Float, nullable=True)
+    captured_value = Column(Float, nullable=True)
+    economic_potential = Column(Float, nullable=True)
+    leakage_rate = Column(Float, nullable=True)
+    recoverable_value = Column(Float, nullable=True)
+    dqi = Column(Float, nullable=True)
+    audit_confidence = Column(Float, nullable=True)
+    economic_health = Column(Float, nullable=True)
+    economic_health_grade = Column(String, nullable=True)
+    provisional = Column(Boolean, default=False, nullable=False)
+    evidence_sha256 = Column(String, index=True, nullable=True)
+    state_json = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True, nullable=False)
+
+
 class SecurityAuditLog(Base):
     """
     Tamper-evident security event log (ISO 27001 A.12.4 direction).
@@ -771,8 +804,24 @@ def _persist_audit_record(lead: TrialLead, result: "AuditResponse",
         )
         db.add(rec)
         db.commit()
+        db.refresh(rec)
         _security_log("audit.run", actor=user.email, org_id=user.org_id,
                       object_ref=f"audit:{rec.id}|sha:{input_sha256[:12]}")
+        # EDA-ES-1.0: materialise the canonical Economic State from this audit.
+        es = eda_metrics.build_economic_state(d)
+        db.add(EconomicState(
+            org_id=user.org_id, audit_id=rec.id, asset_id=rec.asset_id,
+            version=es["version"], currency=es["currency"],
+            window_start=es["window_start"], window_end=es["window_end"],
+            span_hours=es["span_hours"], captured_value=es["captured_value"],
+            economic_potential=es["economic_potential"], leakage_rate=es["leakage_rate"],
+            recoverable_value=es["recoverable_value"], dqi=es["dqi"],
+            audit_confidence=es["audit_confidence"], economic_health=es["economic_health"],
+            economic_health_grade=es["economic_health_grade"],
+            provisional=es["provisional"], evidence_sha256=es["evidence_sha256"],
+            state_json=json.dumps(es, default=str),
+        ))
+        db.commit()
     finally:
         db.close()
 
@@ -2232,6 +2281,52 @@ async def get_audit(audit_id: int, user: User = Depends(require_user)):
             raise HTTPException(status_code=404, detail={"code": "audit_not_found",
                                 "message": "No such audit in your organization."})
         return json.loads(r.result_json)
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/audits/{audit_id}/economic-state")
+async def audit_economic_state(audit_id: int, user: User = Depends(require_user)):
+    """
+    EDA-ES-1.0 Economic State for one audit (blueprint Amendment 1, canonical
+    object). Derived deterministically from the stored audit result, so it
+    works for every audit ever recorded — not only those persisted post-ES.
+    Org-scoped; 404 across org boundaries.
+    """
+    db = SessionLocal()
+    try:
+        r = (db.query(AuditRecord)
+             .filter(AuditRecord.id == audit_id, AuditRecord.org_id == user.org_id)
+             .first())
+        if r is None:
+            raise HTTPException(status_code=404, detail={"code": "audit_not_found",
+                                "message": "No such audit in your organization."})
+        audit = json.loads(r.result_json)
+        state = eda_metrics.build_economic_state(audit)
+        state["audit_id"] = r.id
+        return state
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/economic-states")
+async def list_economic_states(user: User = Depends(require_user)):
+    """Org-scoped Economic State register (EDA-ES-1.0), newest first."""
+    db = SessionLocal()
+    try:
+        rows = (db.query(EconomicState).filter(EconomicState.org_id == user.org_id)
+                .order_by(EconomicState.created_at.desc()).limit(100).all())
+        return {"economic_states": [{
+            "id": s.id, "audit_id": s.audit_id, "version": s.version,
+            "currency": s.currency, "window_start": s.window_start, "window_end": s.window_end,
+            "span_hours": s.span_hours, "captured_value": s.captured_value,
+            "economic_potential": s.economic_potential, "leakage_rate": s.leakage_rate,
+            "recoverable_value": s.recoverable_value, "dqi": s.dqi,
+            "audit_confidence": s.audit_confidence, "economic_health": s.economic_health,
+            "economic_health_grade": s.economic_health_grade, "provisional": s.provisional,
+            "evidence_sha256": s.evidence_sha256,
+            "created_at": s.created_at.isoformat() + "Z",
+        } for s in rows]}
     finally:
         db.close()
 
@@ -5054,7 +5149,8 @@ def health_db():
                     "SELECT version_num FROM alembic_version").scalar()
             except Exception:
                 info["alembic_version"] = None
-            for t in ("users", "organizations", "assets", "certificate_registry", "audit_records"):
+            for t in ("users", "organizations", "assets", "certificate_registry",
+                      "audit_records", "economic_states"):
                 try:
                     info[f"rows_{t}"] = conn.exec_driver_sql(
                         f"SELECT count(*) FROM {t}").scalar()
