@@ -1,0 +1,3 @@
+# PREDAIOT edge collector — thin, standard libraries only.
+requests>=2.31
+asyncua>=1.0        # only needed for real OPC-UA hardware (lazy-imported)

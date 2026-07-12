@@ -1,0 +1,16 @@
+{
+  "server_url": "opc.tcp://192.168.1.10:4840",
+  "simulate": true,
+  "stream_id": "ibri2-bess-stream-1",
+  "asset_id": null,
+  "interval_sec": 60,
+  "buffer_path": "edge_buffer.db",
+  "ingest_url": "https://platform.preda-iot.com/api/v1/live/ingest",
+  "hmac_key": "set-a-per-stream-secret-here",
+  "tags": {
+    "ns=2;s=Plant.Price": "spot_price",
+    "ns=2;s=Plant.Charge": "actual_charge",
+    "ns=2;s=Plant.Discharge": "actual_discharge",
+    "ns=2;s=Plant.SOC": "soc_percent"
+  }
+}
