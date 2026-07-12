@@ -39,6 +39,7 @@ DECISION_VERSION       = "EDA-DEC-1.0"
 ACTION_LIBRARY_VERSION = "EDA-DEC-ACTIONS-1.0"
 DECISION_LIFECYCLE_VERSION = "EDA-DEC-LIFE-1.0"
 OUTCOME_VERSION = "EDA-OUT-1.0"
+GOVERNANCE_VERSION = "EDA-GOV-1.0"
 
 _EPS = 1e-9  # floating-point guard only (not a modelling coefficient)
 
@@ -713,8 +714,91 @@ def build_outcome(decision: Dict[str, Any], baseline_audit: Dict[str, Any],
     }
 
 
+# ── Governance (EDA-GOV-1.0) — immutable verification records ───────────────
+# Governance is NOT a status field or terminal workflow. It PRODUCES an
+# immutable, versioned Governance Record: a first-class evidence artifact that
+# references an immutable Outcome and appends a human-authored verification
+# verdict. Records are append-only; re-verification creates a NEW record and
+# never mutates the Outcome, the decision, or the audit. The future Economic
+# Knowledge Layer will consume Governance Records (verified verdicts), not raw
+# Outcomes.
+GOVERNANCE_VERDICTS = ("confirmed", "disputed", "inconclusive")
+
+
+def governance_verdict_allowed(outcome_status: Optional[str], verdict: str) -> bool:
+    """
+    No-fabrication guardrail at the governance boundary: an Outcome whose value
+    was never measured ('insufficient_evidence') can only be judged 'disputed'
+    or 'inconclusive' — it can NEVER be 'confirmed'. A measured Outcome may take
+    any valid verdict (the confirm/dispute judgment is the verifier's).
+    """
+    if verdict not in GOVERNANCE_VERDICTS:
+        return False
+    if outcome_status == "insufficient_evidence":
+        return verdict in ("disputed", "inconclusive")
+    return True
+
+
+def build_governance_record(outcome: Dict[str, Any], audit_ids: List[Any],
+                            verdict: str, verifier: Dict[str, Any],
+                            at_iso: str) -> Dict[str, Any]:
+    """
+    Build an immutable EDA-GOV-1.0 Governance Record referencing an Outcome.
+    verification_confidence is the MEASURED confidence of the verified Outcome,
+    carried forward (not re-computed, not invented). Deterministic content hash.
+    """
+    oc = outcome or {}
+    conf = oc.get("confidence") or {}
+    aei = _num(conf.get("audit_confidence"))
+    outcome_ids = [oc.get("outcome_id")] if oc.get("outcome_id") else []
+    aids = sorted({a for a in (audit_ids or []) if a is not None})
+    verification_confidence = {
+        "audit_confidence": aei, "dqi": _num(conf.get("dqi")),
+        "grade": grade(aei)["grade"],
+        "basis": "measured confidence of the verified Outcome (carried, not re-computed)",
+    }
+    content = _json.dumps({
+        "version": GOVERNANCE_VERSION, "outcome_ids": outcome_ids, "audit_ids": aids,
+        "verdict": verdict, "verification_confidence": aei,
+        "outcome_evidence_hash": oc.get("evidence_hash"),
+        "verifier_id": verifier.get("user_id"), "at": at_iso,
+    }, sort_keys=True, separators=(",", ":"), default=str).encode()
+    evidence_hash = hashlib.sha256(content).hexdigest()
+    return {
+        "governance_id": "EDGOV-" + evidence_hash[:16].upper(),
+        "version": GOVERNANCE_VERSION,
+        "methodology_version": GOVERNANCE_VERSION,
+        "outcome_ids": outcome_ids,
+        "audit_ids": aids,
+        "decision_id": oc.get("decision_id"),
+        "verdict": verdict,
+        "verification_confidence": verification_confidence,
+        "evidence_hash": evidence_hash,
+        "outcome_evidence_hash": oc.get("evidence_hash"),   # link to the Outcome's hash
+        "verifier": verifier,
+        "timestamp": at_iso,
+    }
+
+
 # ── Self-describing metric registry (future EDA Standard v1.0) ──────────────
 METRIC_REGISTRY = {
+    "Governance": {
+        "name": "Governance Record (immutable verification artifact)", "version": GOVERNANCE_VERSION,
+        "equation": "an append-only record referencing Outcome(s) + audit(s) with a "
+                    "human verdict ∈ {confirmed, disputed, inconclusive}; "
+                    "verification_confidence = the Outcome's measured confidence, carried.",
+        "inputs": "an immutable Outcome (EDA-OUT-1.0), referenced audit ids, a verifier, a verdict.",
+        "outputs": "a first-class, immutable Governance Record (evidence artifact) for the "
+                   "future Economic Knowledge Layer.",
+        "dependencies": ["Outcome", "DecisionIntelligence", "EconomicAudit"],
+        "validation_rules": [
+            "Not a status field or terminal workflow — Governance PRODUCES immutable records.",
+            "Append-only: re-verification creates a new record; Outcomes are never mutated.",
+            "No-fabrication guardrail: an insufficient_evidence Outcome cannot be 'confirmed'.",
+            "verification_confidence is the measured Outcome confidence, carried — not re-computed.",
+            "Each record carries its own evidence hash and references Outcome + audit ids.",
+        ],
+    },
     "Outcome": {
         "name": "Outcome (realized-impact measurement)", "version": OUTCOME_VERSION,
         "equation": "realized_value = baseline root-cause loss − same-bucket loss in a "

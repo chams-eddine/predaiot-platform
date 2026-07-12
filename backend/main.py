@@ -282,6 +282,38 @@ class Outcome(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True, nullable=False)
 
 
+class GovernanceRecord(Base):
+    """
+    EDA-GOV-1.0 — an immutable, versioned, first-class evidence artifact.
+    Governance is NOT a status field: it PRODUCES append-only records that
+    reference an immutable Outcome and append a verification verdict. Each
+    record carries its own evidence_hash AND chains into a GENESIS-anchored
+    hash chain (tamper-evident). Re-verification appends a new record; nothing
+    upstream is ever mutated. The future Economic Knowledge Layer consumes
+    these records.
+    """
+    __tablename__ = "governance_records"
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, index=True, nullable=False)
+    governance_id = Column(String, index=True, nullable=False)    # EDGOV-<hex>
+    version = Column(String, nullable=False)                      # EDA-GOV-1.0
+    methodology_version = Column(String, nullable=False)
+    outcome_id = Column(String, index=True, nullable=True)        # primary referenced outcome
+    decision_id = Column(String, index=True, nullable=True)
+    audit_ids = Column(String, nullable=True)                     # JSON list
+    verdict = Column(String, nullable=False)                      # confirmed|disputed|inconclusive
+    verification_confidence = Column(Float, nullable=True)
+    verification_confidence_grade = Column(String, nullable=True)
+    evidence_hash = Column(String, index=True, nullable=True)
+    verifier_user_id = Column(Integer, nullable=True)
+    verifier_email = Column(String, nullable=True)
+    verifier_role = Column(String, nullable=True)
+    at = Column(DateTime, default=datetime.utcnow, index=True, nullable=False)
+    prev_hash = Column(String, nullable=False)
+    row_hash = Column(String, nullable=False, index=True)
+    record_json = Column(String, nullable=False)
+
+
 class SecurityAuditLog(Base):
     """
     Tamper-evident security event log (ISO 27001 A.12.4 direction).
@@ -2705,6 +2737,143 @@ async def list_outcomes(user: User = Depends(require_user)):
         rows = (db.query(Outcome).filter(Outcome.org_id == user.org_id)
                 .order_by(Outcome.created_at.desc()).limit(200).all())
         return {"outcomes": [_outcome_dict_from_row(o) for o in rows]}
+    finally:
+        db.close()
+
+
+# ---- EDA-GOV-1.0 — Governance (immutable verification records) -------------
+class GovernanceRequest(BaseModel):
+    verdict: str
+    note: Optional[str] = None
+
+_GOVERNANCE_ROLES = {"owner", "admin", "finance"}
+
+
+@app.post("/api/v1/outcomes/{outcome_id}/govern")
+async def govern_outcome(outcome_id: str, req: GovernanceRequest,
+                         user: User = Depends(require_user)):
+    """
+    Produce an immutable EDA-GOV-1.0 Governance Record verifying a measured
+    Outcome. Append-only — never mutates the Outcome. RBAC: owner/admin/finance
+    (segregation from those who proposed/executed/measured). Enforces the
+    no-fabrication guardrail (insufficient_evidence cannot be 'confirmed').
+    """
+    if user.role != "owner" and user.role not in _GOVERNANCE_ROLES:
+        raise HTTPException(status_code=403, detail={"code": "forbidden",
+                            "message": "Recording a Governance verdict requires owner/admin/finance."})
+    verdict = (req.verdict or "").strip().lower()
+    if verdict not in eda_metrics.GOVERNANCE_VERDICTS:
+        raise HTTPException(status_code=422, detail={"code": "invalid_verdict",
+                            "message": f"Verdict must be one of: {', '.join(eda_metrics.GOVERNANCE_VERDICTS)}."})
+    db = SessionLocal()
+    try:
+        oc = (db.query(Outcome)
+              .filter(Outcome.outcome_id == outcome_id, Outcome.org_id == user.org_id)
+              .first())
+        if oc is None:
+            raise HTTPException(status_code=404, detail={"code": "outcome_not_found",
+                                "message": "No such outcome in your organization."})
+        if not eda_metrics.governance_verdict_allowed(oc.outcome_status, verdict):
+            raise HTTPException(status_code=409, detail={"code": "verdict_not_allowed",
+                                "message": f"An outcome with status '{oc.outcome_status}' cannot be '{verdict}'. "
+                                           "A value that was never measured cannot be confirmed."})
+        # audit ids referenced: baseline (from the decision) + verification.
+        dec = db.query(Decision).filter(Decision.decision_id == oc.decision_id,
+                                        Decision.org_id == user.org_id).first()
+        audit_ids = [dec.audit_id if dec else None, oc.verification_audit_id]
+        outcome_obj = json.loads(oc.outcome_json)
+        at = datetime.utcnow()
+        verifier = {"user_id": user.id, "email": user.email, "role": user.role}
+        rec = eda_metrics.build_governance_record(outcome_obj, audit_ids, verdict, verifier,
+                                                  at_iso=at.isoformat() + "Z")
+        # Append-only + hash chain over ALL material content (tamper-evident):
+        # editing any column below breaks the chain from that record forward.
+        last = db.query(GovernanceRecord).order_by(GovernanceRecord.id.desc()).first()
+        prev = last.row_hash if last else "GENESIS"
+        vc = rec["verification_confidence"]
+        _body = (f"{prev}|{user.org_id}|{rec['governance_id']}|{outcome_id}|"
+                 f"{json.dumps(rec['audit_ids'])}|{verdict}|{vc['audit_confidence']}|"
+                 f"{user.id}|{at.isoformat()}|{rec['evidence_hash']}")
+        row_hash = _hashlib.sha256(_body.encode()).hexdigest()
+        db.add(GovernanceRecord(
+            org_id=user.org_id, governance_id=rec["governance_id"], version=rec["version"],
+            methodology_version=rec["methodology_version"], outcome_id=outcome_id,
+            decision_id=rec["decision_id"], audit_ids=json.dumps(rec["audit_ids"]),
+            verdict=verdict, verification_confidence=vc["audit_confidence"],
+            verification_confidence_grade=vc["grade"], evidence_hash=rec["evidence_hash"],
+            verifier_user_id=user.id, verifier_email=user.email, verifier_role=user.role,
+            at=at, prev_hash=prev, row_hash=row_hash,
+            record_json=json.dumps(rec, default=str)))
+        db.commit()
+        _security_log("governance.record", actor=user.email, org_id=user.org_id,
+                      object_ref=f"governance:{rec['governance_id']}|outcome:{outcome_id}|{verdict}")
+        rec["row_hash"] = row_hash
+        return rec
+    finally:
+        db.close()
+
+
+def _gov_dict(r: "GovernanceRecord") -> dict:
+    return {"governance_id": r.governance_id, "version": r.version,
+            "methodology_version": r.methodology_version, "outcome_id": r.outcome_id,
+            "decision_id": r.decision_id, "audit_ids": json.loads(r.audit_ids or "[]"),
+            "verdict": r.verdict,
+            "verification_confidence": {"audit_confidence": r.verification_confidence,
+                                        "grade": r.verification_confidence_grade},
+            "evidence_hash": r.evidence_hash,
+            "verifier": {"user_id": r.verifier_user_id, "email": r.verifier_email, "role": r.verifier_role},
+            "timestamp": r.at.isoformat() + "Z", "row_hash": r.row_hash[:16]}
+
+
+@app.get("/api/v1/outcomes/{outcome_id}/governance")
+async def outcome_governance(outcome_id: str, user: User = Depends(require_user)):
+    """Immutable Governance Records referencing one Outcome (org-scoped)."""
+    db = SessionLocal()
+    try:
+        oc = (db.query(Outcome)
+              .filter(Outcome.outcome_id == outcome_id, Outcome.org_id == user.org_id).first())
+        if oc is None:
+            raise HTTPException(status_code=404, detail={"code": "outcome_not_found",
+                                "message": "No such outcome in your organization."})
+        rows = (db.query(GovernanceRecord)
+                .filter(GovernanceRecord.outcome_id == outcome_id, GovernanceRecord.org_id == user.org_id)
+                .order_by(GovernanceRecord.id.asc()).all())
+        return {"outcome_id": outcome_id, "records": [_gov_dict(r) for r in rows]}
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/governance")
+async def list_governance(user: User = Depends(require_user)):
+    """Org-scoped Governance Record register (EDA-GOV-1.0), newest first."""
+    db = SessionLocal()
+    try:
+        rows = (db.query(GovernanceRecord).filter(GovernanceRecord.org_id == user.org_id)
+                .order_by(GovernanceRecord.id.desc()).limit(200).all())
+        return {"governance_records": [_gov_dict(r) for r in rows]}
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/governance/verify")
+async def governance_verify():
+    """Public, content-free tamper check of the Governance Record hash chain."""
+    db = SessionLocal()
+    try:
+        rows = db.query(GovernanceRecord).order_by(GovernanceRecord.id.asc()).all()
+        prev = "GENESIS"
+        broken_at = None
+        for r in rows:
+            body = (f"{r.prev_hash}|{r.org_id}|{r.governance_id}|{r.outcome_id}|"
+                    f"{r.audit_ids}|{r.verdict}|{r.verification_confidence}|"
+                    f"{r.verifier_user_id}|{r.at.isoformat()}|{r.evidence_hash}")
+            if r.prev_hash != prev or _hashlib.sha256(body.encode()).hexdigest() != r.row_hash:
+                broken_at = r.id
+                break
+            prev = r.row_hash
+        return {"entries": len(rows), "chain_valid": broken_at is None,
+                "broken_at_id": broken_at, "version": eda_metrics.GOVERNANCE_VERSION,
+                "head_hash": (rows[-1].row_hash if rows else None)}
     finally:
         db.close()
 
@@ -5529,7 +5698,7 @@ def health_db():
                 info["alembic_version"] = None
             for t in ("users", "organizations", "assets", "certificate_registry",
                       "audit_records", "economic_states", "decisions", "decision_events",
-                      "outcomes"):
+                      "outcomes", "governance_records"):
                 try:
                     info[f"rows_{t}"] = conn.exec_driver_sql(
                         f"SELECT count(*) FROM {t}").scalar()

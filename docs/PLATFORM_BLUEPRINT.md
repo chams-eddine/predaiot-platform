@@ -186,6 +186,29 @@ judges success — **Governance (EDA-GOV-1.0) consumes immutable Outcomes and
 records the verification verdict.** Endpoints: `POST
 /decisions/{id}/outcome`, `GET /decisions/{id}/outcomes`, `GET /outcomes`.
 
+### 4e. Governance Record — FROZEN contract (EDA-GOV-1.0, Founder-ratified 2026-07-12)
+
+**Constraint:** Governance is NOT a status field or a terminal workflow. It
+PRODUCES an **immutable, versioned, append-only Governance Record** — a
+first-class evidence artifact. Fields: `governance_id` (`EDGOV-<hash>`),
+`methodology_version` (EDA-GOV-1.0), referenced `outcome_ids[]`, referenced
+`audit_ids[]`, `verdict` ∈ {confirmed, disputed, inconclusive},
+`verification_confidence` (the Outcome's MEASURED confidence, carried — not
+re-computed), `evidence_hash` (+ chains into a GENESIS-anchored tamper-evident
+hash chain), `verifier` `{user_id, email, role}`, `timestamp`.
+
+Rules: append-only (re-verification creates a NEW record; the Outcome, the
+decision, and the audit are never mutated); **no-fabrication guardrail** — an
+`insufficient_evidence` Outcome can never be `confirmed` (only disputed /
+inconclusive); RBAC owner/admin/finance (segregation from those who
+proposed/executed/measured). Endpoints: `POST /outcomes/{id}/govern`,
+`GET /outcomes/{id}/governance`, `GET /governance`, public
+`GET /governance/verify`.
+
+The Audit → Decision → Execution → Verification loop is now closed. The future
+Economic Knowledge Layer will consume **Governance Records** (verified
+verdicts), NOT raw Outcomes. (Knowledge Layer NOT built yet — only the artifact.)
+
 ### 5a. Evidence Chain — extended upward (MOAT upgrade)
 
 Today the chain covers dataset → audit → certificate. It is extended to the
