@@ -119,6 +119,29 @@ the Data Quality Manifest; N/A propagates (unknown stays unknown); a state
 whose DQ gate fails is INSUFFICIENT EVIDENCE, not a number. This object — not
 telemetry — is what every screen renders.
 
+### 4b. Decision Object — FROZEN contract (EDA-DEC-1.0, Founder-ratified 2026-07-12)
+
+A Decision is an **economic commitment**, not an AI recommendation — a
+deterministic projection of an Economic State + Audit Ledger + Evidence Hash
+Chain. Canonical fields: `decision_id` (`EDDEC-<hash>`, content hash over
+audit_id | economic_state_version | root_cause_id | action_library_version),
+`version`, `decision_type` ∈ {CORRECTIVE, OPTIMIZATION, RECOVERY, MONITORING},
+`asset_id`, `economic_state_version`, `root_cause_id`, `current_state`
+(ES snapshot), `recommended_action` (versioned action-library map — no free
+text), `alternative_action` (status-quo baseline + economic consequence),
+`expected_value_impact` (recorded-period gross loss; **no annualization, no
+forward ROI**; net bound = ES recoverable_value), `decision_mode`
+("retrospective" in batch), `decision_deadline` (timestamp null in batch; live
+timestamps only after Live Streaming), `confidence` (measured EDA-AC-1.0 /
+EDA-DQI-1.0 — never a prediction), `evidence_reference` (+ decision content
+hash into the §5a chain), `governance_owner` `{role, assigned_user_id}` (default
+role `asset_manager`), `status` (proposed → accepted|rejected|delayed via L6).
+
+**Decision laws (enforced in the pure builder):** no decision without a
+quantified financial impact (loss_usd>0); no ROI fabrication; no
+prediction-only output; every decision answers *what action now / why now /
+what economic value is affected*. Action library versioned `EDA-DEC-ACTIONS-1.0`.
+
 ### 5a. Evidence Chain — extended upward (MOAT upgrade)
 
 Today the chain covers dataset → audit → certificate. It is extended to the

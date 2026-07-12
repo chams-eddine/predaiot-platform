@@ -25,6 +25,8 @@ DESIGN CONTRACT (enforced by the review-board hardening phase):
 This module is PURE: no I/O, no framework, no asset physics. Unit-testable in
 isolation. main.py imports it; the numeric optimizer is untouched.
 """
+import hashlib
+import json as _json
 from typing import Any, Dict, List, Optional
 
 # ── Versions (future EDA Standard v1.0 compatibility) ───────────────────────
@@ -33,6 +35,8 @@ AC_VERSION          = "EDA-AC-1.0"
 GRADE_SCALE_VERSION = "EDA-GRADE-1.0"
 FORECAST_REL_VERSION = "EDA-FR-1.0-experimental"
 ECONOMIC_STATE_VERSION = "EDA-ES-1.0"
+DECISION_VERSION       = "EDA-DEC-1.0"
+ACTION_LIBRARY_VERSION = "EDA-DEC-ACTIONS-1.0"
 
 _EPS = 1e-9  # floating-point guard only (not a modelling coefficient)
 
@@ -420,8 +424,161 @@ def build_economic_state(audit: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# ── Decision Intelligence (EDA-DEC-1.0) — economic commitments ──────────────
+# A decision is a PROJECTION of existing evidence (Economic State + Audit
+# Ledger + Evidence Hash Chain), never a new source of truth and never an AI
+# recommendation. Deterministic action text comes from a VERSIONED action
+# library keyed on the audit's root-cause category — no free text, no LLM.
+#
+# Decision laws enforced here:
+#   • No decision without quantified financial impact — emitted ONLY for a
+#     root-cause bucket with loss_usd > 0.
+#   • No ROI fabrication — expected_value_impact is the recorded-period loss;
+#     no annualization, no forward multiplier.
+#   • No prediction-only output — every decision carries quantified impact +
+#     evidence; confidence is the MEASURED audit confidence, not a forecast.
+ACTION_LIBRARY = {
+    "Missed Arbitrage": {
+        "action_code": "REALIGN_DISPATCH_TO_PRICE", "decision_type": "OPTIMIZATION",
+        "recommended": "Realign charge/discharge to the price extremes identified in the cited intervals.",
+        "alternative": "Maintain current dispatch (accept the recorded loss)."},
+    "Market Arbitrage": {
+        "action_code": "REALIGN_DISPATCH_TO_PRICE", "decision_type": "OPTIMIZATION",
+        "recommended": "Realign dispatch to the market price signal in the cited intervals.",
+        "alternative": "Maintain current dispatch (accept the recorded loss)."},
+    "Partial Capture": {
+        "action_code": "INCREASE_CAPTURE_AT_EXTREMES", "decision_type": "OPTIMIZATION",
+        "recommended": "Increase dispatched volume during the high-value intervals to capture the unrealized spread.",
+        "alternative": "Maintain current dispatch (accept the recorded loss)."},
+    "Schedule-based Dispatch": {
+        "action_code": "SWITCH_TO_ECONOMIC_DISPATCH", "decision_type": "CORRECTIVE",
+        "recommended": "Replace fixed-schedule dispatch with price-driven (economic) dispatch for the cited intervals.",
+        "alternative": "Maintain the fixed schedule (accept the recorded loss)."},
+    "Curtailment Recovery": {
+        "action_code": "RECOVER_CURTAILED_ENERGY", "decision_type": "RECOVERY",
+        "recommended": "Shift or store the curtailed energy identified in the cited intervals to a higher-value window.",
+        "alternative": "Continue curtailing (accept the recorded loss)."},
+}
+_ACTION_DEFAULT = {
+    "action_code": "REVIEW_DISPATCH", "decision_type": "CORRECTIVE",
+    "recommended": "Review the dispatch decisions in the cited intervals against the price signal.",
+    "alternative": "Maintain current dispatch (accept the recorded loss)."}
+
+
+def _slug(s: str) -> str:
+    return "".join(ch if ch.isalnum() else "-" for ch in (s or "").lower()).strip("-") or "root-cause"
+
+
+def build_decisions(audit: Dict[str, Any], economic_state: Dict[str, Any],
+                    audit_id: Any) -> List[Dict[str, Any]]:
+    """
+    Deterministically build EDA-DEC-1.0 decisions from one audit + its Economic
+    State. One decision per root-cause bucket with loss_usd > 0. Reproducible:
+    identical (audit_id, audit, ES) ⟹ identical decisions and decision_ids.
+    """
+    es = economic_state or {}
+    currency = es.get("currency") or audit.get("currency")
+    dataset_sha = es.get("evidence_sha256") or (audit.get("audit_manifest") or {}).get("input_sha256")
+    span_hours = es.get("span_hours")
+    dqi_obj = audit.get("data_quality_index") or {}
+    ac_obj = audit.get("audit_confidence") or {}
+    current_state = {k: es.get(k) for k in (
+        "economic_health", "leakage_rate", "recoverable_value", "captured_value",
+        "currency", "evidence_sha256")}
+    confidence = {
+        "audit_confidence": ac_obj.get("value"),
+        "audit_confidence_grade": ac_obj.get("grade"),
+        "dqi": dqi_obj.get("value"),
+        "basis": "measured audit properties (EDA-AC-1.0 / EDA-DQI-1.0); not a prediction",
+    }
+    out: List[Dict[str, Any]] = []
+    for rc in (audit.get("root_causes") or []):
+        loss = _num(rc.get("loss_usd"))
+        if loss is None or loss <= 0:
+            continue                      # LAW: no decision without quantified impact
+        category = rc.get("category") or "Unclassified"
+        lib = ACTION_LIBRARY.get(category, _ACTION_DEFAULT)
+        root_cause_id = _slug(category)
+        # decision_id content hash — amendment 4: audit_id, ES version, root_cause_id, action-library version
+        h = hashlib.sha256(
+            f"{audit_id}|{ECONOMIC_STATE_VERSION}|{root_cause_id}|{ACTION_LIBRARY_VERSION}".encode()
+        ).hexdigest()
+        decision_id = f"EDDEC-{h[:16].upper()}"
+        expected_value_impact = {
+            "value_at_stake": round(loss, 6), "currency": currency,
+            "basis": "gross recorded loss attributable to this root cause over the audit window "
+                     "(per-bucket attribution, before inter-bucket offsets)",
+            "net_recoverable_bound": es.get("recoverable_value"),   # portfolio net bound (EDA-ES-1.0)
+            "period_hours": span_hours, "recoverable": True,
+            "annualized": None,          # amendment 3: no annualization, no forward ROI
+        }
+        evidence_reference = {
+            "audit_id": audit_id, "dataset_sha256": dataset_sha,
+            "root_cause_id": root_cause_id, "root_cause_category": category,
+            "action_library_version": ACTION_LIBRARY_VERSION,
+            "ledger_derivation": (f"loss_usd={round(loss,4)} = {rc.get('contribution_pct')}% of gross "
+                                  f"attributed loss (Σ bucket losses); root-cause bucket '{category}' "
+                                  f"from the audit's exact-partition attribution"),
+        }
+        # decision_evidence_sha256 — anchor the decision content into the §5a chain
+        chain_payload = _json.dumps({
+            "audit_id": audit_id, "es_version": ECONOMIC_STATE_VERSION,
+            "root_cause_id": root_cause_id, "action_code": lib["action_code"],
+            "value_at_stake": expected_value_impact["value_at_stake"],
+            "dataset_sha256": dataset_sha, "action_library_version": ACTION_LIBRARY_VERSION,
+        }, sort_keys=True, separators=(",", ":"), default=str).encode()
+        decision_evidence_sha256 = hashlib.sha256(chain_payload).hexdigest()
+        evidence_reference["decision_evidence_sha256"] = decision_evidence_sha256
+
+        out.append({
+            "decision_id": decision_id,
+            "version": DECISION_VERSION,
+            "decision_type": lib["decision_type"],
+            "asset_id": None,
+            "economic_state_version": ECONOMIC_STATE_VERSION,
+            "root_cause_id": root_cause_id,
+            "current_state": current_state,
+            "recommended_action": {"statement": lib["recommended"], "action_code": lib["action_code"],
+                                   "basis": f"deterministic map of root-cause '{category}' via {ACTION_LIBRARY_VERSION}"},
+            "alternative_action": {"statement": lib["alternative"], "action_code": "STATUS_QUO",
+                                   "economic_consequence": expected_value_impact["value_at_stake"]},
+            "expected_value_impact": expected_value_impact,
+            "decision_mode": "retrospective",            # amendment 1
+            "decision_deadline": {"timestamp": None, "decision_mode": "retrospective",
+                                  "basis": "retrospective audit — no live clock; live timestamps only "
+                                           "after Live Streaming integration refreshes the Economic State"},
+            "confidence": confidence,
+            "evidence_reference": evidence_reference,
+            "governance_owner": {"role": "asset_manager", "assigned_user_id": None},   # amendment 2
+            "status": "proposed",
+        })
+    # Deterministic order: largest recorded impact first.
+    out.sort(key=lambda d: d["expected_value_impact"]["value_at_stake"], reverse=True)
+    return out
+
+
 # ── Self-describing metric registry (future EDA Standard v1.0) ──────────────
 METRIC_REGISTRY = {
+    "DecisionIntelligence": {
+        "name": "Decision Intelligence (economic commitments)", "version": DECISION_VERSION,
+        "equation": "one decision per root-cause bucket with loss_usd>0; "
+                    "expected_value_impact = recorded loss_usd; decision_id = "
+                    "hash(audit_id|ES_version|root_cause_id|action_library_version).",
+        "inputs": "Economic State (EDA-ES-1.0), Audit Ledger (root_causes with loss_usd), "
+                  "Evidence Hash Chain (dataset sha, derivations).",
+        "outputs": "canonical Decision Objects (economic commitments), each with quantified "
+                   "value_at_stake, measured confidence, and an evidence hash.",
+        "dependencies": ["EconomicState", "EconomicAudit", "AuditConfidence", "DataQualityIndex"],
+        "validation_rules": [
+            "No decision without quantified financial impact (loss_usd>0).",
+            "No ROI fabrication — expected_value_impact is the recorded-period loss; no annualization.",
+            "No prediction-only output — confidence is measured (EDA-AC-1.0), never a forecast.",
+            "Action text is a versioned deterministic map of root-cause category — no free text.",
+            "Reproducible: same audit ⟹ same decisions and decision_ids.",
+            "decision_mode='retrospective' with null deadline in batch; live timestamps only via streaming.",
+        ],
+        "action_library_version": ACTION_LIBRARY_VERSION,
+    },
     "EconomicState": {
         "name": "Economic State (canonical business object)", "version": ECONOMIC_STATE_VERSION,
         "equation": "captured=EDV_actual; recoverable=execution_gap; "

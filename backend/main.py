@@ -197,6 +197,37 @@ class EconomicState(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True, nullable=False)
 
 
+class Decision(Base):
+    """
+    EDA-DEC-1.0 — a Decision is an economic commitment (blueprint Amendment 2),
+    a deterministic projection of an Economic State + Audit Ledger + Evidence
+    Hash Chain. Never an AI recommendation. Governance (L6) later verifies it
+    via the status lifecycle. Full object in decision_json; key fields
+    denormalised for querying.
+    """
+    __tablename__ = "decisions"
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, index=True, nullable=False)
+    audit_id = Column(Integer, index=True, nullable=True)
+    asset_id = Column(Integer, index=True, nullable=True)
+    decision_id = Column(String, index=True, nullable=False)   # EDDEC-<hex>
+    version = Column(String, nullable=False)                   # EDA-DEC-1.0
+    decision_type = Column(String, nullable=True)              # CORRECTIVE|OPTIMIZATION|RECOVERY|MONITORING
+    root_cause_id = Column(String, nullable=True)
+    economic_state_version = Column(String, nullable=True)
+    expected_value = Column(Float, nullable=True)              # value_at_stake
+    currency = Column(String, nullable=True)
+    decision_mode = Column(String, nullable=True)              # retrospective
+    governance_owner_role = Column(String, nullable=True)
+    governance_owner_user_id = Column(Integer, nullable=True)
+    decision_evidence_sha256 = Column(String, index=True, nullable=True)
+    status = Column(String, default="proposed", nullable=False)
+    status_by = Column(Integer, nullable=True)
+    status_at = Column(DateTime, nullable=True)
+    decision_json = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True, nullable=False)
+
+
 class SecurityAuditLog(Base):
     """
     Tamper-evident security event log (ISO 27001 A.12.4 direction).
@@ -821,6 +852,24 @@ def _persist_audit_record(lead: TrialLead, result: "AuditResponse",
             provisional=es["provisional"], evidence_sha256=es["evidence_sha256"],
             state_json=json.dumps(es, default=str),
         ))
+        db.commit()
+        # EDA-DEC-1.0: materialise decisions (economic commitments) from the
+        # Economic State + audit ledger. Deterministic; consumes, never mutates.
+        for dec in eda_metrics.build_decisions(d, es, audit_id=rec.id):
+            evi = dec["expected_value_impact"]
+            db.add(Decision(
+                org_id=user.org_id, audit_id=rec.id, asset_id=rec.asset_id,
+                decision_id=dec["decision_id"], version=dec["version"],
+                decision_type=dec["decision_type"], root_cause_id=dec["root_cause_id"],
+                economic_state_version=dec["economic_state_version"],
+                expected_value=evi["value_at_stake"], currency=evi["currency"],
+                decision_mode=dec["decision_mode"],
+                governance_owner_role=dec["governance_owner"]["role"],
+                governance_owner_user_id=dec["governance_owner"]["assigned_user_id"],
+                decision_evidence_sha256=dec["evidence_reference"]["decision_evidence_sha256"],
+                status=dec["status"],
+                decision_json=json.dumps(dec, default=str),
+            ))
         db.commit()
     finally:
         db.close()
@@ -2327,6 +2376,51 @@ async def list_economic_states(user: User = Depends(require_user)):
             "evidence_sha256": s.evidence_sha256,
             "created_at": s.created_at.isoformat() + "Z",
         } for s in rows]}
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/audits/{audit_id}/decisions")
+async def audit_decisions(audit_id: int, user: User = Depends(require_user)):
+    """
+    EDA-DEC-1.0 decisions for one audit — economic commitments derived
+    deterministically from the audit's Economic State + ledger. Works for every
+    stored audit (derives on the fly). Org-scoped; 404 across org boundaries.
+    """
+    db = SessionLocal()
+    try:
+        r = (db.query(AuditRecord)
+             .filter(AuditRecord.id == audit_id, AuditRecord.org_id == user.org_id)
+             .first())
+        if r is None:
+            raise HTTPException(status_code=404, detail={"code": "audit_not_found",
+                                "message": "No such audit in your organization."})
+        audit = json.loads(r.result_json)
+        es = eda_metrics.build_economic_state(audit)
+        decisions = eda_metrics.build_decisions(audit, es, audit_id=r.id)
+        return {"audit_id": r.id, "count": len(decisions), "decisions": decisions}
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/decisions")
+async def list_decisions(user: User = Depends(require_user)):
+    """Org-scoped decision register (EDA-DEC-1.0), newest first."""
+    db = SessionLocal()
+    try:
+        rows = (db.query(Decision).filter(Decision.org_id == user.org_id)
+                .order_by(Decision.created_at.desc()).limit(200).all())
+        return {"decisions": [{
+            "id": r.id, "decision_id": r.decision_id, "version": r.version,
+            "audit_id": r.audit_id, "decision_type": r.decision_type,
+            "root_cause_id": r.root_cause_id,
+            "expected_value": r.expected_value, "currency": r.currency,
+            "decision_mode": r.decision_mode, "status": r.status,
+            "governance_owner": {"role": r.governance_owner_role,
+                                 "assigned_user_id": r.governance_owner_user_id},
+            "decision_evidence_sha256": r.decision_evidence_sha256,
+            "created_at": r.created_at.isoformat() + "Z",
+        } for r in rows]}
     finally:
         db.close()
 
@@ -5150,7 +5244,7 @@ def health_db():
             except Exception:
                 info["alembic_version"] = None
             for t in ("users", "organizations", "assets", "certificate_registry",
-                      "audit_records", "economic_states"):
+                      "audit_records", "economic_states", "decisions"):
                 try:
                     info[f"rows_{t}"] = conn.exec_driver_sql(
                         f"SELECT count(*) FROM {t}").scalar()
