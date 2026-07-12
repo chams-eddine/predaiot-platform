@@ -24,6 +24,31 @@ can do neither is rejected.
 **Amendment rule:** this specification changes only by explicit Founder
 approval, recorded in this file's git history.
 
+### Amendment 1 — Phase order resolved (Founder-approved 2026-07-12)
+
+The prior §15 phase order (Live ingestion → Live intelligence → Decision
+engine → Governance) contradicted the §0 moat filter (Decision Intelligence =
+MOAT, first; Live ingestion = COMMODITY, deferred). The contradiction is
+resolved in favour of §0. The **canonical build order** is now:
+
+1. Economic Audit (L2) — *done, immutable*
+2. Economic Memory (L3) — *done (Sprint 2)*
+3. **Economic State (`EDA-ES-1.0`)** — the canonical business object, built
+   **first after Economic Memory**, materialised from stored audits (batch).
+4. **Decision Intelligence (`EDA-DEC-1.0`)** — *consumes* Economic State.
+5. **Economic Governance (`EDA-GOV-1.0`)** — *verifies* Decision Intelligence.
+6. **Live Streaming** — an **update source for Economic State**, NOT an
+   independent capability. Live windows produce/refresh Economic States
+   through the *same* EDA-ES-1.0 definition; they never introduce a parallel
+   truth. (OPC-UA/MQTT/edge remain COMMODITY, built thin, pulled in only when
+   a live-feed pilot requires them.)
+
+Rule of consumption (the resolved dependency chain):
+
+    Economic Audit → Economic State → Decision Intelligence → Governance
+                          ↑
+                   Live Streaming (update source only)
+
 Identity invariant (never violated by any phase):
 
     Certified Economic Audit  →  Decision Intelligence  →  Live Economic Governance
@@ -359,13 +384,16 @@ query passes through a tenancy dependency that injects org_id.
 
 ## 15. Phase gates (roadmap with exit criteria)
 
+*(Superseded by Amendment 1 — canonical order below.)*
+
 | Phase | Scope | Exit criteria |
 |---|---|---|
-| 1 Foundation | Postgres, Alembic, auth+orgs+RBAC, asset registry, audit history, security-log re-implementation, CI + deploy verification, S01 executive strip | login works; audits persist across deploys; org isolation test passes; CI green; prod verified automatically |
-| 2 Live ingestion | edge-connector (OPC-UA/Modbus), MQTT hardening, ingest queue, window assembler | 72 h continuous ingest from a simulated PLC with induced outages, zero data loss |
-| 3 Live intelligence | windowed micro-audits, live leakage counter, economic events, S13 economic overlay (additive) | live numbers reproduce from windows; DQ-gated; labelled provisional |
-| 4 Decision engine | decision cards, workflow states, notification digests | every card's numbers trace to ledger steps; accept/reject/delay round-trip |
-| 5 Governance | outcomes verification, recovered-value ledger, portfolio/fleet, executive command center, board reports | closed loop demonstrated on one asset: decision → later audit verifies recovery |
+| 1 Foundation | Postgres, Alembic, auth+orgs+RBAC, asset registry, audit history, security-log, deploy verification, S01 exec strip | ✅ done — login works; audits persist across deploys; org isolation passes; prod verified |
+| 2 Economic Memory | audit history, replay, memory aggregates | ✅ done (Sprint 2) — org-scoped history + deterministic memory |
+| 3 **Economic State (EDA-ES-1.0)** | canonical object materialised from each stored audit; versioned pure builder; `economic_states` table; endpoints; reproducible `economic_health` | every Economic State reproduces from its audit's published quantities; N/A propagates; org-scoped; on prod |
+| 4 **Decision Intelligence (EDA-DEC-1.0)** | decision cards derived from Economic State + ledger; workflow (accept/reject/delay); evidence-chain hash | every card number traces to the ledger; no invented ROI; round-trips |
+| 5 **Economic Governance (EDA-GOV-1.0)** | decision outcomes, recovered-value ledger; verifies Decision Intelligence | closed loop: decision → later audit verifies realised recovery |
+| 6 **Live Streaming** (update source) | edge-connector (OPC-UA/Modbus), MQTT, windowed micro-audits that *refresh Economic States* via EDA-ES-1.0 | 72 h ingest, zero loss; live Economic States reproduce from windows, DQ-gated, provisional-labelled |
 
 Constraint honored everywhere: S13 Live Monitor visuals — additive changes only.
 Constraint honored everywhere: no self-serve payment (Sec 2.2) — enterprise
