@@ -142,6 +142,27 @@ quantified financial impact (loss_usd>0); no ROI fabrication; no
 prediction-only output; every decision answers *what action now / why now /
 what economic value is affected*. Action library versioned `EDA-DEC-ACTIONS-1.0`.
 
+### 4c. Decision Lifecycle — FROZEN contract (EDA-DEC-LIFE-1.0, Founder-ratified 2026-07-12)
+
+A lightweight layer BETWEEN Decision Intelligence and Governance, preserving
+separation of concerns:
+
+    Decision Intelligence proposes → Decision Lifecycle tracks execution → Governance verifies realized value
+
+The lifecycle is a **deterministic, versioned state machine** whose history is
+an **append-only, hash-chained, tamper-evident event log** (immutable) — it
+never mutates state in place and never computes realized value (that is
+Governance). States: proposed → {accepted, rejected, deferred} ; accepted →
+in_execution ; in_execution → executed ; any → superseded. Terminal:
+{executed, rejected, superseded}. `executed` is the hand-off point to
+Governance. Transitions are role-gated (viewer never; operator executes but
+does not approve; asset_manager/admin approve; owner may drive any). Each
+event is evidence-linked (carries the decision's `decision_evidence_sha256`
+and chains into the §5a hash chain). Endpoints: `POST /decisions/{id}/transition`,
+`GET /decisions/{id}/lifecycle`, public `GET /decisions/lifecycle/verify`.
+Governance (EDA-GOV-1.0) consumes only `executed` decisions to verify realized
+value — it does not manage transitions.
+
 ### 5a. Evidence Chain — extended upward (MOAT upgrade)
 
 Today the chain covers dataset → audit → certificate. It is extended to the

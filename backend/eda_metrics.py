@@ -37,6 +37,7 @@ FORECAST_REL_VERSION = "EDA-FR-1.0-experimental"
 ECONOMIC_STATE_VERSION = "EDA-ES-1.0"
 DECISION_VERSION       = "EDA-DEC-1.0"
 ACTION_LIBRARY_VERSION = "EDA-DEC-ACTIONS-1.0"
+DECISION_LIFECYCLE_VERSION = "EDA-DEC-LIFE-1.0"
 
 _EPS = 1e-9  # floating-point guard only (not a modelling coefficient)
 
@@ -557,8 +558,72 @@ def build_decisions(audit: Dict[str, Any], economic_state: Dict[str, Any],
     return out
 
 
+# ── Decision Lifecycle (EDA-DEC-LIFE-1.0) — tracks EXECUTION, not value ─────
+# A deterministic, versioned state machine sitting BETWEEN Decision
+# Intelligence (proposes) and Governance (verifies realized value). The
+# lifecycle only TRACKS execution state; it never computes realized value —
+# that is Governance's job. State history is an append-only, hash-chained,
+# tamper-evident event log (immutable): the current state = the latest event's
+# to_state (or "proposed" if none). Terminal "executed" is where Governance
+# takes over to verify realized value against a later audit.
+LIFECYCLE_STATES = ("proposed", "accepted", "rejected", "deferred",
+                    "in_execution", "executed", "superseded")
+
+LIFECYCLE_TRANSITIONS = {
+    "proposed":     {"accepted", "rejected", "deferred", "superseded"},
+    "accepted":     {"in_execution", "deferred", "superseded"},
+    "deferred":     {"accepted", "rejected", "superseded"},
+    "in_execution": {"executed", "deferred", "superseded"},
+    "executed":     {"superseded"},         # terminal for lifecycle → Governance verifies
+    "rejected":     {"superseded"},
+    "superseded":   set(),                  # terminal
+}
+# "executed" hands off to Governance (realized-value verification).
+LIFECYCLE_TERMINAL = {"executed", "rejected", "superseded"}
+
+# Which RBAC roles may drive a transition INTO each state (owner always may).
+LIFECYCLE_ROLE_GATE = {
+    "accepted":     {"asset_manager", "admin"},
+    "rejected":     {"asset_manager", "admin"},
+    "deferred":     {"asset_manager", "admin"},
+    "in_execution": {"operator", "asset_manager", "admin"},
+    "executed":     {"operator", "asset_manager", "admin"},
+    "superseded":   {"asset_manager", "admin"},
+}
+
+
+def lifecycle_can_transition(from_state: Optional[str], to_state: str) -> bool:
+    """Deterministic: is from_state → to_state a valid lifecycle move?"""
+    src = from_state or "proposed"
+    return to_state in LIFECYCLE_TRANSITIONS.get(src, set())
+
+
+def lifecycle_role_allowed(role: Optional[str], to_state: str) -> bool:
+    """Owner may drive any transition; otherwise role must be gated for to_state.
+    Viewer (and any un-gated role) is always denied."""
+    if role == "owner":
+        return True
+    return role in LIFECYCLE_ROLE_GATE.get(to_state, set())
+
+
 # ── Self-describing metric registry (future EDA Standard v1.0) ──────────────
 METRIC_REGISTRY = {
+    "DecisionLifecycle": {
+        "name": "Decision Lifecycle (execution tracking)", "version": DECISION_LIFECYCLE_VERSION,
+        "equation": "deterministic state machine over states "
+                    f"{list(LIFECYCLE_STATES)}; current_state = latest event to_state; "
+                    "history is an append-only hash-chained event log.",
+        "inputs": "a proposed Decision (EDA-DEC-1.0), an actor role, a requested to_state.",
+        "outputs": "immutable, evidence-linked lifecycle events; current execution state.",
+        "dependencies": ["DecisionIntelligence"],
+        "validation_rules": [
+            "Transitions restricted to the versioned state machine (deterministic).",
+            "Event log is append-only + hash-chained (immutable, tamper-evident).",
+            "Lifecycle TRACKS execution only; it never computes realized value (Governance does).",
+            "'executed' is the hand-off point to Governance; terminal states cannot re-open (except → superseded).",
+            "Role-gated: viewer can never transition; owner may drive any transition.",
+        ],
+    },
     "DecisionIntelligence": {
         "name": "Decision Intelligence (economic commitments)", "version": DECISION_VERSION,
         "equation": "one decision per root-cause bucket with loss_usd>0; "

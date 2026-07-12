@@ -228,6 +228,32 @@ class Decision(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True, nullable=False)
 
 
+class DecisionEvent(Base):
+    """
+    EDA-DEC-LIFE-1.0 — the Decision Lifecycle. An APPEND-ONLY, hash-chained
+    (GENESIS-anchored) log of execution-state transitions. Immutable and
+    tamper-evident: each row_hash covers its content AND the previous row's
+    hash, so any retroactive edit breaks the chain. The lifecycle TRACKS
+    execution; it never computes realized value (that is Governance).
+    Current state of a decision = the latest event's to_state ("proposed" if none).
+    """
+    __tablename__ = "decision_events"
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, index=True, nullable=False)
+    decision_pk = Column(Integer, index=True, nullable=False)     # decisions.id
+    decision_id = Column(String, index=True, nullable=False)      # EDDEC-<hex>
+    version = Column(String, nullable=False)                      # EDA-DEC-LIFE-1.0
+    from_state = Column(String, nullable=True)
+    to_state = Column(String, nullable=False)
+    actor_user_id = Column(Integer, nullable=True)
+    actor_email = Column(String, nullable=True)
+    note = Column(String, nullable=True)
+    decision_evidence_sha256 = Column(String, nullable=True)      # link to §5a chain
+    at = Column(DateTime, default=datetime.utcnow, index=True, nullable=False)
+    prev_hash = Column(String, nullable=False)
+    row_hash = Column(String, nullable=False, index=True)
+
+
 class SecurityAuditLog(Base):
     """
     Tamper-evident security event log (ISO 27001 A.12.4 direction).
@@ -2421,6 +2447,131 @@ async def list_decisions(user: User = Depends(require_user)):
             "decision_evidence_sha256": r.decision_evidence_sha256,
             "created_at": r.created_at.isoformat() + "Z",
         } for r in rows]}
+    finally:
+        db.close()
+
+
+# ---- EDA-DEC-LIFE-1.0 — Decision Lifecycle (execution tracking) ------------
+class DecisionTransitionRequest(BaseModel):
+    to_state: str
+    note: Optional[str] = None
+
+
+def _decision_current_state(db, decision_pk: int) -> str:
+    """Authoritative current state = latest lifecycle event's to_state."""
+    last = (db.query(DecisionEvent)
+            .filter(DecisionEvent.decision_pk == decision_pk)
+            .order_by(DecisionEvent.id.desc()).first())
+    return last.to_state if last else "proposed"
+
+
+@app.post("/api/v1/decisions/{decision_id}/transition")
+async def decision_transition(decision_id: str, req: DecisionTransitionRequest,
+                              user: User = Depends(require_user)):
+    """
+    Drive a decision through the EDA-DEC-LIFE-1.0 state machine. Appends one
+    immutable, hash-chained lifecycle event. Deterministic (state machine),
+    role-gated, org-scoped. The lifecycle tracks execution only — it never
+    computes realized value (Governance does).
+    """
+    to_state = (req.to_state or "").strip()
+    if to_state not in eda_metrics.LIFECYCLE_STATES:
+        raise HTTPException(status_code=422, detail={"code": "invalid_state",
+                            "message": f"Unknown state. Valid: {', '.join(eda_metrics.LIFECYCLE_STATES)}."})
+    db = SessionLocal()
+    try:
+        dec = (db.query(Decision)
+               .filter(Decision.decision_id == decision_id, Decision.org_id == user.org_id)
+               .first())
+        if dec is None:
+            raise HTTPException(status_code=404, detail={"code": "decision_not_found",
+                                "message": "No such decision in your organization."})
+        current = _decision_current_state(db, dec.id)
+        if not eda_metrics.lifecycle_can_transition(current, to_state):
+            raise HTTPException(status_code=409, detail={"code": "invalid_transition",
+                                "message": f"Cannot move {current} → {to_state}.",
+                                "current_state": current,
+                                "allowed": sorted(eda_metrics.LIFECYCLE_TRANSITIONS.get(current, set()))})
+        if not eda_metrics.lifecycle_role_allowed(user.role, to_state):
+            raise HTTPException(status_code=403, detail={"code": "forbidden",
+                                "message": f"Your role ({user.role}) may not drive a transition to {to_state}."})
+        # Append the immutable, hash-chained lifecycle event.
+        last = db.query(DecisionEvent).order_by(DecisionEvent.id.desc()).first()
+        prev = last.row_hash if last else "GENESIS"
+        at = datetime.utcnow()
+        body = (f"{prev}|{user.org_id}|{decision_id}|{current}|{to_state}|"
+                f"{user.id}|{at.isoformat()}|{req.note or ''}")
+        row_hash = _hashlib.sha256(body.encode()).hexdigest()
+        ev = DecisionEvent(
+            org_id=user.org_id, decision_pk=dec.id, decision_id=decision_id,
+            version=eda_metrics.DECISION_LIFECYCLE_VERSION,
+            from_state=current, to_state=to_state,
+            actor_user_id=user.id, actor_email=user.email, note=req.note,
+            decision_evidence_sha256=dec.decision_evidence_sha256,
+            at=at, prev_hash=prev, row_hash=row_hash)
+        db.add(ev)
+        # Denormalised cache on the decision (source of truth is the event chain).
+        dec.status = to_state
+        dec.status_by = user.id
+        dec.status_at = at
+        db.commit()
+        db.refresh(ev)
+        _security_log("decision.transition", actor=user.email, org_id=user.org_id,
+                      object_ref=f"decision:{decision_id}|{current}->{to_state}")
+        return {"decision_id": decision_id, "from_state": current, "to_state": to_state,
+                "terminal": to_state in eda_metrics.LIFECYCLE_TERMINAL,
+                "hands_off_to_governance": to_state == "executed",
+                "event_id": ev.id, "row_hash": ev.row_hash, "at": at.isoformat() + "Z",
+                "version": eda_metrics.DECISION_LIFECYCLE_VERSION}
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/decisions/{decision_id}/lifecycle")
+async def decision_lifecycle(decision_id: str, user: User = Depends(require_user)):
+    """Immutable lifecycle history for one decision (org-scoped)."""
+    db = SessionLocal()
+    try:
+        dec = (db.query(Decision)
+               .filter(Decision.decision_id == decision_id, Decision.org_id == user.org_id)
+               .first())
+        if dec is None:
+            raise HTTPException(status_code=404, detail={"code": "decision_not_found",
+                                "message": "No such decision in your organization."})
+        evs = (db.query(DecisionEvent)
+               .filter(DecisionEvent.decision_pk == dec.id, DecisionEvent.org_id == user.org_id)
+               .order_by(DecisionEvent.id.asc()).all())
+        return {
+            "decision_id": decision_id, "version": eda_metrics.DECISION_LIFECYCLE_VERSION,
+            "current_state": _decision_current_state(db, dec.id),
+            "events": [{
+                "event_id": e.id, "from_state": e.from_state, "to_state": e.to_state,
+                "actor_email": e.actor_email, "note": e.note,
+                "at": e.at.isoformat() + "Z", "row_hash": e.row_hash[:16],
+            } for e in evs],
+        }
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/decisions/lifecycle/verify")
+async def decision_lifecycle_verify():
+    """Public, content-free tamper check of the whole lifecycle hash chain."""
+    db = SessionLocal()
+    try:
+        rows = db.query(DecisionEvent).order_by(DecisionEvent.id.asc()).all()
+        prev = "GENESIS"
+        broken_at = None
+        for r in rows:
+            body = (f"{r.prev_hash}|{r.org_id}|{r.decision_id}|{r.from_state}|{r.to_state}|"
+                    f"{r.actor_user_id}|{r.at.isoformat()}|{r.note or ''}")
+            if r.prev_hash != prev or _hashlib.sha256(body.encode()).hexdigest() != r.row_hash:
+                broken_at = r.id
+                break
+            prev = r.row_hash
+        return {"entries": len(rows), "chain_valid": broken_at is None,
+                "broken_at_id": broken_at, "version": eda_metrics.DECISION_LIFECYCLE_VERSION,
+                "head_hash": (rows[-1].row_hash if rows else None)}
     finally:
         db.close()
 
@@ -5244,7 +5395,7 @@ def health_db():
             except Exception:
                 info["alembic_version"] = None
             for t in ("users", "organizations", "assets", "certificate_registry",
-                      "audit_records", "economic_states", "decisions"):
+                      "audit_records", "economic_states", "decisions", "decision_events"):
                 try:
                     info[f"rows_{t}"] = conn.exec_driver_sql(
                         f"SELECT count(*) FROM {t}").scalar()
