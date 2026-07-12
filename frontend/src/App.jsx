@@ -506,6 +506,112 @@ const primaryBtn = {
   fontSize: 13,
 };
 
+function RealTimePanel({ isSignedIn, onSignIn }) {
+  const [running, setRunning] = useState(false);
+  const [state, setState] = useState(null);
+  const [hist, setHist] = useState([]);
+  const [err, setErr] = useState('');
+  const clockRef = useRef(0);
+  const timerRef = useRef(null);
+  const STREAM = 'live-demo-stream';
+
+  const tick = async () => {
+    const h = clockRef.current % 24;
+    const price = 12 + (h >= 18 && h <= 21 ? 30 : 0) + (Math.random() * 2 - 1);
+    const ev = {
+      timestamp: `2024-07-01T${String(h).padStart(2, '0')}:00:00Z`,
+      spot_price: Math.round(price * 100) / 100,
+      actual_charge: h < 6 ? 20 : 0,
+      actual_discharge: (h >= 18 && h <= 21) ? 40 : 0,
+      soc_percent: 50,
+    };
+    clockRef.current += 1;
+    try {
+      const r = await axios.post('/api/v1/live/ingest',
+        { stream_id: STREAM, source: 'sim', currency: 'OMR', events: [ev] });
+      const s = r.data.state;
+      setState(s);
+      if (s && typeof s.live_leakage === 'number') setHist((H) => [...H.slice(-40), s.live_leakage]);
+      setErr('');
+    } catch (e) { setErr('Live ingest failed — check you are signed in.'); }
+  };
+  const start = () => {
+    if (timerRef.current) return;
+    setRunning(true); setErr(''); tick();
+    timerRef.current = setInterval(tick, 3000);
+  };
+  const stop = () => { if (timerRef.current) clearInterval(timerRef.current); timerRef.current = null; setRunning(false); };
+  useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current); }, []);
+
+  if (!isSignedIn) {
+    return (
+      <div style={{ padding: 40, textAlign: 'center' }}>
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Real-Time Economic Intelligence</div>
+        <div style={{ fontSize: 12, color: DS.sub, marginBottom: 18, lineHeight: 1.6 }}>
+          Sign in to stream live events and watch the economic leakage update every few seconds &mdash;
+          computed by the same certified audit engine, marked provisional until a certified audit confirms it.
+        </div>
+        <button onClick={onSignIn} style={primaryBtn}>Sign in &rarr;</button>
+      </div>
+    );
+  }
+  const money = (v) => (v == null ? '—' : `${Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${state?.currency || 'OMR'}`);
+  const tile = (label, value, color) => (
+    <div style={{ background: DS.panel, border: `1px solid ${DS.border}`, borderRadius: DS.r8, padding: '16px 20px', minWidth: 190, flex: 1 }}>
+      <div style={{ fontSize: 9, letterSpacing: '0.16em', color: DS.dim, marginBottom: 8 }}>{label}</div>
+      <div style={{ fontSize: 26, fontWeight: 800, color: color || DS.text, fontFamily: DS.mono }}>{value}</div>
+    </div>
+  );
+  const s = state || {};
+  const insufficient = s.status === 'INSUFFICIENT_EVIDENCE' || s.status === 'NO_STREAM';
+  return (
+    <div>
+      <SectionHeader tag="RT" title="REAL-TIME ECONOMIC INTELLIGENCE (PROVISIONAL)" />
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', margin: '10px 0 18px' }}>
+        {!running
+          ? <button onClick={start} style={{ ...primaryBtn, width: 'auto', padding: '10px 22px' }}>&#9654; Start live stream</button>
+          : <button onClick={stop} style={{ ...primaryBtn, width: 'auto', padding: '10px 22px', background: DS.loss }}>&#9632; Stop</button>}
+        <span style={{ fontSize: 11, color: running ? DS.optimal : DS.sub }}>
+          {running ? `streaming · ${s.n_events || 0} events in window · updates every 3s` : 'idle'}
+        </span>
+      </div>
+      {err && <EmptyMsg>{err}</EmptyMsg>}
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        {tile('LIVE LEAKAGE', insufficient ? '—' : money(s.live_leakage), DS.loss)}
+        {tile('LIVE RECOVERABLE', insufficient ? '—' : money(s.live_recoverable), DS.optimal)}
+        {tile('CONFIDENCE', s.confidence_grade ? `${s.confidence_grade}` : '—', _gradeColor(s.confidence_grade))}
+      </div>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 12 }}>
+        <div style={{ background: DS.panel, border: `1px solid ${DS.border}`, borderRadius: DS.r8, padding: '14px 18px', flex: 2, minWidth: 260 }}>
+          <div style={{ fontSize: 9, letterSpacing: '0.16em', color: DS.dim, marginBottom: 8 }}>TOP ACTION</div>
+          <div style={{ fontSize: 13, color: DS.text }}>
+            {s.top_action
+              ? <><b style={{ color: DS.cyan }}>{s.top_action.decision_type}</b> &mdash; {s.top_action.statement}</>
+              : (insufficient ? 'Awaiting sufficient events…' : 'No material action in the current window.')}
+          </div>
+        </div>
+        <div style={{ background: DS.panel, border: `1px solid ${DS.border}`, borderRadius: DS.r8, padding: '14px 18px', flex: 1, minWidth: 220 }}>
+          <div style={{ fontSize: 9, letterSpacing: '0.16em', color: DS.dim, marginBottom: 8 }}>EVIDENCE STATUS</div>
+          <div style={{ fontSize: 11, color: DS.warning, fontWeight: 700 }}>PROVISIONAL</div>
+          <div style={{ fontSize: 10, color: DS.sub, marginTop: 4 }}>not yet certified by a batch audit</div>
+          {s.evidence_sha256 && <div style={{ fontSize: 10, color: DS.dim, marginTop: 6, fontFamily: DS.mono }}>evidence {String(s.evidence_sha256).slice(0, 16)}…</div>}
+          {s.dqi != null && <div style={{ fontSize: 10, color: DS.dim, marginTop: 2 }}>DQI {(s.dqi * 100).toFixed(1)}% · AC {(s.audit_confidence * 100).toFixed(1)}%</div>}
+        </div>
+      </div>
+      {hist.length > 1 && (
+        <div style={{ marginTop: 14, fontSize: 10, color: DS.dim }}>
+          leakage trace ({hist.length}): {hist.slice(-12).map((x) => Number(x).toFixed(0)).join('  →  ')}
+        </div>
+      )}
+      <div style={{ marginTop: 16, fontSize: 10, color: DS.dim, lineHeight: 1.6 }}>
+        Live states are computed by the SAME certified Layer-2 audit engine used for CSV audits &mdash;
+        no parallel logic. Every value is provisional and evidence-hashed until a certified batch audit confirms it.
+        Raw telemetry is a drill-down only; the surface shows economic meaning.
+      </div>
+    </div>
+  );
+}
+
 function AuditHistoryPanel({ isSignedIn, onLoad, onSignIn, busyId }) {
   const [rows, setRows] = useState(null);
   const [memory, setMemory] = useState(null);
@@ -1872,6 +1978,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
     { id: 'live',      label: 'Live Monitor',                 tag: '⚡' },
     { id: 'cert',      label: 'EDPC Certificate',             tag: '🏆' },
     { id: 'history',   label: 'Audit History',                tag: '\u2630' },
+    { id: 'realtime',  label: 'Real-Time',                    tag: '◉' },
   ];
 
   // ══════════════════════════════════════════════════════════════════
@@ -2057,7 +2164,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {/* Welcome / empty state — only shown when on a data-dependent section
               with no audit loaded. Skipped for live/appendix/govern which work
               independently of audit data. */}
-          {!hasData && !showUpload && !['live', 'appendix', 'govern', 'history'].includes(activeSection) && (
+          {!hasData && !showUpload && !['live', 'appendix', 'govern', 'history', 'realtime'].includes(activeSection) && (
             <div style={{ textAlign: 'center', padding: '70px 40px' }}>
               <div style={{ fontSize: 48, marginBottom: 16 }}>⚡</div>
               <div style={{ color: DS.text, fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Economic Decision Audit™</div>
@@ -2874,6 +2981,13 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
 
           {/* ══ S13: Live Monitor ══════════════════════════════ */}
+          {activeSection === 'realtime' && (
+            <RealTimePanel
+              isSignedIn={!!account?.token}
+              onSignIn={() => { setGateMode('signin'); setGateError(''); setGateOpen(true); }}
+            />
+          )}
+
           {activeSection === 'history' && (
             <AuditHistoryPanel
               isSignedIn={!!account?.token}
