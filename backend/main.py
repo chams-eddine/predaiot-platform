@@ -863,6 +863,11 @@ def _rate_limit_key(request) -> str:
 
 app = FastAPI(title="PREDAIOT Engine")
 
+# Boot marker — captured once at import. Changes iff the process restarts, so
+# restart-recovery can be verified by OBSERVED evidence, not deploy inference.
+_BOOT_ID = secrets.token_hex(8)
+_BOOT_TIME = datetime.utcnow()
+
 if _HAS_SLOWAPI:
     limiter = Limiter(key_func=_rate_limit_key)
     app.state.limiter = limiter
@@ -5012,6 +5017,8 @@ def health_db():
     persistent. Row counts double as a persistence signal across deploys.
     """
     info = {
+        "boot_id": _BOOT_ID,
+        "boot_time": _BOOT_TIME.isoformat() + "Z",
         "dialect": engine.dialect.name,
         "persistent": engine.dialect.name != "sqlite",
         "database_url_configured": bool(os.environ.get("DATABASE_URL")),
