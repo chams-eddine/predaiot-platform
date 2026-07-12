@@ -254,6 +254,34 @@ class DecisionEvent(Base):
     row_hash = Column(String, nullable=False, index=True)
 
 
+class Outcome(Base):
+    """
+    EDA-OUT-1.0 — measured realized impact of an EXECUTED decision. Contains
+    ONLY measured post-execution facts (no assumption, no fabrication). Immutable
+    and append-only: an Outcome is a point-in-time measured fact. Governance
+    (L6) consumes immutable Outcomes and records verification — it never edits
+    them, and the Outcome layer never judges success.
+    """
+    __tablename__ = "outcomes"
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, index=True, nullable=False)
+    decision_pk = Column(Integer, index=True, nullable=False)
+    decision_id = Column(String, index=True, nullable=False)
+    outcome_id = Column(String, index=True, nullable=False)       # EDOUT-<hex>
+    version = Column(String, nullable=False)                      # EDA-OUT-1.0
+    verification_audit_id = Column(Integer, index=True, nullable=True)
+    root_cause_id = Column(String, nullable=True)
+    currency = Column(String, nullable=True)
+    realized_value = Column(Float, nullable=True)
+    outcome_status = Column(String, nullable=False)               # measured | insufficient_evidence
+    confidence_aei = Column(Float, nullable=True)
+    confidence_dqi = Column(Float, nullable=True)
+    evidence_hash = Column(String, index=True, nullable=True)
+    measured_by = Column(Integer, nullable=True)
+    outcome_json = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True, nullable=False)
+
+
 class SecurityAuditLog(Base):
     """
     Tamper-evident security event log (ISO 27001 A.12.4 direction).
@@ -2572,6 +2600,111 @@ async def decision_lifecycle_verify():
         return {"entries": len(rows), "chain_valid": broken_at is None,
                 "broken_at_id": broken_at, "version": eda_metrics.DECISION_LIFECYCLE_VERSION,
                 "head_hash": (rows[-1].row_hash if rows else None)}
+    finally:
+        db.close()
+
+
+# ---- EDA-OUT-1.0 — Outcome (measures realized impact; facts only) ----------
+class OutcomeRequest(BaseModel):
+    verification_audit_id: int
+    note: Optional[str] = None
+
+_OUTCOME_ROLES = {"owner", "admin", "asset_manager", "finance"}
+
+
+def _outcome_dict_from_row(o: "Outcome") -> dict:
+    return {"id": o.id, "outcome_id": o.outcome_id, "version": o.version,
+            "decision_id": o.decision_id, "verification_audit_id": o.verification_audit_id,
+            "root_cause_id": o.root_cause_id, "currency": o.currency,
+            "realized_value": o.realized_value, "outcome_status": o.outcome_status,
+            "confidence": {"audit_confidence": o.confidence_aei, "dqi": o.confidence_dqi},
+            "evidence_hash": o.evidence_hash, "created_at": o.created_at.isoformat() + "Z"}
+
+
+@app.post("/api/v1/decisions/{decision_id}/outcome")
+async def record_outcome(decision_id: str, req: OutcomeRequest,
+                         user: User = Depends(require_user)):
+    """
+    Measure the realized impact of an EXECUTED decision from a post-execution
+    verification audit. Facts only. Immutable. Precondition: the decision's
+    lifecycle state is 'executed'. RBAC: owner/admin/asset_manager/finance.
+    """
+    if user.role not in _OUTCOME_ROLES and user.role != "owner":
+        raise HTTPException(status_code=403, detail={"code": "forbidden",
+                            "message": "Recording an Outcome requires owner/admin/asset_manager/finance."})
+    db = SessionLocal()
+    try:
+        dec = (db.query(Decision)
+               .filter(Decision.decision_id == decision_id, Decision.org_id == user.org_id)
+               .first())
+        if dec is None:
+            raise HTTPException(status_code=404, detail={"code": "decision_not_found",
+                                "message": "No such decision in your organization."})
+        # Layer rule: an Outcome measures POST-execution — decision must be 'executed'.
+        state = _decision_current_state(db, dec.id)
+        if state != "executed":
+            raise HTTPException(status_code=409, detail={"code": "not_executed",
+                                "message": f"Outcome can only be measured for an executed decision (state: {state})."})
+        if req.verification_audit_id == dec.audit_id:
+            raise HTTPException(status_code=422, detail={"code": "same_audit",
+                                "message": "The verification audit must differ from the decision's baseline audit."})
+        base = db.query(AuditRecord).filter(AuditRecord.id == dec.audit_id,
+                                            AuditRecord.org_id == user.org_id).first()
+        ver = db.query(AuditRecord).filter(AuditRecord.id == req.verification_audit_id,
+                                           AuditRecord.org_id == user.org_id).first()
+        if base is None or ver is None:
+            raise HTTPException(status_code=404, detail={"code": "audit_not_found",
+                                "message": "Baseline or verification audit not found in your organization."})
+        decision_obj = json.loads(dec.decision_json)
+        outcome = eda_metrics.build_outcome(
+            decision_obj, json.loads(base.result_json), json.loads(ver.result_json),
+            verification_audit_id=ver.id)
+        row = Outcome(
+            org_id=user.org_id, decision_pk=dec.id, decision_id=decision_id,
+            outcome_id=outcome["outcome_id"], version=outcome["version"],
+            verification_audit_id=ver.id, root_cause_id=outcome["root_cause_id"],
+            currency=outcome["currency"], realized_value=outcome["realized_value"],
+            outcome_status=outcome["outcome_status"],
+            confidence_aei=outcome["confidence"]["audit_confidence"],
+            confidence_dqi=outcome["confidence"]["dqi"],
+            evidence_hash=outcome["evidence_hash"], measured_by=user.id,
+            outcome_json=json.dumps(outcome, default=str))
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        _security_log("outcome.measure", actor=user.email, org_id=user.org_id,
+                      object_ref=f"outcome:{outcome['outcome_id']}|decision:{decision_id}|{outcome['outcome_status']}")
+        return outcome
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/decisions/{decision_id}/outcomes")
+async def decision_outcomes(decision_id: str, user: User = Depends(require_user)):
+    """Immutable Outcomes measured for one decision (org-scoped)."""
+    db = SessionLocal()
+    try:
+        dec = (db.query(Decision)
+               .filter(Decision.decision_id == decision_id, Decision.org_id == user.org_id)
+               .first())
+        if dec is None:
+            raise HTTPException(status_code=404, detail={"code": "decision_not_found",
+                                "message": "No such decision in your organization."})
+        rows = (db.query(Outcome).filter(Outcome.decision_pk == dec.id, Outcome.org_id == user.org_id)
+                .order_by(Outcome.created_at.desc()).all())
+        return {"decision_id": decision_id, "outcomes": [_outcome_dict_from_row(o) for o in rows]}
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/outcomes")
+async def list_outcomes(user: User = Depends(require_user)):
+    """Org-scoped Outcome register (EDA-OUT-1.0), newest first."""
+    db = SessionLocal()
+    try:
+        rows = (db.query(Outcome).filter(Outcome.org_id == user.org_id)
+                .order_by(Outcome.created_at.desc()).limit(200).all())
+        return {"outcomes": [_outcome_dict_from_row(o) for o in rows]}
     finally:
         db.close()
 
@@ -5395,7 +5528,8 @@ def health_db():
             except Exception:
                 info["alembic_version"] = None
             for t in ("users", "organizations", "assets", "certificate_registry",
-                      "audit_records", "economic_states", "decisions", "decision_events"):
+                      "audit_records", "economic_states", "decisions", "decision_events",
+                      "outcomes"):
                 try:
                     info[f"rows_{t}"] = conn.exec_driver_sql(
                         f"SELECT count(*) FROM {t}").scalar()

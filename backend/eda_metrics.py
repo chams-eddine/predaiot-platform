@@ -38,6 +38,7 @@ ECONOMIC_STATE_VERSION = "EDA-ES-1.0"
 DECISION_VERSION       = "EDA-DEC-1.0"
 ACTION_LIBRARY_VERSION = "EDA-DEC-ACTIONS-1.0"
 DECISION_LIFECYCLE_VERSION = "EDA-DEC-LIFE-1.0"
+OUTCOME_VERSION = "EDA-OUT-1.0"
 
 _EPS = 1e-9  # floating-point guard only (not a modelling coefficient)
 
@@ -606,8 +607,132 @@ def lifecycle_role_allowed(role: Optional[str], to_state: str) -> bool:
     return role in LIFECYCLE_ROLE_GATE.get(to_state, set())
 
 
+# ── Outcome (EDA-OUT-1.0) — measures realized impact (facts only) ───────────
+# Sits BETWEEN Decision Lifecycle and Governance. An Outcome contains ONLY
+# measured post-execution facts: the realized value observed by comparing the
+# decision's baseline root-cause loss against the SAME bucket in a real
+# post-execution verification audit. No assumption, no fabrication: a realized
+# value is reported ONLY when the bucket is re-observed in a comparable
+# (same-currency) verification audit; otherwise outcome_status is
+# 'insufficient_evidence' and realized_value is None. The Outcome does NOT
+# judge success — that is Governance, which consumes the immutable Outcome.
+def build_outcome(decision: Dict[str, Any], baseline_audit: Dict[str, Any],
+                  verification_audit: Dict[str, Any], verification_audit_id: Any) -> Dict[str, Any]:
+    """
+    Measure the realized impact of an EXECUTED decision from a post-execution
+    verification audit. Deterministic and reproducible. Facts only.
+    """
+    root_cause_id = decision.get("root_cause_id")
+    evi = decision.get("expected_value_impact") or {}
+    baseline_loss = _num(evi.get("value_at_stake"))
+    baseline_currency = evi.get("currency")
+
+    b_manifest = baseline_audit.get("audit_manifest") or {}
+    v_manifest = verification_audit.get("audit_manifest") or {}
+    b_range = b_manifest.get("timestamp_range") or {}
+    v_range = v_manifest.get("timestamp_range") or {}
+    b_dqm = baseline_audit.get("data_quality_manifest") or {}
+    v_dqm = verification_audit.get("data_quality_manifest") or {}
+    v_currency = verification_audit.get("currency")
+    v_ac = verification_audit.get("audit_confidence") or {}
+    v_dqi = verification_audit.get("data_quality_index") or {}
+
+    # Locate the SAME root-cause bucket in the verification audit.
+    verification_loss = None
+    reobserved = False
+    for rc in (verification_audit.get("root_causes") or []):
+        if _slug(rc.get("category") or "") == root_cause_id:
+            verification_loss = _num(rc.get("loss_usd"))
+            reobserved = True
+            break
+
+    # Determine measurability (facts only — no assumed elimination).
+    same_currency = (baseline_currency is not None and baseline_currency == v_currency)
+    if not same_currency:
+        outcome_status, realized_value, note = "insufficient_evidence", None, \
+            "currency mismatch between baseline and verification audit"
+    elif not reobserved:
+        outcome_status, realized_value, note = "insufficient_evidence", None, \
+            "root-cause bucket not re-observed in the verification audit — realized value not measurable"
+    elif baseline_loss is None or verification_loss is None:
+        outcome_status, realized_value, note = "insufficient_evidence", None, \
+            "baseline or verification loss unavailable"
+    else:
+        realized_value = round(baseline_loss - verification_loss, 6)   # measured reduction
+        outcome_status, note = "measured", \
+            "realized value = baseline bucket loss − verification bucket loss (same root cause)"
+
+    outcome_id = "EDOUT-" + hashlib.sha256(
+        f"{decision.get('decision_id')}|{verification_audit_id}|{OUTCOME_VERSION}".encode()
+    ).hexdigest()[:16].upper()
+
+    baseline_reference = {
+        "decision_id": decision.get("decision_id"),
+        "root_cause_id": root_cause_id,
+        "baseline_value_at_stake": baseline_loss,
+        "baseline_currency": baseline_currency,
+        "baseline_dataset_sha256": b_manifest.get("input_sha256"),
+        "baseline_window": {"start": b_range.get("first"), "end": b_range.get("last"),
+                            "span_hours": _num(b_dqm.get("span_hours"))},
+        "decision_evidence_sha256": (decision.get("evidence_reference") or {}).get("decision_evidence_sha256"),
+    }
+    verification_window = {
+        "start": v_range.get("first"), "end": v_range.get("last"),
+        "span_hours": _num(v_dqm.get("span_hours")),
+        "verification_audit_id": verification_audit_id,
+        "verification_dataset_sha256": v_manifest.get("input_sha256"),
+    }
+    confidence = {
+        "audit_confidence": v_ac.get("value"), "audit_confidence_grade": v_ac.get("grade"),
+        "dqi": v_dqi.get("value"),
+        "basis": "measured on the verification audit (EDA-AC-1.0 / EDA-DQI-1.0); not a prediction",
+    }
+    # evidence hash anchors the outcome to both audits + the decision chain.
+    chain = _json.dumps({
+        "outcome_id": outcome_id, "version": OUTCOME_VERSION,
+        "decision_id": decision.get("decision_id"),
+        "baseline_sha": b_manifest.get("input_sha256"),
+        "verification_sha": v_manifest.get("input_sha256"),
+        "realized_value": realized_value, "outcome_status": outcome_status,
+    }, sort_keys=True, separators=(",", ":"), default=str).encode()
+    evidence_hash = hashlib.sha256(chain).hexdigest()
+
+    return {
+        "outcome_id": outcome_id, "version": OUTCOME_VERSION,
+        "decision_id": decision.get("decision_id"), "root_cause_id": root_cause_id,
+        "currency": baseline_currency,
+        "realized_value": realized_value,
+        "verification_bucket_loss": verification_loss,
+        "root_cause_reobserved": reobserved,
+        "baseline_reference": baseline_reference,
+        "verification_window": verification_window,
+        "confidence": confidence,
+        "evidence_hash": evidence_hash,
+        "outcome_status": outcome_status,          # measured | insufficient_evidence
+        "measurement_note": note,
+    }
+
+
 # ── Self-describing metric registry (future EDA Standard v1.0) ──────────────
 METRIC_REGISTRY = {
+    "Outcome": {
+        "name": "Outcome (realized-impact measurement)", "version": OUTCOME_VERSION,
+        "equation": "realized_value = baseline root-cause loss − same-bucket loss in a "
+                    "post-execution verification audit (same currency); else insufficient_evidence.",
+        "inputs": "an executed Decision (EDA-DEC-1.0), its baseline audit, a post-execution "
+                  "verification audit.",
+        "outputs": "immutable measured facts: realized_value, baseline_reference, "
+                   "verification_window, confidence, evidence_hash, outcome_status.",
+        "dependencies": ["DecisionIntelligence", "DecisionLifecycle", "EconomicAudit"],
+        "validation_rules": [
+            "Facts only — realized_value reported ONLY when the root-cause bucket is "
+            "re-observed in a same-currency verification audit; else None + insufficient_evidence.",
+            "No assumed elimination, no fabrication, no forward projection.",
+            "Confidence is the measured verification-audit confidence, not a prediction.",
+            "Immutable: an Outcome is a point-in-time measured fact (append-only).",
+            "The Outcome does NOT judge success — Governance verifies the measured Outcome.",
+        ],
+    },
     "DecisionLifecycle": {
         "name": "Decision Lifecycle (execution tracking)", "version": DECISION_LIFECYCLE_VERSION,
         "equation": "deterministic state machine over states "

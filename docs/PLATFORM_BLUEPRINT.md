@@ -163,6 +163,29 @@ and chains into the §5a hash chain). Endpoints: `POST /decisions/{id}/transitio
 Governance (EDA-GOV-1.0) consumes only `executed` decisions to verify realized
 value — it does not manage transitions.
 
+### 4d. Outcome — FROZEN contract (EDA-OUT-1.0, Founder-ratified 2026-07-12)
+
+A dedicated layer BETWEEN Decision Lifecycle and Governance. The four-layer
+separation of concerns is now:
+
+    Decision Intelligence proposes → Lifecycle tracks execution → Outcome measures realized impact → Governance verifies the measured Outcome
+
+An **Outcome** contains ONLY measured post-execution facts, derived from a real
+post-execution **verification audit** compared to the decision's baseline:
+`realized_value` (= baseline root-cause loss − same-bucket loss in the
+verification audit; measured, same-currency only), `baseline_reference`,
+`verification_window`, `confidence` (the verification audit's MEASURED
+AC/DQI — not a prediction), `evidence_hash` (anchors the outcome to both
+audits + the decision's §5a hash), `outcome_status` ∈ {measured,
+insufficient_evidence}. **No assumed elimination, no fabrication, no forward
+projection** — if the root-cause bucket is not re-observed in a comparable
+verification audit, `realized_value` is null and status is
+`insufficient_evidence`. Outcomes are **immutable** (append-only). Precondition:
+the decision must be in lifecycle state `executed`. The Outcome layer NEVER
+judges success — **Governance (EDA-GOV-1.0) consumes immutable Outcomes and
+records the verification verdict.** Endpoints: `POST
+/decisions/{id}/outcome`, `GET /decisions/{id}/outcomes`, `GET /outcomes`.
+
 ### 5a. Evidence Chain — extended upward (MOAT upgrade)
 
 Today the chain covers dataset → audit → certificate. It is extended to the
