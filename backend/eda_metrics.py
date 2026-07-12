@@ -40,6 +40,7 @@ ACTION_LIBRARY_VERSION = "EDA-DEC-ACTIONS-1.0"
 DECISION_LIFECYCLE_VERSION = "EDA-DEC-LIFE-1.0"
 OUTCOME_VERSION = "EDA-OUT-1.0"
 GOVERNANCE_VERSION = "EDA-GOV-1.0"
+RECONCILIATION_VERSION = "EDA-RECON-1.0"
 
 _EPS = 1e-9  # floating-point guard only (not a modelling coefficient)
 
@@ -780,8 +781,107 @@ def build_governance_record(outcome: Dict[str, Any], audit_ids: List[Any],
     }
 
 
+# ── Reconciliation (EDA-RECON-1.0) — the certification bridge ────────────────
+# Binds a PROVISIONAL live Economic State to a CERTIFIED batch-audit Economic
+# State, computing and FULLY DISCLOSING the variance. It performs NO economic
+# recomputation (it only compares already-computed values) and NO silent
+# adjustment. Certified is authoritative; the provisional live state remains
+# immutable historical evidence. Variance is informational — NOT a pass/fail
+# gate, NO tolerance threshold.
+RECONCILIATION_STATUSES = ("reconciled", "incompatible")
+
+
+def _variance_entry(prov, cert):
+    p, c = _num(prov), _num(cert)
+    absolute = round(p - c, 6) if (p is not None and c is not None) else None
+    rel = (round(absolute / abs(c) * 100, 4) if (absolute is not None and c not in (None, 0)) else None)
+    return {"provisional_value": p, "certified_value": c, "absolute": absolute, "relative_pct": rel}
+
+
+def build_reconciliation(live_state: Dict[str, Any], certified_audit: Dict[str, Any],
+                         certified_es: Dict[str, Any], live_state_id: Any,
+                         certified_audit_id: Any, stream_id: str,
+                         verifier_identity: Dict[str, Any], at_iso: str) -> Dict[str, Any]:
+    """
+    Build an immutable EDA-RECON-1.0 reconciliation. Deterministic; compares
+    the provisional live state to the certified audit's Economic State.
+    """
+    prov_ccy = live_state.get("currency")
+    cert_ccy = certified_audit.get("currency")
+    same_ccy = prov_ccy is not None and prov_ccy == cert_ccy
+    prov_leak = _num(live_state.get("live_leakage"))
+    cert_leak = _num(certified_audit.get("total_gap_usd"))
+    incompatible = (not same_ccy) or (prov_leak is None) or (cert_leak is None) \
+        or (live_state.get("provisional") is not True)
+    status = "incompatible" if incompatible else "reconciled"
+
+    if incompatible:
+        variance = None
+        explanation = ("Cannot reconcile: " +
+                       ("currency mismatch (provisional %s vs certified %s)" % (prov_ccy, cert_ccy)
+                        if not same_ccy else "insufficient provisional/certified evidence"))
+    else:
+        primary = _variance_entry(prov_leak, cert_leak)
+        primary.update({"metric": "live_leakage", "basis": "economic_gap", "currency": prov_ccy})
+        secondary = _variance_entry(live_state.get("live_recoverable"),
+                                    certified_es.get("recoverable_value"))
+        secondary.update({"metric": "recoverable_value", "currency": prov_ccy})
+        context = {"metric": "economic_health",
+                   "provisional_value": _num(live_state.get("economic_health")),
+                   "certified_value": _num(certified_es.get("economic_health"))}
+        variance = {"primary": primary, "secondary": secondary, "context": context}
+        explanation = (
+            f"Provisional covers a rolling live window ({live_state.get('n_events')} events); "
+            "certified covers the full audited period. The disclosed variance reflects scope and "
+            "data-quality differences — it is informational, applies no adjustment, and does not "
+            "alter the certified state, which is authoritative.")
+
+    prov_hash = live_state.get("evidence_sha256")
+    cert_hash = (certified_audit.get("audit_manifest") or {}).get("input_sha256")
+    recon_id = "EDRECON-" + hashlib.sha256(
+        f"{live_state_id}|{certified_audit_id}|{RECONCILIATION_VERSION}".encode()).hexdigest()[:16].upper()
+    content = _json.dumps({
+        "reconciliation_id": recon_id, "version": RECONCILIATION_VERSION,
+        "live_state_id": live_state_id, "certified_audit_id": certified_audit_id,
+        "provisional_hash": prov_hash, "certified_hash": cert_hash,
+        "status": status,
+        "variance_primary_abs": (variance["primary"]["absolute"] if variance else None),
+    }, sort_keys=True, separators=(",", ":"), default=str).encode()
+    evidence_hash = hashlib.sha256(content).hexdigest()
+
+    return {
+        "reconciliation_id": recon_id, "version": RECONCILIATION_VERSION,
+        "stream_id": stream_id,
+        "live_state_id": live_state_id, "certified_audit_id": certified_audit_id,
+        "provisional_hash": prov_hash, "certified_hash": cert_hash,
+        "reconciliation_timestamp": at_iso,
+        "variance": variance, "variance_explanation": explanation,
+        "reconciliation_status": status,
+        "authority": "certified",                        # certified is truth
+        "verifier_identity": verifier_identity,          # immutable
+        "evidence_hash": evidence_hash,
+    }
+
+
 # ── Self-describing metric registry (future EDA Standard v1.0) ──────────────
 METRIC_REGISTRY = {
+    "Reconciliation": {
+        "name": "Live Reconciliation (certification bridge)", "version": RECONCILIATION_VERSION,
+        "equation": "variance = provisional − certified for live_leakage (basis economic_gap), "
+                    "recoverable_value, economic_health; disclosed, no tolerance, no adjustment. "
+                    "reconciliation_id = hash(live_state_id | certified_audit_id | version).",
+        "inputs": "a provisional live Economic State + a certified batch audit's Economic State.",
+        "outputs": "an immutable reconciliation binding provisional↔certified with disclosed variance; "
+                   "certified is authoritative, provisional retained as historical evidence.",
+        "dependencies": ["EconomicState", "EconomicAudit"],
+        "validation_rules": [
+            "No economic recomputation — compares already-computed values only.",
+            "Variance is informational and disclosed — not a pass/fail gate, no tolerance threshold.",
+            "No silent adjustment — certified numbers are never altered; both hashes are on record.",
+            "Certified Economic State is authoritative; provisional live states are immutable history.",
+            "Append-only; deterministic; org-scoped.",
+        ],
+    },
     "Governance": {
         "name": "Governance Record (immutable verification artifact)", "version": GOVERNANCE_VERSION,
         "equation": "an append-only record referencing Outcome(s) + audit(s) with a "

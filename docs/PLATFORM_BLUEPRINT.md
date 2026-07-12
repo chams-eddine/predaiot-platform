@@ -209,6 +209,28 @@ The Audit → Decision → Execution → Verification loop is now closed. The fu
 Economic Knowledge Layer will consume **Governance Records** (verified
 verdicts), NOT raw Outcomes. (Knowledge Layer NOT built yet — only the artifact.)
 
+### 4f. Live Reconciliation — FROZEN contract (EDA-RECON-1.0, Founder-ratified 2026-07-12)
+
+The **certification bridge**: converts a PROVISIONAL live Economic State to a
+CERTIFIED one **only through a validated batch audit**. An immutable,
+append-only, hash-chained record binding a live state to a certified batch
+audit, with a fully-disclosed variance. Fields: `reconciliation_id`
+(`EDRECON-<hash>`), `live_state_id`, `certified_audit_id`, `provisional_hash`,
+`certified_hash`, `reconciliation_timestamp`, `variance`, `variance_explanation`,
+`reconciliation_status` ∈ {reconciled, incompatible}, `authority`="certified",
+immutable `verifier_identity` {user_id,email,role}, `evidence_hash`.
+
+Variance metrics: **primary** `live_leakage` (basis `economic_gap`),
+**secondary** `recoverable_value`, **context** `economic_health` — disclosed,
+**no tolerance threshold, not a pass/fail gate**. Rules: certified Economic
+State is authoritative; provisional live states remain **immutable historical
+evidence** (never overwritten); **no economic recomputation** (compares
+already-computed values); **no silent adjustment**; append-only; deterministic;
+org-scoped. RBAC owner/admin/asset_manager. Endpoints:
+`POST /live/{id}/reconcile`, `GET /live/{id}/reconciliations`,
+`GET /live/{id}/certified-state`, `GET /reconciliations`,
+public `GET /reconciliations/verify`.
+
 ### 5a. Evidence Chain — extended upward (MOAT upgrade)
 
 Today the chain covers dataset → audit → certificate. It is extended to the

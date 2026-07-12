@@ -353,6 +353,38 @@ class LiveState(Base):
     state_json = Column(String, nullable=False)
 
 
+class Reconciliation(Base):
+    """
+    EDA-RECON-1.0 — the certification bridge. An immutable, append-only record
+    binding a PROVISIONAL live Economic State to a CERTIFIED batch-audit
+    Economic State with a fully-disclosed variance. Certified is authoritative;
+    the provisional live state is retained as immutable historical evidence. No
+    economic recomputation, no silent adjustment. Hash-chained (tamper-evident).
+    """
+    __tablename__ = "reconciliations"
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, index=True, nullable=False)
+    reconciliation_id = Column(String, index=True, nullable=False)   # EDRECON-<hex>
+    version = Column(String, nullable=False)
+    stream_id = Column(String, index=True, nullable=False)
+    live_state_id = Column(Integer, index=True, nullable=True)
+    certified_audit_id = Column(Integer, index=True, nullable=True)
+    provisional_hash = Column(String, nullable=True)
+    certified_hash = Column(String, nullable=True)
+    variance_leakage_abs = Column(Float, nullable=True)
+    variance_leakage_pct = Column(Float, nullable=True)
+    currency = Column(String, nullable=True)
+    reconciliation_status = Column(String, nullable=False)
+    verifier_user_id = Column(Integer, nullable=True)
+    verifier_email = Column(String, nullable=True)
+    verifier_role = Column(String, nullable=True)
+    evidence_hash = Column(String, index=True, nullable=True)
+    at = Column(DateTime, default=datetime.utcnow, index=True, nullable=False)
+    prev_hash = Column(String, nullable=False)
+    row_hash = Column(String, nullable=False, index=True)
+    reconciliation_json = Column(String, nullable=False)
+
+
 class SecurityAuditLog(Base):
     """
     Tamper-evident security event log (ISO 27001 A.12.4 direction).
@@ -3081,6 +3113,148 @@ async def live_state(stream_id: str, user: User = Depends(require_trial_or_user)
             return {"stream_id": stream_id, "status": "NO_STREAM",
                     "message": "No live state yet for this stream."}
         return json.loads(ls.state_json)
+    finally:
+        db.close()
+
+
+# ---- EDA-RECON-1.0 — Live Reconciliation (certification bridge) -------------
+class ReconcileRequest(BaseModel):
+    certified_audit_id: int
+    note: Optional[str] = None
+
+_RECON_ROLES = {"owner", "admin", "asset_manager"}
+
+
+def _recon_dict(r: "Reconciliation") -> dict:
+    return json.loads(r.reconciliation_json)
+
+
+@app.post("/api/v1/live/{stream_id}/reconcile")
+async def reconcile_live(stream_id: str, req: ReconcileRequest,
+                         user: User = Depends(require_user)):
+    """
+    Certification bridge: bind the stream's provisional live Economic State to a
+    CERTIFIED batch audit, disclosing the variance. Append-only; no
+    recomputation; certified stays authoritative. RBAC owner/admin/asset_manager.
+    """
+    if user.role != "owner" and user.role not in _RECON_ROLES:
+        raise HTTPException(status_code=403, detail={"code": "forbidden",
+                            "message": "Reconciliation requires owner/admin/asset_manager."})
+    db = SessionLocal()
+    try:
+        ls = db.query(LiveState).filter(LiveState.org_id == user.org_id,
+                                        LiveState.stream_id == stream_id).first()
+        if ls is None:
+            raise HTTPException(status_code=404, detail={"code": "no_live_state",
+                                "message": "No live state for this stream."})
+        cert = db.query(AuditRecord).filter(AuditRecord.id == req.certified_audit_id,
+                                            AuditRecord.org_id == user.org_id).first()
+        if cert is None:
+            raise HTTPException(status_code=404, detail={"code": "audit_not_found",
+                                "message": "Certified audit not found in your organization."})
+        live_state = json.loads(ls.state_json)
+        certified_audit = json.loads(cert.result_json)
+        certified_es = eda_metrics.build_economic_state(certified_audit)
+        at = datetime.utcnow()
+        verifier = {"user_id": user.id, "email": user.email, "role": user.role}
+        rec = eda_metrics.build_reconciliation(
+            live_state, certified_audit, certified_es,
+            live_state_id=ls.id, certified_audit_id=cert.id, stream_id=stream_id,
+            verifier_identity=verifier, at_iso=at.isoformat() + "Z")
+        # Append-only + hash chain (tamper-evident) over material content.
+        last = db.query(Reconciliation).order_by(Reconciliation.id.desc()).first()
+        prev = last.row_hash if last else "GENESIS"
+        vp = (rec["variance"]["primary"] if rec.get("variance") else {})
+        body = (f"{prev}|{user.org_id}|{rec['reconciliation_id']}|{ls.id}|{cert.id}|"
+                f"{rec['reconciliation_status']}|{vp.get('absolute')}|{rec['evidence_hash']}|{at.isoformat()}")
+        row_hash = _hashlib.sha256(body.encode()).hexdigest()
+        db.add(Reconciliation(
+            org_id=user.org_id, reconciliation_id=rec["reconciliation_id"], version=rec["version"],
+            stream_id=stream_id, live_state_id=ls.id, certified_audit_id=cert.id,
+            provisional_hash=rec["provisional_hash"], certified_hash=rec["certified_hash"],
+            variance_leakage_abs=(vp.get("absolute")), variance_leakage_pct=(vp.get("relative_pct")),
+            currency=live_state.get("currency"), reconciliation_status=rec["reconciliation_status"],
+            verifier_user_id=user.id, verifier_email=user.email, verifier_role=user.role,
+            evidence_hash=rec["evidence_hash"], at=at, prev_hash=prev, row_hash=row_hash,
+            reconciliation_json=json.dumps(rec, default=str)))
+        db.commit()
+        _security_log("live.reconcile", actor=user.email, org_id=user.org_id,
+                      object_ref=f"recon:{rec['reconciliation_id']}|stream:{stream_id}|{rec['reconciliation_status']}")
+        return rec
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/live/{stream_id}/reconciliations")
+async def stream_reconciliations(stream_id: str, user: User = Depends(require_user)):
+    """Immutable reconciliation history for a stream (org-scoped)."""
+    db = SessionLocal()
+    try:
+        rows = (db.query(Reconciliation)
+                .filter(Reconciliation.stream_id == stream_id, Reconciliation.org_id == user.org_id)
+                .order_by(Reconciliation.id.desc()).all())
+        return {"stream_id": stream_id, "reconciliations": [_recon_dict(r) for r in rows]}
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/live/{stream_id}/certified-state")
+async def stream_certified_state(stream_id: str, user: User = Depends(require_user)):
+    """
+    The AUTHORITATIVE (certified) Economic State for a stream = the certified
+    audit from the latest reconciliation. Returns provisional=false. If never
+    reconciled, the stream has no certified authority yet.
+    """
+    db = SessionLocal()
+    try:
+        last = (db.query(Reconciliation)
+                .filter(Reconciliation.stream_id == stream_id, Reconciliation.org_id == user.org_id)
+                .order_by(Reconciliation.id.desc()).first())
+        if last is None:
+            return {"stream_id": stream_id, "status": "NOT_RECONCILED",
+                    "message": "No certified authority yet — run a batch audit and reconcile."}
+        cert = db.query(AuditRecord).filter(AuditRecord.id == last.certified_audit_id,
+                                            AuditRecord.org_id == user.org_id).first()
+        es = eda_metrics.build_economic_state(json.loads(cert.result_json)) if cert else None
+        return {"stream_id": stream_id, "authority": "certified", "provisional": False,
+                "certified_audit_id": last.certified_audit_id,
+                "reconciliation_id": last.reconciliation_id,
+                "economic_state": es}
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/reconciliations")
+async def list_reconciliations(user: User = Depends(require_user)):
+    """Org-scoped reconciliation register (EDA-RECON-1.0), newest first."""
+    db = SessionLocal()
+    try:
+        rows = (db.query(Reconciliation).filter(Reconciliation.org_id == user.org_id)
+                .order_by(Reconciliation.id.desc()).limit(200).all())
+        return {"reconciliations": [_recon_dict(r) for r in rows]}
+    finally:
+        db.close()
+
+
+@app.get("/api/v1/reconciliations/verify")
+async def reconciliations_verify():
+    """Public, content-free tamper check of the reconciliation hash chain."""
+    db = SessionLocal()
+    try:
+        rows = db.query(Reconciliation).order_by(Reconciliation.id.asc()).all()
+        prev = "GENESIS"
+        broken_at = None
+        for r in rows:
+            body = (f"{r.prev_hash}|{r.org_id}|{r.reconciliation_id}|{r.live_state_id}|"
+                    f"{r.certified_audit_id}|{r.reconciliation_status}|{r.variance_leakage_abs}|"
+                    f"{r.evidence_hash}|{r.at.isoformat()}")
+            if r.prev_hash != prev or _hashlib.sha256(body.encode()).hexdigest() != r.row_hash:
+                broken_at = r.id
+                break
+            prev = r.row_hash
+        return {"entries": len(rows), "chain_valid": broken_at is None,
+                "broken_at_id": broken_at, "version": eda_metrics.RECONCILIATION_VERSION,
+                "head_hash": (rows[-1].row_hash if rows else None)}
     finally:
         db.close()
 
@@ -5905,7 +6079,8 @@ def health_db():
                 info["alembic_version"] = None
             for t in ("users", "organizations", "assets", "certificate_registry",
                       "audit_records", "economic_states", "decisions", "decision_events",
-                      "outcomes", "governance_records", "live_events", "live_states"):
+                      "outcomes", "governance_records", "live_events", "live_states",
+                      "reconciliations"):
                 try:
                     info[f"rows_{t}"] = conn.exec_driver_sql(
                         f"SELECT count(*) FROM {t}").scalar()
