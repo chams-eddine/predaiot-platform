@@ -1,8 +1,10 @@
 # PREDAIOT Workspace Specification — WS-1.0
 
 **Status:** PROPOSED — awaiting ratification.
-**Position:** Normative annex of `PRODUCT_SPEC.md` (PREDAIOT-FE-1.0, §2
-SPEC-WS). Ratification of the Product Specification ratifies this annex.
+**Position:** Normative annex of `PRODUCT_SPEC.md` (PREDAIOT-FE-2.0,
+Part I, SPEC-WS). Ratification of SPEC-WS ratifies this annex (GOV-RP
+rule 2). Interim note: the 1720px executive cap referenced in §1.1 is
+formally superseded and scheduled for removal in Phase 1 migration.
 **Scope:** Every screen in the PREDAIOT frontend. No page may define its own
 layout architecture after ratification; all pages compose this workspace.
 **Authority:** Subordinate to PLATFORM_BLUEPRINT.md and the frozen backend.

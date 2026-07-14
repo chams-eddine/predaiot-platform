@@ -1,763 +1,1908 @@
-# PREDAIOT Frontend Product Specification — PREDAIOT-FE-1.0
+# PREDAIOT Frontend Product Specification — PREDAIOT-FE-2.0
 
-**Status:** PROPOSED — awaiting ratification.
-**Class:** Governing architectural contract. The frontend equivalent of the
-certified EDA architecture. No frontend implementation may contradict this
-document; deviations require a ratified amendment first.
-**Authority chain:** PLATFORM_BLUEPRINT.md → this document → implementation.
-**Backend:** FROZEN. Every specification below consumes existing production
-APIs only. No spec may require backend change beyond what UI rendering
-strictly demands (per the standing mission constraints).
+**Status:** PROPOSED — awaiting ratification. Supersedes the FE-1.0 proposal.
+**Class:** Governing architectural contract for the entire PREDAIOT user
+experience. The frontend equivalent of the certified EDA architecture. Every
+screen, component, dashboard, animation, instrument, interaction, and pixel
+must trace to this document. Deviations require a ratified amendment first.
+**Authority chain:** PLATFORM_BLUEPRINT.md → this document →
+`WORKSPACE_SPEC.md` (normative annex of SPEC-WS) → implementation.
+**Backend:** FROZEN. Every specification consumes existing production APIs
+only. No spec may invent endpoints or alter contracts.
+**Identity Law:** PREDAIOT is an **Economic Decision Intelligence Platform**.
+It is NOT a monitoring platform, NOT SCADA, NOT BI, NOT analytics software,
+NOT an IoT dashboard. Every screen must reinforce this identity; any surface
+that reads as monitoring/BI is non-compliant by definition.
+
+## Specification index
+
+| Part | ID | Specification | Status |
+|------|----|---------------|--------|
+| I — Foundation | SPEC-PR | Product Principles | PROPOSED |
+| I | SPEC-ID | PREDAIOT Visual Identity | PROPOSED |
+| I | SPEC-DL | Executive Design Language | PROPOSED |
+| I | SPEC-DS | Design System | PROPOSED |
+| I | SPEC-WS | Workspace System (annex: WORKSPACE_SPEC.md) | PROPOSED |
+| I | SPEC-IA | Information Architecture | PROPOSED |
+| II — Executive Experience | SPEC-EX | Executive Experience | PROPOSED |
+| II | SPEC-RB | Role-Based Experience | PROPOSED |
+| II | SPEC-ST | Narrative Experience | PROPOSED |
+| II | SPEC-AI | AI Interaction Language | PROPOSED |
+| III — Visualization | SPEC-DV | Data Visualization | PROPOSED |
+| III | SPEC-CH | Decision Instrument Library | PROPOSED |
+| III | SPEC-MO | Motion Language | PROPOSED |
+| III | SPEC-LX | Industrial Luxury Language | PROPOSED |
+| IV — Product | SPEC-CO | Component Registry | PROPOSED |
+| IV | SPEC-NV | Navigation | PROPOSED |
+| IV | SPEC-DB | Dashboard Manifest | PROPOSED |
+| IV | SPEC-IX | Interaction Language | PROPOSED |
+| IV | SPEC-SX | Security UX | PROPOSED |
+| IV | SPEC-AX | Accessibility | PROPOSED |
+| IV | SPEC-RS | Responsive System | PROPOSED |
+| IV | SPEC-PF | Performance | PROPOSED |
+| V — Governance | GOV-CM | Compliance Matrix | PROPOSED |
+| V | GOV-DR | Design Registry | PROPOSED |
+| V | GOV-AL | Amendment Log | PROPOSED |
+| V | GOV-AC | Acceptance Process | PROPOSED |
+| V | GOV-RP | Ratification Procedure | PROPOSED |
+
+Every specification defines: **Purpose · Vision · Responsibilities ·
+Boundaries · Inputs · Outputs · Rules · Acceptance Criteria · Non-Goals ·
+Future Extensions · Dependencies · Examples · Failure Cases · Governance
+Rules.**
+
+---
+---
+
+# PART I — FOUNDATION
 
 ---
 
-# 0. Governing Principles
+# SPEC-PR — Product Principles 1.0
 
-Every UI decision must be traceable to at least one principle. **If an
-element cannot cite a principle, it does not exist.** Implementation reviews
-reject any element without a traceable justification.
+**Purpose.** Establish the ten governing principles, the Identity Law, and
+the existence tests from which every other specification and every UI
+decision derives. This is the constitutional layer.
+
+**Vision.** A product where nothing is arbitrary: any pixel, at any time,
+can state why it exists, which executive question it serves, and which
+principle authorizes it.
+
+**Responsibilities.**
+- Define and number the principles (P1–P10) cited by all specs and reviews:
 
 | ID | Principle | Meaning | Test |
 |----|-----------|---------|------|
-| **P1** | Executive Clarity | The screen answers an executive question before it does anything else | A named question is answered in < 5 seconds |
-| **P2** | Economic Truth | Every number originates in the frozen audit engine; nothing fabricated, projected, or smoothed | Each figure traces to an API field; provisional vs certified always disclosed |
-| **P3** | Decision Confidence | Uncertainty, evidence, and grades are visible and honest | Grades/hashes/badges present; absent data renders as absent, never invented |
-| **P4** | Visual Hierarchy | One primary element per view; money > context > chrome | Squint test: the money number wins |
-| **P5** | Institutional Trust | Quiet, premium, consistent; never noisy, never template-like | No rainbow palettes, no decoration without meaning |
-| **P6** | Operational Efficiency | Fast to load, fast to read, fast to act | Budgets in SPEC-PF met; primary action reachable in ≤ 2 interactions |
+| **P1** | Executive Clarity | The screen answers an executive question before anything else | The question is answered in < 5 seconds |
+| **P2** | Economic Truth | Every figure originates in the frozen audit engine; nothing fabricated, projected, or smoothed | Each figure traces to a named API field; basis always disclosed |
+| **P3** | Decision Confidence | Uncertainty, grades, and evidence are visible and honest | Absent data renders as absent; INDETERMINATE is a legitimate state |
+| **P4** | Institutional Trust | Quiet, consistent, premium — the interface behaves like a financial institution | No noise, no rainbow, no template look |
+| **P5** | Operational Efficiency | Fast to load, fast to read, fast to act | SPEC-PF budgets met; primary action ≤ 2 interactions away |
+| **P6** | Narrative Intelligence | Screens tell the economic story in briefing order, never as widget collections | The six narrative beats (SPEC-ST) are present and ordered |
+| **P7** | Evidence First | Every claim sits within reach of its proof | Hash, badge, grade, or chain link adjacent to every economic figure |
+| **P8** | Industrial Luxury | Expensive, calm, timeless — never flashy, gaming, cyberpunk, or consumer SaaS | SPEC-LX material rules hold |
+| **P9** | AI Transparency | Machine recommendations expose reasoning, confidence, assumptions, and alternatives | No bare recommendation ever renders (SPEC-AI anatomy) |
+| **P10** | Visual Calm | Stillness is the default; motion and color are meaningful events | Nothing moves or saturates without an economic reason |
 
-## 0.1 Governance & amendment process
+- Enforce the **Existence Test**: every UI element must answer an executive
+  question. If it does not answer a question, it must not exist.
+- Enforce the **Five Purposes Test**: every visual element must declare at
+  least one of — economic purpose, narrative purpose, decision purpose,
+  evidence purpose, executive purpose. Reviews record which.
+- Hold the **Identity Law** (header of this document) over all design work.
 
-1. Specifications are versioned (`SPEC-XX x.y`) and append-only after
-   ratification, exactly like EDA metric contracts.
-2. Changes happen through **ratified amendments** recorded in §17 of this
-   document (id, date, what changed, why).
-3. Every implementation change must be able to state which SPEC-IDs and
-   principles it satisfies. A change that satisfies none is rejected.
-4. A screen ships only when it passes its spec's Acceptance Criteria and the
-   global compliance checklist (§16).
+**Boundaries.** Defines *why*; never *how* (identity → SPEC-ID, hierarchy →
+SPEC-DL, mechanics → Parts III–IV). Principles do not override the frozen
+backend or PLATFORM_BLUEPRINT.md.
 
-## 0.2 Specification index
+**Inputs.** The ratified mission; the EDA governance philosophy; the design
+references below (philosophy only — never copied): Bloomberg Terminal
+(density with authority), Palantir Foundry (evidence-linked analysis),
+Stripe Dashboard (typographic restraint), Apple Vision Pro (material calm),
+Tesla Energy (quiet telemetry), Formula 1 telemetry (glanceable precision),
+TradingView (financial time literacy), Linear (disciplined minimalism),
+Bridgewater reporting (narrative machine-briefings), McKinsey executive
+reports (pyramid answers first), BlackRock Aladdin (portfolio risk gravity).
+The result must be uniquely PREDAIOT.
 
-| ID | Specification | Version | Status |
-|----|---------------|---------|--------|
-| SPEC-DS | Design System | 1.0 | PROPOSED |
-| SPEC-WS | Workspace | 1.0 | PROPOSED (normative annex: `WORKSPACE_SPEC.md`) |
-| SPEC-IA | Information Architecture | 1.0 | PROPOSED |
-| SPEC-EX | Executive Experience | 1.0 | PROPOSED |
-| SPEC-RB | Role-Based Experience | 1.0 | PROPOSED |
-| SPEC-DV | Data Visualization | 1.0 | PROPOSED |
-| SPEC-MO | Motion | 1.0 | PROPOSED |
-| SPEC-AX | Accessibility | 1.0 | PROPOSED |
-| SPEC-RS | Responsive | 1.0 | PROPOSED |
-| SPEC-PF | Performance | 1.0 | PROPOSED |
-| SPEC-SX | Security UX | 1.0 | PROPOSED |
-| SPEC-IX | Interaction | 1.0 | PROPOSED |
-| SPEC-CO | Component | 1.0 | PROPOSED |
-| SPEC-NV | Navigation | 1.0 | PROPOSED |
-| SPEC-DB | Dashboard | 1.0 | PROPOSED |
-
----
-
-# 1. SPEC-DS — Design System Specification 1.0
-**Principles:** P4, P5
-
-**Purpose.** One visual language for the entire product: color, typography,
-spacing, radii, elevation, and motion tokens, with economic semantics baked
-into color.
-
-**Scope.** `src/design/tokens.css` (CSS variables `--pds-*`, dark theme +
-light scaffold), `src/design/ds.js` (JS mirror + semantic resolvers),
-`src/design/components.jsx` (primitives). The legacy `DS` object in App.jsx
-is a **bridge** whose hex values mirror the tokens until migration removes it.
-
-**Responsibilities.**
-- Define every color, type, spacing, radius, shadow, and duration token.
-- Bind color to economic meaning: loss `#FF5C7A`, recover `#2FD69B`,
-  warn `#F3B24C`, accent teal `#34E0C8`, grades A–E, decision types,
-  verified/provisional/seal.
-- Provide the semantic resolvers (`gradeColor`, `decisionColor`,
-  `severityColor`, `riskColor`) and institutional formatters
-  (`fmtMoney` compact B/M/K, `fmtPct`, en-US digit grouping).
-
-**Boundaries.** Does not define layout (SPEC-WS), chart construction
-(SPEC-DV), motion choreography (SPEC-MO), or component behavior (SPEC-CO/IX).
-
-**Inputs.** Brand identity; principles P4/P5; contrast requirements from
-SPEC-AX.
-
-**Outputs.** Token files; primitive components; the palette bridge for legacy
-inline styles.
+**Outputs.** The principle registry (P1–P10); the two existence tests; the
+citation vocabulary used in manifests, reviews, and the Compliance Matrix.
 
 **Rules.**
-1. No hardcoded color, font, spacing, or radius outside token definitions.
-2. Color carries meaning first, decoration never: a red element means
-   economic loss or danger — nothing else.
-3. Typography: Inter (UI), JetBrains Mono (numerals, hashes, evidence).
-   Money and hashes are always mono (`.pds-num`).
-4. Spacing is the 8pt scale; radii from the `--pds-r-*` set only.
-5. Dark theme is primary; the light scaffold keeps identical semantic names.
+1. Every spec section, dashboard manifest, and component registration cites
+   ≥ 1 principle by ID.
+2. Conflicts resolve by precedence: P2 Economic Truth > P7 Evidence First >
+   P1 Executive Clarity > P3 Decision Confidence > all others. Truth is
+   never sacrificed for clarity or beauty.
+3. No decorative widgets. No meaningless KPIs. No cosmetic charts. An
+   element failing the Existence Test is removed regardless of effort spent.
+4. Reference products are studied for philosophy; visual copying of any
+   reference is a compliance failure.
 
-**Acceptance criteria.** A grep for hex literals outside `tokens.css` /
-`ds.js` / the documented `DS` bridge returns zero; contrast audits pass
-SPEC-AX; a themed screenshot review shows one coherent language.
+**Acceptance criteria.** The Compliance Matrix (GOV-CM) shows a principle
+citation for every registered artifact; review minutes record Existence
+Test outcomes; zero uncited elements in shipped screens.
 
-**Non-goals.** Page layout, data fetching, chart internals, white-label
-theming (future).
+**Non-Goals.** Marketing brand strategy; naming; pricing surfaces.
 
-**Future extensions.** Light theme completion; customer white-labeling;
-density (comfortable/compact) variants.
+**Future Extensions.** Principle P11 candidate — "Portfolio Gravity" — when
+multi-asset portfolios become the primary object.
+
+**Dependencies.** None (root of the tree). All specs depend on SPEC-PR.
+
+**Examples.**
+- A pulsing dot on a LIVE badge: passes (P10 — motion signals a real live
+  stream; evidence purpose).
+- A decorative gradient orb in a corner: fails the Existence Test — removed.
+- A KPI card showing "uptime %": fails — answers no executive question in
+  the registry; monitoring identity violation.
+
+**Failure Cases.**
+- An element justified only by "it looks premium" (P8 without a question) —
+  rejected: luxury is a *manner*, not a *purpose*.
+- A screen that answers its question but fabricates a trend to do so —
+  P2 violation; worst-class failure, blocks release.
+- Copying Bloomberg's amber-on-black terminal look — identity failure.
+
+**Governance Rules.** Amendments to principles require explicit ratification
+and cascade review of all dependent specs. The principle registry is
+append-only; principles are never silently reworded.
 
 ---
 
-# 2. SPEC-WS — Workspace Specification 1.0
-**Principles:** P1, P4, P6
+# SPEC-ID — PREDAIOT Visual Identity 1.0
+
+**Purpose.** Make PREDAIOT instantly recognizable: a person seeing any
+screenshot — without the logo — knows it is PREDAIOT.
+
+**Vision.** An identity so consistent it functions as a certificate: the
+look itself signals "governed economic evidence", the way a banknote's
+engraving signals authenticity.
+
+**Responsibilities.** Define the identity dimensions:
+
+- **Typography.** Two faces only. Inter — headings, UI, narrative. JetBrains
+  Mono — every numeral that carries money, evidence, or identity (amounts,
+  percentages, hashes, IDs, timestamps, grades). Weights: 400/500/600 for
+  prose, 700/800 reserved for answers (the money, the verdict). No third
+  typeface may ever enter the product.
+- **Financial Typography.** Money is the largest text on any screen it
+  appears on. en-US digit grouping; compact institutional notation
+  (7.04K / 2.31M / 1.20B) for secondary mentions, full precision at the
+  primary mention; currency codes (USD, OMR) in small caps beside the
+  numeral, never symbols alone for non-USD; negative values carry the loss
+  color, never parentheses.
+- **Spacing DNA.** The 8pt scale is the product's meter. Generosity grows
+  with importance: the more consequential the figure, the more silence
+  around it. Density is allowed only inside evidence tables.
+- **Visual Rhythm.** Zones alternate weight — a heavy answer zone is
+  followed by a lighter context zone. Repeating card rows of equal visual
+  weight (the "widget grid" look) are an identity violation.
+- **Geometry.** Soft-rectangular: radii 10/14/18/24. No sharp corners, no
+  full circles except gauges and status dots. Hairlines at 1px; the
+  signature top-accent rule on panels is 2px.
+- **Card Language.** A card states one fact: kicker (microcaps label) →
+  answer (mono numeral) → basis (one quiet line). Never more than one
+  primary fact per card.
+- **Panel Language.** Panels are instruments, not boxes: layered surface
+  (panel → panel-2 gradient), hairline border, 2px accent top-rule,
+  soft inset light. Panels never nest more than two levels.
+- **Executive Grid.** Asymmetric by intent (65/35, 50/50 rows per SPEC-WS)
+  — the grid of a briefing document, not a widget dashboard.
+- **Evidence Language.** Evidence is jewelry: small, precise, mono —
+  truncated SHA-256 chips, grade letters, CERTIFIED/PROVISIONAL badges,
+  chain links. Always adjacent to the figure it certifies (P7).
+- **Iconography.** Minimal geometric line icons, 1.5px stroke, no filled
+  emoji glyphs in product surfaces (⚡/🏆 style tags are retired). Icons
+  never appear without a text label at first use.
+- **Economic Color Philosophy.** Color is a semantic system, not a palette:
+  ink canvas (#06090F family) = the institution; teal `accent` (#34E0C8) =
+  PREDAIOT intelligence speaking; rose `loss` = money leaking; green
+  `recover` = money recoverable/verified; amber `warn` = caution &
+  provisional states; gold `seal` = certification. Saturated color occupies
+  < 10% of any screen; the canvas does the talking.
+- **Brand Signature.** The five marks that make a screenshot unmistakably
+  PREDAIOT: (1) deep-ink canvas with faint teal ambient radial; (2) panels
+  with the 2px teal top-rule; (3) glowing mono financial numerals;
+  (4) microcaps kicker labels with wide tracking; (5) evidence chips with
+  truncated hashes beside every major figure.
+- **Dashboard Personality.** A senior risk officer: calm, precise, direct,
+  slightly austere, never excited. Copy is declarative ("Execution gap:
+  6,710.39 USD"), never exclamatory, never gamified.
+- **Premium Materials.** Layered ink surfaces with subtle luminance steps;
+  restrained glass (blur only on sticky chrome); light always falls from
+  above (inset top highlight, soft below-shadow).
+- **Shadow Language.** Two elevations only: resting (soft 30px ambient) and
+  raised (60px ambient for overlays). Glow is reserved for money numerals
+  and live signals — glow is meaning, not decoration.
+- **Surface Language.** bg-0 canvas < panel < panel-2 < panel-3; each step
+  a small luminance increment. No pure black, no pure white anywhere.
+- **Empty States.** Honest and directive: what is absent, why, and the one
+  action that fills it ("No audit loaded. Run a demo or upload dispatch
+  data."). Never sample data, never illustration mascots.
+- **Loading States.** Skeleton panels shaped like the incoming answer; a
+  quiet progress phrase for engine work ("Optimizing against hindsight
+  benchmark…"). Never full-screen spinners after first paint.
+- **Success States.** Understated confirmation — the artifact itself
+  (certificate, badge) is the celebration. No confetti, ever.
+- **Failure States.** Institutional candor: what failed, its impact, the
+  recovery path — in warn/loss semantics, without stack traces or blame.
+- **Evidence Styling.** Hash chips mono at 10–11px, truncated to 10 chars +
+  ellipsis, copy-full affordance; chain relations rendered as linked chips.
+- **Confidence Styling.** Grades A–E always as letter + color + numeric
+  percentage when available; INDETERMINATE renders as neutral slate, never
+  as a fake grade (P3).
+
+**Boundaries.** Identity defines the *look and voice*; token values live in
+SPEC-DS; layout in SPEC-WS; hierarchy in SPEC-DL; material physics detail in
+SPEC-LX.
+
+**Inputs.** SPEC-PR principles (P4, P7, P8, P10); the existing token
+foundation.
+
+**Outputs.** The identity dimensions above; the Brand Signature checklist
+used in the screenshot recognition test.
+
+**Rules.**
+1. The five Brand Signature marks appear on every data-bearing screen.
+2. Two typefaces, the semantic palette, and the 8pt meter are inviolable.
+3. Emoji, mascots, stock illustrations, and decorative imagery are banned
+   from product surfaces.
+4. Money never shares its visual weight class with non-money content on the
+   same screen.
+
+**Acceptance criteria.** Blind screenshot test: reviewers identify PREDAIOT
+without the logo from any section at any tier. Signature checklist passes on
+every shipped screen.
+
+**Non-Goals.** Marketing website identity; print/PDF identity (exists
+separately); logo design.
+
+**Future Extensions.** Light-theme identity (same signature in daylight);
+customer co-branding rules that preserve the signature.
+
+**Dependencies.** SPEC-PR; consumed by SPEC-DS, SPEC-DL, SPEC-LX, SPEC-CH.
+
+**Examples.**
+- The Executive Command Center hero: ink canvas, teal kicker
+  "ECONOMIC DECISION AUDIT", glowing rose 7,070.54 USD, CERTIFIED chip with
+  hash — all five signature marks present.
+- A governance record row: mono verdict + hash chip + gold seal accent —
+  evidence-as-jewelry.
+
+**Failure Cases.**
+- A section that renders blue default-styled charts on white tooltips —
+  identity break (and SPEC-DV violation).
+- A "🎉 Audit complete!" toast — personality violation (risk officers do
+  not celebrate).
+- Third typeface introduced by a library default — identity regression;
+  blocked at review.
+
+**Governance Rules.** Identity dimensions change only by amendment; the
+Brand Signature list is append-only; any new visual pattern must be
+registered in the Design Registry (GOV-DR) before use.
+
+---
+
+# SPEC-DL — Executive Design Language 1.0
+
+**Purpose.** Define HOW executives consume information: the interface is
+built around executive questions, never around widgets.
+
+**Vision.** Every screen reads like the first page of a McKinsey answer —
+conclusion first, support beneath — rendered as living software.
+
+**Responsibilities.** Define the five hierarchies and the Money-First Law.
+
+- **The Canonical Hierarchy (inviolable):**
+
+  **Money → Risk → Opportunity → Decision → Evidence → Details.**
+
+  Never reversed, never reordered, on any screen, at any tier.
+
+- **Executive hierarchy** — what order questions are answered: the screen's
+  primary question (per SPEC-IA registry) first, then its supporting
+  questions in canonical order.
+- **Visual hierarchy** — what the eye meets: largest/brightest element =
+  the money answer; second = risk state; chrome is near-invisible. Squint
+  test: only money and risk survive.
+- **Attention hierarchy** — what may interrupt: live economic change >
+  provisional→certified transitions > user-requested results > everything
+  else. Nothing below the fold may animate for attention (P10).
+- **Decision hierarchy** — what is actionable: exactly one recommended
+  action holds primary emphasis per screen (from `opportunities[]` ranked
+  by recorded `period_gain`); alternatives are visible but subordinate
+  (SPEC-AI).
+- **Economic hierarchy** — what money matters most: leakage (what is lost)
+  > recoverable (what is winnable) > captured (what is safe) > ceiling
+  (theoretical bound, always labeled as unreachable benchmark).
+
+**Boundaries.** Order and emphasis only; identity (SPEC-ID), zones
+(SPEC-WS), narrative voice (SPEC-ST), instruments (SPEC-CH) are elsewhere.
+
+**Inputs.** SPEC-IA question registry; audit-response money fields.
+
+**Outputs.** The hierarchy laws; per-screen hierarchy declarations inside
+Dashboard Manifests (SPEC-DB).
+
+**Rules.**
+1. **Money-First Law:** every screen begins with money. Always. Sections
+   whose primary question is non-monetary (Math Appendix, Audit History,
+   administrative surfaces) open with the persistent Economic Context Strip
+   — a condensed Z1/Z2 (asset, leakage, recoverable, health) — so money
+   still leads.
+2. Details (tables, ledgers, formulas) may never render above the money
+   answer they support.
+3. Evidence sits between Decision and Details: proof before mechanics.
+4. At most one element per screen may claim primary attention; ties are
+   resolved by the economic hierarchy.
+5. Ceiling/benchmark values are always visually subordinate to actionable
+   values and always labeled non-achievable (P2).
+
+**Acceptance criteria.** For every shipped screen, a reviewer can draw the
+six hierarchy bands top-to-bottom and finds no inversion; the Economic
+Context Strip is present on all non-monetary sections; squint test passes.
+
+**Non-Goals.** Copywriting style (SPEC-ST); component internals.
+
+**Future Extensions.** Attention budgets per tier (T5 walls may host two
+primary attention elements across regions — requires amendment).
+
+**Dependencies.** SPEC-PR (P1, P4 P6-analog: P1/P2/P6); SPEC-IA; consumed by
+SPEC-EX, SPEC-DB, SPEC-ST.
+
+**Examples.**
+- S01: Leakage (money) → Severe risk chip (risk) → Recoverable + top action
+  (opportunity/decision) → CERTIFIED hash chip (evidence) → ledger below
+  (details). Compliant.
+- Math Appendix: Economic Context Strip on top, formulas beneath. Compliant.
+
+**Failure Cases.**
+- A screen opening with a data-quality donut above the money row —
+  hierarchy inversion; rejected.
+- A "Steps audited: 288" stat rendered at money weight — economic
+  hierarchy violation (a detail dressed as an answer).
+
+**Governance Rules.** The Canonical Hierarchy is amendable only by
+ratification with cascade review of every Dashboard Manifest.
+
+---
+
+# SPEC-DS — Design System 1.0
+
+**Purpose.** One token system carrying the identity: color, type, spacing,
+radii, elevation, and motion tokens with economic semantics baked in.
+
+**Vision.** The single material source from which every surface is built —
+change a token, and the whole institution changes suit.
+
+**Responsibilities.**
+- Own the token families: surfaces (bg-0…panel-3, borders, hairlines), text
+  (3 levels + inverse), accent family, economic semantics (loss/recover/
+  warn/info + soft variants), grade scale A–E, decision types, trust
+  (verified/provisional/seal), typography (two faces), 8pt spacing scale,
+  radii, two elevations + meaning-glows, motion durations/easings.
+- Own the semantic resolvers (grade, decision, severity, risk → color) and
+  institutional formatters (money, percent) as the only formatting path.
+- Maintain the dark theme as primary and the light scaffold with identical
+  semantic names.
+- Govern the legacy bridge (the App-level `DS` object mirroring token
+  values) until Component Registry migration retires it.
+
+**Boundaries.** Values and semantics only — identity rationale is SPEC-ID;
+usage hierarchy is SPEC-DL; layout tokens belong to SPEC-WS (`ws-*`).
+
+**Inputs.** SPEC-ID identity dimensions; SPEC-AX contrast floors.
+
+**Outputs.** The token registry (registered in GOV-DR); resolvers;
+formatters; theme scaffolds.
+
+**Rules.**
+1. No hardcoded color, font, spacing, radius, duration, or shadow outside
+   token definitions. The documented bridge is the sole sanctioned
+   exception until retirement.
+2. Semantic-first: tokens are named for meaning (loss, recover, seal),
+   never for hue (red, green, gold).
+3. Money and evidence formatting flows only through the registered
+   formatters — no ad-hoc `toLocaleString`/`toFixed` in screens.
+4. New tokens enter by Design Registry registration citing an identity
+   dimension.
+5. Alpha-composited emphasis uses the defined soft variants, not arbitrary
+   opacities.
+
+**Acceptance criteria.** Static audit: zero unregistered literals outside
+token files and the documented bridge; all colors pass SPEC-AX contrast in
+their sanctioned contexts; the resolver/formatter functions are the only
+call sites for semantic color/money text.
+
+**Non-Goals.** Page layout; component behavior; chart internals;
+white-label theming (future).
+
+**Future Extensions.** Light theme completion; density variants; per-tenant
+accent within identity constraints.
+
+**Dependencies.** SPEC-ID, SPEC-AX; consumed by every implementing spec.
+
+**Examples.**
+- A new "DEFERRED lifecycle" chip needs a color → registered as semantic
+  token `lifecycle-deferred` citing Evidence Language — not a hex in a
+  component.
+- Risk banding on the Decision Health instrument resolves via the risk
+  resolver; the instrument never picks colors.
+
+**Failure Cases.**
+- A quick-fix `#FF0000` in a section file — blocked by the static audit.
+- A formatter bypass producing "7 038,75" locale bleed — the historical
+  defect class this spec exists to prevent.
+
+**Governance Rules.** Token registry is append-only; value changes are
+amendments with a visual-regression evidence pack; token deletion requires
+proof of zero references.
+
+---
+
+# SPEC-WS — Workspace System 1.0
 
 **Purpose.** One workspace architecture for every screen: shell, sidebar,
-header, executive workspace, zones, grid, density tiers, and ultra-wide /
-4K / video-wall behavior.
+header, executive workspace, information zones, density tiers, and
+ultra-wide/4K/video-wall behavior.
 
-**Scope & normative detail.** The full contract — tier table T1–T5, sidebar
-`clamp(248px, 18vw, 400px)`, zone catalog Z1–Z10, zone-visibility matrix,
-macro/zone/card grids, scroll policy — lives in **`WORKSPACE_SPEC.md`
-(WS-1.0)**, which is a normative annex of this document.
+**Vision.** The workspace behaves like trading-floor real estate: more
+canvas means more coexisting intelligence, never inflated rectangles.
 
-**Responsibilities.** Own all horizontal space allocation; guarantee "space
-reveals intelligence, not larger rectangles"; supersede and remove the
-interim 1720px Executive cap.
+**Responsibilities.** The full normative contract lives in
+**`WORKSPACE_SPEC.md` (WS-1.0)** — density tiers T1–T5, sidebar geometry
+(clamp 248px–400px), zone catalog Z1–Z10 with data bindings, the zone
+visibility matrix ("space reveals intelligence"), the macro/zone/card grid
+system, whitespace scale, and scroll policy. This chapter binds the annex
+into FE-2.0 governance.
 
-**Boundaries.** Does not choose which questions zones answer (SPEC-IA), nor
-zone content design (SPEC-EX/DB), nor component internals (SPEC-CO).
+**Boundaries.** Allocates space; never chooses content (SPEC-IA/DL), visual
+identity (SPEC-ID), or instrument design (SPEC-CH).
 
-**Inputs.** Viewport via `useWorkspaceTier()` (matchMedia); ratified zone
-catalog; tokens.
+**Inputs.** Viewport tier signal; ratified zone catalog; `ws-*` layout
+tokens.
 
-**Outputs.** `<Workspace>`, `<Region>`, `<Zone>` primitives; `--ws-*` layout
-tokens; the tier signal consumed by every other spec.
+**Outputs.** Workspace primitives contract (Workspace / Region / Zone and
+the tier hook); the tier signal every other spec consumes.
 
-**Rules.** (Summary — annex is authoritative.)
-1. No artificial max-width container around the workspace; no centered
-   content column. Readable-width caps apply to prose (≤72ch) and cards
-   (≤560px), never to the workspace.
-2. Wider tiers add zones (T3 adds AI Reasoning + Evidence; T4 adds the
-   Intelligence Rail, decision stream, live telemetry, portfolio comparison;
-   T5 co-locates everything, zero-scroll target).
-3. Whitespace grows between zones by tier; horizontal scroll never exists.
+**Rules.** (Annex is authoritative; the laws restated:)
+1. No artificial max-width container; no centered content column. The
+   interim 1720px executive cap is formally superseded and must be removed
+   in Phase 1 migration.
+2. Readable-width caps bind content (prose ≤ 72ch, cards ≤ 560px), never
+   the workspace.
+3. Wider tiers add zones per the visibility matrix; horizontal scroll never
+   exists; T5 targets zero vertical scroll.
+4. Whitespace grows between zones by tier — silence is structural
+   (SPEC-LX), not residual.
 
-**Acceptance criteria.** At 1440/1920/2560/3440 the measured workspace share
-is ≥ 80% of viewport (sidebar expanded); zone matrix renders per tier; no
-horizontal scroll at any width; the 1720px cap is gone.
+**Acceptance criteria.** Workspace share ≥ 80% of viewport at 1440–3440
+(sidebar expanded); zone matrix renders per tier; measured symmetric zone
+gaps match the tier scale; no horizontal scroll 390→5120px.
 
-**Non-goals.** Mobile-first patterns; content design; navigation taxonomy.
+**Non-Goals.** Mobile-first patterns; zone content; navigation taxonomy.
 
-**Future extensions.** User-arrangeable zones (drag layout persistence);
-multi-monitor split workspaces.
+**Future Extensions.** User-arranged zone layouts with persistence;
+multi-monitor workspace splitting.
+
+**Dependencies.** SPEC-PR (P1, P5, P10); SPEC-IA zone-questions; consumed by
+SPEC-EX, SPEC-DB, SPEC-RS, SPEC-CH.
+
+**Examples.**
+- 1920px (T3): AI Reasoning (65%) and Evidence Timeline (35%) join the
+  canonical flow — more intelligence, same rectangles.
+- 2560px (T4): Intelligence Rail carries decision stream + live telemetry +
+  evidence chain beside the main briefing.
+
+**Failure Cases.**
+- A future screen shipping its own `max-width: 1200px` wrapper — instant
+  non-compliance (the FE-1.0 lesson codified).
+- KPI cards stretching to 748px at 2560 — the "larger rectangles" failure
+  the tier matrix exists to prevent.
+
+**Governance Rules.** Zone catalog and tier boundaries change only by
+amendment to the annex, ratified with this document's procedure; every new
+zone must name its question (SPEC-IA) and data binding (frozen API).
 
 ---
 
-# 3. SPEC-IA — Information Architecture Specification 1.0
-**Principles:** P1, P2, P4
+# SPEC-IA — Information Architecture 1.0
 
-**Purpose.** Define the sequence of questions the product answers and map
-every screen, section, and zone to exactly one primary question.
+**Purpose.** Define the sequence of executive questions the product answers
+and map every screen, section, and zone to exactly one primary question.
 
-**Scope.** The question hierarchy, the sidebar section taxonomy, and the
-zone-to-question mapping. Applies to all current 16 sections and any future
-screen.
+**Vision.** The product is a question-answering hierarchy so strict that
+navigation is merely choosing which question to ask next.
 
-**Responsibilities.** The canonical question ladder:
+**Responsibilities.**
+- Own the **Question Registry** (the only justification currency for
+  screens and elements):
 
-| # | Question | Primary surface | Data (existing) |
-|---|----------|-----------------|------------------|
-| Q1 | How much are we losing? | Z2 KPI (Financial Leakage) | `total_gap_usd` |
-| Q2 | How much can we recover? | Z2 KPI (Recoverable Value) | `recoverable_execution_gap` / `gap_attribution.execution_gap` |
-| Q3 | How healthy are our decisions? | Z2 KPI (Decision Health) | `dq_score` (ECF) + `risk_level` (+ `audit_confidence` when present) |
-| Q4 | What should we do next? | Z3b Opportunity | `opportunities[]`, `root_causes[]` |
-| Q5 | Why is value leaking? | Root Cause / Z4 chart | `root_causes[]`, ledger series |
-| Q6 | Can we prove it? | Evidence / Governance | `audit_manifest`, certificate, governance records |
-| Q7 | What is happening right now? | Live / Z8 telemetry | `/ws/live`, live state (PROVISIONAL) |
-| Q8 | How do assets compare? | Portfolio (T4+) | `/api/v1/audits` history |
+| # | Question | Primary surface | Data (existing API) |
+|---|----------|-----------------|----------------------|
+| Q1 | How much are we losing? | Z2 Financial Leakage | `total_gap_usd` |
+| Q2 | How much can we recover? | Z2 Recoverable Value | `recoverable_execution_gap` / `gap_attribution.execution_gap` |
+| Q3 | How healthy are our decisions? | Z2 Decision Health | `dq_score` (ECF) + `risk_level` (+ `audit_confidence` when present) |
+| Q4 | What should we do next? | Z3b Recommendation (SPEC-AI block) | `opportunities[]`, `root_causes[]` |
+| Q5 | Why is value leaking? | Root Cause / analytical instruments | `root_causes[]`, ledger series, `gap_attribution` |
+| Q6 | Can we prove it? | Evidence & Governance surfaces | `audit_manifest`, certificate, governance/lifecycle/outcome records |
+| Q7 | What is happening right now? | Live telemetry (PROVISIONAL) | `/ws/live`, live state |
+| Q8 | How do assets compare? | Portfolio surfaces (T4+) | `/api/v1/audits` history |
+| Q9 | What happens if we wait? | Narrative inaction framing (SPEC-ST) | recorded per-period figures re-expressed as period rate — basis always disclosed, never a forecast |
 
-- Section taxonomy (groups, replacing the flat 16-item list):
-  **COMMAND** (Executive Summary) · **ANALYSIS** (Value Flow, Audit Trail,
-  Root Cause, Counterfactual, EDA Metrics, Leakage, Heat Map) ·
-  **ACTION** (Economic Action Plan, Intelligence Report) ·
-  **EVIDENCE & GOVERNANCE** (Governance, Certificate, Audit History) ·
-  **OPERATIONS** (Live Monitor, Real-Time) · **REFERENCE** (Math Appendix).
+- Own the **Section Taxonomy** (groups render via SPEC-NV): **COMMAND**
+  (Executive Summary) · **ANALYSIS** (Value Flow, Audit Trail, Root Cause,
+  Counterfactual, EDA Metrics, Leakage, Heat Map) · **ACTION** (Economic
+  Action Plan, Intelligence Report) · **EVIDENCE & GOVERNANCE** (Governance,
+  Certificate, Audit History) · **OPERATIONS** (Live Monitor, Real-Time) ·
+  **REFERENCE** (Math Appendix).
+- Bind every zone (Z1–Z10) and every section to one primary question.
 
-**Boundaries.** Does not style the sidebar (SPEC-NV renders the taxonomy);
-does not compose zones (SPEC-DB).
+**Boundaries.** Decides *which questions where*; rendering order is
+SPEC-DL; navigation chrome is SPEC-NV; narrative voice is SPEC-ST.
 
-**Inputs.** The frozen API surface; the executive brief's four questions.
+**Inputs.** The frozen API surface; the executive brief; SPEC-PR Existence
+Test.
 
-**Outputs.** Question registry (above); section grouping; each screen's
-declared primary question.
+**Outputs.** Question Registry; Section Taxonomy; the question declarations
+required in every Dashboard Manifest.
 
 **Rules.**
 1. Every screen declares exactly one primary question; its answer renders
-   first (top-left reading order) before any secondary content.
-2. Q1–Q4 are never displaced from the first screen (SPEC-EX).
-3. A screen that answers no question from the registry may not exist
-   without a ratified registry amendment.
+   first per SPEC-DL.
+2. Q1–Q4 are never displaced from the first screen.
+3. A screen or element answering no registered question may not exist
+   without a ratified registry amendment (Existence Test, operationalized).
+4. Q9 answers must be expressed strictly as recorded historical rates with
+   the basis disclaimer — the word "forecast" is banned from Q9 surfaces
+   (P2).
 
-**Acceptance criteria.** For each section a reviewer can name its question
-without help; navigation groups match the taxonomy; Q1–Q4 answered on S01
-without scrolling at T2+.
+**Acceptance criteria.** Reviewer names each section's question unaided;
+manifest question fields populated for all dashboards; Q1–Q4 answered on
+S01 without scrolling at T2+.
 
-**Non-goals.** Copywriting; localization structure (future).
+**Non-Goals.** Copy tone (SPEC-ST); URL routing (SPEC-NV future).
 
-**Future extensions.** Q9 "What did our decisions earn us?" (Outcome/GOV
-aggregate ROI view) once portfolio outcome history accumulates.
+**Future Extensions.** Q10 "What did our decisions earn us?" — realized
+Outcome/Governance ROI aggregate as portfolio history accumulates.
+
+**Dependencies.** SPEC-PR; consumed by SPEC-DL, SPEC-EX, SPEC-DB, SPEC-CH,
+SPEC-NV.
+
+**Examples.**
+- Decision Heat Map → Q5 (why/when decisions degrade) — ANALYSIS group.
+- EDPC Certificate → Q6 — EVIDENCE & GOVERNANCE group.
+
+**Failure Cases.**
+- A proposed "system resources" panel — no registered question; identity
+  violation (monitoring); rejected twice over.
+- Two sections claiming the same primary question with identical surfaces —
+  consolidation required before ship.
+
+**Governance Rules.** The Question Registry is append-only and amendable
+only by ratification; question-to-data bindings must cite frozen API fields
+verifiable at review.
+
+---
+---
+
+# PART II — EXECUTIVE EXPERIENCE
 
 ---
 
-# 4. SPEC-EX — Executive Experience Specification 1.0
-**Principles:** P1, P2, P3, P4
+# SPEC-EX — Executive Experience 1.0
 
 **Purpose.** Contract for the first screen: an Executive Command Center that
-answers Q1–Q4 instantly and makes "this software manages millions" felt.
+answers Q1–Q4 in under five seconds and makes "this software manages
+millions" felt without a word.
 
-**Scope.** Section S01 (`ExecutiveCommandCenter` + its zones Z1–Z4, plus
-Z5/Z6 at T3+ per the WS matrix).
+**Vision.** The chairman's opening page of a board briefing, alive: money,
+risk, the one action that matters, and the proof — before a single scroll.
 
 **Responsibilities.**
-- Z1 Command Header: asset identity, period, risk, evidence badge
-  (CERTIFIED green / PROVISIONAL amber) — trust before numbers.
-- Z2 KPI row: Financial Leakage (loss color), Recoverable Value (recover
-  color, % of leakage), Decision Health (ECF gauge + risk verdict).
-- Z3: Decision Intelligence + Recommended Action with Value at Stake,
-  always labeled "historical basis — no forward projection".
-- Z4: the historical economic chart (per SPEC-DV).
+- Compose zones per the WS matrix: Z1 Command Header (identity, period,
+  risk, evidence badge), Z2 Primary KPI row (Q1/Q2/Q3), Z3 Decision +
+  Recommendation (Q4, rendered as the SPEC-AI block), Z4 Financial Timeline
+  instrument; Z5/Z6 join at T3+, the Intelligence Rail at T4+.
+- Enforce SPEC-DL hierarchy and SPEC-ST narrative beats on this screen
+  before any other.
+- Carry the dataSource truth: demo / upload / live provenance visible; live
+  states PROVISIONAL until reconciled (EDA-RECON semantics).
 
-**Boundaries.** Consumes zones; does not define tiers (SPEC-WS), charts
-(SPEC-DV), or role variants (SPEC-RB).
+**Boundaries.** Consumes zones and instruments; defines none. Role emphasis
+variants belong to SPEC-RB; block anatomy to SPEC-AI.
 
-**Inputs.** One audit response object (live or historical); `dataSource`
-signal (demo/upload/live).
+**Inputs.** One audit response object (historical or live-provisional);
+dataSource signal; tier signal.
 
-**Outputs.** The reference implementation every other dashboard is measured
-against (SPEC-DB).
+**Outputs.** The reference Dashboard Manifest (first entry in GOV-DR's
+manifest registry) against which all other dashboards are measured.
 
 **Rules.**
-1. Q1–Q4 visible without scroll at T2+ (1440×900 reference).
-2. Money numerals are the largest elements on screen (P4).
-3. Confidence values render only when the API provides them; the ECF-based
-   Decision Health card is the permanent fallback (P2/P3 — no fabrication).
-4. Every value-at-stake statement carries its basis disclaimer.
+1. Q1–Q4 visible without scroll at T2 (1440×900 reference).
+2. Money numerals are the largest elements on the screen (SPEC-DL / P4).
+3. Confidence renders only from API-provided values; the ECF-based Decision
+   Health presentation is the permanent no-fabrication fallback (P2/P3).
+4. Every value-at-stake statement carries its recorded-basis disclaimer.
+5. The evidence badge state must provably match data provenance.
 
-**Acceptance criteria.** 5-second test passes with an uninitiated executive;
-no-scroll at 1440×900; every figure traceable to a named API field; evidence
-badge state matches the data source.
+**Acceptance criteria.** Five-second test with an uninitiated executive
+passes; no-scroll at 1440×900; every figure traces to a named field; badge
+state verified against source in E2E; manifest evidence pack archived.
 
-**Non-goals.** Editing/config workflows; onboarding flows.
+**Non-Goals.** Onboarding, configuration, marketing surfaces.
 
-**Future extensions.** Multi-asset executive rollup as Z9 matures.
+**Future Extensions.** Portfolio-mode command center when Q8 surfaces
+mature; multi-period certified comparisons.
+
+**Dependencies.** SPEC-DL, SPEC-IA, SPEC-WS, SPEC-AI, SPEC-ST, SPEC-CH;
+principles P1, P2, P3, P7.
+
+**Examples.**
+- Compliant: leakage 7,070.54 USD (largest), Severe risk chip beside
+  identity, recommendation block with reasoning + 7.8K USD at stake +
+  basis line, CERTIFIED chip with hash.
+- Compliant T3 addition: AI Reasoning (65%) narrating the execution gap,
+  Evidence Timeline (35%) listing manifest → certificate → governance.
+
+**Failure Cases.**
+- A DQ donut promoted above money — SPEC-DL inversion; blocked.
+- "Recommended Action" as bare text — SPEC-AI violation; blocked.
+- Demo data rendering a CERTIFIED badge while live streaming shows the same
+  — provenance conflation; worst-class P2 failure.
+
+**Governance Rules.** Changes to S01 composition require manifest amendment
+review before implementation; the five-second test is re-run and archived
+at every S01 change.
 
 ---
 
-# 5. SPEC-RB — Role-Based Experience Specification 1.0
-**Principles:** P1, P6
+# SPEC-RB — Role-Based Experience 1.0
 
-**Purpose.** Adapt emphasis — not truth — per executive archetype:
-CFO, CEO, Operations Manager, Engineer, Administrator.
+**Purpose.** Adapt emphasis — never truth — to executive archetypes: CFO,
+CEO, Operations Manager, Engineer, Administrator.
 
-**Scope.** Archetype presets that re-weight zone emphasis and section
-ordering. Presentation only.
+**Vision.** One instrument, five grips: each leader picks it up and finds
+their question already on top.
 
-**Responsibilities.** Archetype → emphasis matrix:
+**Responsibilities.**
+- Own the archetype → emphasis matrix:
 
-| Archetype | Leads with | Elevated zones/sections | De-emphasized |
-|-----------|-----------|--------------------------|----------------|
+| Archetype | Leads with | Elevated surfaces | De-emphasized |
+|-----------|-----------|-------------------|----------------|
 | CFO | Q1/Q2 money | Z2, Value Flow, Leakage, Certificate | Live telemetry |
-| CEO | Q3/Q8 health & portfolio | Z2, Portfolio, Governance verdicts | Engineering detail |
-| Operations | Q4/Q7 act now | Z3b, Live Monitor, Decision Stream | Math Appendix |
+| CEO | Q3/Q8 health & portfolio | Z2, Portfolio, Governance verdicts | Engineering depth |
+| Operations | Q4/Q7 act now | Recommendation block, Live Monitor, Decision Stream | Math Appendix |
 | Engineer | Q5/Q6 why & proof | Root Cause, Counterfactual, EDA Metrics, Appendix | — |
-| Administrator | System state | Audit History, security/session surfaces | — |
+| Administrator | System stewardship | Audit History, sessions, access surfaces | — |
 
-**Boundaries.** RBAC **enforcement stays in the backend** (existing
-owner/admin/asset_manager model). Archetypes are a UI lens; they never
-grant or imply data access.
+- Bind archetype defaults to the existing authenticated role (owner/admin/
+  asset_manager) as a hint only; explicit selection persists client-side.
 
-**Inputs.** Authenticated account role (existing API) as the default
-archetype hint; explicit user selection persisted client-side.
+**Boundaries.** Presentation lens only. RBAC enforcement remains entirely
+backend (frozen). Archetypes never gate data the role could otherwise see,
+and never grant access.
 
-**Outputs.** An `archetype` preference consumed by SPEC-DB compositions and
+**Inputs.** Account role (existing API); user archetype selection; SPEC-IA
+question weights.
+
+**Outputs.** The `archetype` signal consumed by SPEC-DB compositions and
 SPEC-NV ordering.
 
 **Rules.**
-1. No archetype hides evidence or alters numbers — emphasis only (P2).
-2. Switching archetypes is one interaction and instantly reversible.
-3. Default without selection: CFO lens (money-first), because the platform's
-   moat is economic truth.
+1. No archetype hides evidence, alters figures, or reorders the Canonical
+   Hierarchy — emphasis and section ordering only (P2, SPEC-DL).
+2. Switching archetypes is one reversible interaction; the active lens is
+   always visible.
+3. Default without selection: CFO lens — the platform's moat is economic
+   truth, so money-first is the native grip.
+4. Q1–Q4 remain on the first screen for every archetype.
 
-**Acceptance criteria.** Same audit, two archetypes → identical figures,
-different ordering/emphasis; preference survives reload; no API change.
+**Acceptance criteria.** Same audit under two archetypes shows identical
+figures and evidence with different emphasis; lens persists across reload;
+zero API divergence between archetypes.
 
-**Non-goals.** New permission models; per-role feature gating.
+**Non-Goals.** New permission models; per-role feature gating; per-user
+custom layouts (future).
 
-**Future extensions.** Org-level default archetypes; saved custom lenses.
+**Future Extensions.** Org-default archetypes; saved custom lenses;
+briefing export per archetype.
+
+**Dependencies.** SPEC-IA, SPEC-DL, SPEC-DB, SPEC-NV; principles P1, P5.
+
+**Examples.**
+- Engineer lens: ANALYSIS group promoted in navigation; S01 unchanged in
+  truth, Counterfactual elevated to second position.
+- CFO lens: Certificate surfaced in the Evidence Timeline by default.
+
+**Failure Cases.**
+- An archetype hiding the PROVISIONAL badge to "reduce noise" — P2/P7
+  violation; rejected.
+- Archetype selection persisting into another organization's session —
+  scoping defect; blocked at review.
+
+**Governance Rules.** The emphasis matrix is amendable; adding an archetype
+requires question-weight justification from the SPEC-IA registry.
 
 ---
 
-# 6. SPEC-DV — Data Visualization Specification 1.0
-**Principles:** P2, P4, P5
+# SPEC-ST — Narrative Experience 1.0
 
-**Purpose.** A proprietary PREDAIOT chart language — every chart reads as
-economic evidence, not as a library default.
+**Purpose.** Dashboards tell the economic story in briefing order — never a
+collection of widgets.
 
-**Scope.** All charts: recharts-based (theming wrapper) and hand-rolled SVG
-(Sparkline, gauges). Applies to Z4, section charts, live telemetry.
+**Vision.** Reading a PREDAIOT screen feels like reading a one-page
+executive briefing written by a careful analyst who respects your time.
 
 **Responsibilities.**
-- One `ChartTheme` wrapper: quiet hairline grids, `--pds-text-3` axes,
-  panel-styled tooltips, gradient area fills (accent → transparent),
-  loss/recover shading semantics (value below benchmark shades loss).
-- Canonical chart set: economic timeline (area+line), benchmark-vs-actual,
-  gap attribution (stacked), decision heat strip, confidence gauge,
-  sparkline. Each maps to named API series.
+- Own the **Six Narrative Beats** every dashboard answers, in order:
+  1. **What happened?** — the period's economic outcome, stated plainly.
+  2. **Why?** — the attributed causes (recorded attribution only).
+  3. **How much money?** — quantified in the period's own figures.
+  4. **What should I do?** — the SPEC-AI recommendation block.
+  5. **What evidence supports this?** — manifest, certificate, chain.
+  6. **What happens if I wait?** — Q9: the recorded loss re-expressed as a
+     period rate with mandatory basis disclosure ("This period recorded
+     6,710.39 USD recoverable execution gap over 24h. Basis: recorded
+     period only — no forward projection.").
+- Own the briefing voice: declarative sentences, active verbs, figures
+  in-line, one thought per line; headline-grade statements above, mechanics
+  below.
+- Own narrative structure inside zones: each zone opens with its beat's
+  conclusion, then its support (mini pyramid principle).
 
-**Boundaries.** Colors come from SPEC-DS; sizes from SPEC-WS tier heights;
-entrance animation from SPEC-MO.
+**Boundaries.** Voice and story order; visual hierarchy is SPEC-DL; the
+recommendation anatomy is SPEC-AI; instruments visualize beats (SPEC-CH).
 
-**Inputs.** Real series only (audit ledger, live buffer, history). 
+**Inputs.** Audit narrative fields (`root_causes[].description`,
+opportunity derivations, Intelligence Report text); SPEC-IA questions.
 
-**Outputs.** Chart wrapper components + a per-chart data contract (series →
-API field).
-
-**Rules.**
-1. No default library styling may remain visible (fonts, colors, grid).
-2. Axis truth: no truncated axes that exaggerate movement without an explicit
-   break marker (P2).
-3. Every chart carries its unit and period label; money axes use `fmtMoney`.
-4. Empty/insufficient data renders an honest empty state, never sample data.
-5. Max one accent series per chart; comparisons use the semantic palette.
-
-**Acceptance criteria.** Screenshot review finds no default-recharts look;
-each chart's series traceable to API fields; tooltips styled; axes labeled.
-
-**Non-goals.** 3D, decorative animation, exotic chart types without a
-question to answer.
-
-**Future extensions.** Canvas/WebGL rendering for T5 walls; brush-zoom
-synced across zones.
-
----
-
-# 7. SPEC-MO — Motion Specification 1.0
-**Principles:** P5, P6
-
-**Purpose.** Motion that communicates state change — expensive, physical,
-purposeful; never decorative noise.
-
-**Scope.** All animation: numeric count-ups, panel entrances, live pulses,
-gauge sweeps, hover/focus transitions.
-
-**Responsibilities.** One motion vocabulary from tokens: durations 140 /
-260 / 520 ms; easing `cubic-bezier(0.22,1,0.36,1)` family; keyframes
-(`pds-rise`, `pds-pulse`, `pds-breathe`, `pds-sheen`).
-
-**Boundaries.** Token values live in SPEC-DS; chart-specific entrances in
-SPEC-DV; loading states in SPEC-IX.
-
-**Inputs.** State changes (data arrival, tier change, user action),
-`prefers-reduced-motion`.
-
-**Outputs.** The animation classes/utilities; AnimatedNumber behavior.
+**Outputs.** The beat structure required in every Dashboard Manifest; copy
+rules for all product text.
 
 **Rules.**
-1. Animate only `transform` and `opacity` (compositor-only; 60 fps — P6);
-   count-ups via rAF.
-2. Motion must encode meaning: money changed (count-up), evidence is live
-   (pulse), content arrived (rise). Looping animation is reserved for
-   genuinely live signals.
-3. Reduced-motion disables all non-essential animation (already in tokens).
-4. Nothing bounces, spins, or parallaxes. Ever (P5).
+1. Every dashboard maps its zones to the six beats in its manifest; beats
+   never render out of order.
+2. Copy is institution-grade: no exclamation marks, no hype adjectives
+   ("massive", "huge"), no anthropomorphic chat ("I found…" — the platform
+   states, it does not chat).
+3. Beat 6 is always historically-based rate framing; forward-looking verbs
+   ("will lose", "is projected") are banned (P2).
+4. Numbers inside narrative use the registered formatters and carry units
+   and period labels.
+5. A dashboard that cannot fill a beat states so honestly ("No governance
+   verdict recorded for this audit yet") — beats are never faked.
 
-**Acceptance criteria.** DevTools performance trace shows no layout thrash
-from animation; reduced-motion audit passes; every animation names its
-meaning in review.
+**Acceptance criteria.** Manifest beat-mapping present for every dashboard;
+copy review passes the voice rules; beat-order walkthrough finds no
+inversion; Q9 surfaces carry the basis disclaimer verbatim-class wording.
 
-**Non-goals.** Route transitions, skeleton shimmer theatrics, Lottie.
+**Non-Goals.** Localization (future); marketing tone; chatbot UX.
 
-**Future extensions.** Choreographed T5 wall transitions (zone-stagger).
+**Future Extensions.** Auto-generated period-over-period narrative when
+certified history accumulates; Arabic/RTL briefing variant.
 
----
+**Dependencies.** SPEC-IA (Q9), SPEC-DL, SPEC-AI; principles P2, P6.
 
-# 8. SPEC-AX — Accessibility Specification 1.0
-**Principles:** P3, P5
+**Examples.**
+- S01 mapping: Beat1→Z1/Z2, Beat2→root-cause strip, Beat3→Z2 figures,
+  Beat4→Z3 recommendation block, Beat5→Evidence Timeline, Beat6→inaction
+  rate line under the recommendation.
+- Compliant Beat 1 line: "Ibri 2 leaked 7,070.54 USD of achievable value in
+  24 hours — 3.1% of the optimum was captured."
 
-**Purpose.** WCAG 2.2 AA — institutional software must be operable by every
-executive and operator, including under floor/field conditions.
+**Failure Cases.**
+- A dashboard of eight equal tiles with no story spine — the "monitoring
+  grid" anti-pattern this spec exists to kill.
+- "You're losing money fast! ⚠️" — voice violation on three counts.
+- Beat 6 phrased as "You will lose 200 USD/day" — P2 violation; must be
+  "The recorded rate this period was 200 USD/day. Basis: recorded period
+  only."
 
-**Scope.** All screens, components, charts, and motion.
-
-**Responsibilities.** Contrast, keyboard operability, semantics/landmarks,
-focus management, alternative encodings for color.
-
-**Boundaries.** Token contrast values fixed in SPEC-DS; motion opt-out in
-SPEC-MO; touch targets shared with SPEC-RS.
-
-**Inputs.** Design tokens; component catalog; axe-core audits.
-
-**Outputs.** Per-screen audit results; documented exceptions (if ever) with
-amendments.
-
-**Rules.**
-1. Text contrast ≥ 4.5:1 (≥ 3:1 for ≥24px bold); verify `--pds-text-2/3`
-   on panels.
-2. Color is never the sole carrier: grades keep letters, badges keep words
-   (CERTIFIED/PROVISIONAL), trends keep direction glyphs.
-3. Full keyboard path: sidebar, header actions, interactive cards; visible
-   `:focus-visible` ring in accent.
-4. Landmarks: `header/nav/main`; charts get text alternatives (the KPI
-   values already present satisfy summary duty).
-5. Touch targets ≥ 44px on T1 (already policy in mobile nav).
-
-**Acceptance criteria.** axe-core: zero critical/serious on every section;
-keyboard-only walkthrough completes demo → audit → certificate; contrast
-report archived per release.
-
-**Non-goals.** WCAG AAA; screen-reader-optimized data tables for 288-step
-ledgers (virtualized summary + CSV export covers it).
-
-**Future extensions.** High-contrast theme via the token scaffold.
+**Governance Rules.** The six beats are amendable only by ratification;
+voice rules are enforced in copy review; beat mappings live in manifests
+and are audited in GOV-AC.
 
 ---
 
-# 9. SPEC-RS — Responsive Specification 1.0
-**Principles:** P1, P6
+# SPEC-AI — AI Interaction Language 1.0
 
-**Purpose.** Desktop-first adaptation: the same truth from a 49-inch wall to
-a phone, degrading co-presence — never content integrity.
+**Purpose.** Give PREDAIOT's intelligence its own governed language:
+recommendations are never bare text — they are evidence-bearing decision
+artifacts.
 
-**Scope.** Component-level adaptation inside the SPEC-WS tiers: how cards,
-tables, headers, and charts reflow at T1/T2 vs T3+.
-
-**Responsibilities.** Stack order on T1 (Q1→Q4 preserved), table→card
-transforms for ledgers, header condensation (existing mobile pattern),
-`clamp()` numeral scaling.
-
-**Boundaries.** Zone visibility is SPEC-WS's matrix; this spec governs what
-happens *inside* a zone at small sizes.
-
-**Inputs.** Tier signal; `useIsMobile` (720px drawer threshold, existing).
-
-**Outputs.** Responsive rules per component class (KPI, table, chart,
-header, modal).
-
-**Rules.**
-1. Desktop is the design origin; T1 is a faithful reduction, not a separate
-   product.
-2. No horizontal scroll; no clipped numerals (clamp scale is mandatory).
-3. Reading order on T1 = question order Q1→Q4 (P1).
-4. Touch affordances on T1: 44px targets, drawer nav, no hover-dependent
-   information.
-
-**Acceptance criteria.** 390 / 768 / 1024 / 1440 / 1920 / 2560 / 3440 render
-clean (no overflow, no clipping); T1 shows all four answers in first two
-screenfuls.
-
-**Non-goals.** Native apps; print styles (PDF export already exists).
-
-**Future extensions.** Compact-density mode for control rooms.
-
----
-
-# 10. SPEC-PF — Performance Specification 1.0
-**Principles:** P6
-
-**Purpose.** The product must feel instantaneous — latency erodes
-institutional trust.
-
-**Scope.** Bundle, runtime rendering, data streaming, animation cost.
-
-**Responsibilities.** Budgets and the techniques to hold them.
-
-**Boundaries.** Backend latency is out of scope (frozen); this spec owns
-everything after the response arrives.
-
-**Inputs.** Vite build stats; runtime profiles; live WS message rate.
-
-**Outputs.** Enforced budgets; lazy-loading map; virtualization inventory.
-
-**Rules (budgets).**
-1. Initial JS ≤ 250 kB gzip (current: ~214 kB — regression gate).
-2. Code-split heavy, rarely-first surfaces: charts vendor chunk, Math
-   Appendix, Certificate/PDF flows, Live Monitor.
-3. Long lists (288-step ledgers, audit history, decision stream) are
-   virtualized or paginated at > 100 rows.
-4. Live feed renders are throttled/batched (≤ 4 state commits/s); memoized
-   zone boundaries stop re-render storms.
-5. Interaction cost: < 16 ms/frame during animation (compositor-only rule
-   from SPEC-MO); tier switch < 200 ms.
-6. Lighthouse desktop performance ≥ 90 on S01 with demo data.
-
-**Acceptance criteria.** CI check on bundle size; profiled trace of live
-mode shows bounded commits; Lighthouse report archived per release.
-
-**Non-goals.** SSR/SEO work (authenticated product); service workers
-(future).
-
-**Future extensions.** WebGL chart offload at T5; worker-side series
-downsampling.
-
----
-
-# 11. SPEC-SX — Security UX Specification 1.0
-**Principles:** P2, P3, P5
-
-**Purpose.** Make the platform's real security architecture *visible* —
-trust must be perceivable — without security theater.
-
-**Scope.** Evidence badges, hashes, certificates, session/trial states,
-error surfaces, data-sensitivity presentation.
+**Vision.** Executives trust the machine because the machine shows its
+work: reasoning, confidence, alternatives, and audit trail — every time,
+in the same anatomy.
 
 **Responsibilities.**
-- Evidence chain surfaces: truncated SHA-256 with copy-full affordance;
-  certificate verification URL; hash-chain integrity indicators from
-  existing endpoints.
-- State honesty: CERTIFIED (green) vs PROVISIONAL (amber) never conflated;
-  live states always provisional until reconciled (EDA-RECON semantics).
-- Session surfaces: signed-in identity, trial state, expiry — quiet, factual.
+- Own the **PREDAIOT Recommendation Block** — the only sanctioned way any
+  machine recommendation renders. Required anatomy, all fields from
+  existing API data:
 
-**Boundaries.** Actual security (RBAC, headers, encryption, rate limits) is
-backend-owned and frozen; this spec renders it.
+| Element | Content | Source (existing) |
+|---------|---------|--------------------|
+| Designation | "PREDAIOT Recommendation" + decision type chip | `opportunities[]` / decision `decision_type` (CORRECTIVE / OPTIMIZATION / RECOVERY / MONITORING) |
+| Reasoning | Why this action, from recorded attribution | opportunity `description` / `derivation`, `root_causes[]` |
+| Evidence | The audit basis | `audit_id`, `audit_manifest.input_sha256`, EDA-ES version |
+| Confidence | Grade + % where provided; INDETERMINATE honestly | `audit_confidence`, `data_quality_index` |
+| Economic Impact | Recorded-period value at stake + basis disclaimer | `period_gain` / `expected_value_impact` (recorded-period semantics) |
+| Alternative Decisions | Next-ranked actions, subordinate emphasis | remaining `opportunities[]` ranked by recorded gain |
+| Assumptions | Method + flags | `derivation`, `experimental` flag, methodology version |
+| Governance Status | Where this stands in the loop | Decision → DEC-LIFE state → Outcome → Governance verdict (existing endpoints) |
+| Evidence Chain | Linked chips | decision id → audit id → hashes → governance record |
 
-**Inputs.** Existing fields: `audit_manifest.input_sha256`, certificate
-records, governance verdicts, session/trial tokens, roles.
+- Own the AI voice: declarative, sourced, unhurried; the platform states
+  findings — it never chats, never emotes, never markets itself.
+- Own uncertainty language: INDETERMINATE, PROVISIONAL, and absent data are
+  first-class honest states with defined styling (SPEC-ID Confidence
+  Styling).
 
-**Outputs.** Badge/indicator components (EvidenceBadge exists), error-view
-patterns, masking rules.
+**Boundaries.** Presentation of machine output only; the intelligence
+itself is the frozen engine. No new inference, no client-side "AI" logic,
+no re-ranking beyond recorded figures.
+
+**Inputs.** `opportunities[]`, `root_causes[]`, decisions + lifecycle +
+outcomes + governance records, confidence objects, Intelligence Report
+text.
+
+**Outputs.** The Recommendation Block contract; the experimental-content
+rule; the AI copy rules used across ACTION surfaces.
 
 **Rules.**
-1. Secrets and tokens never render in URLs or full plaintext; emails masked
-   where shown.
-2. Errors state what failed and the next step — never stack traces or
-   internal identifiers (P5).
-3. Every economic figure sits within reach of its evidence (badge, hash, or
-   link) — the P3 "prove it" affordance.
-4. No fake security ornamentation (padlock icons without meaning).
+1. **A bare "Recommended Action" may never render.** Minimum lawful render:
+   Designation + Reasoning + Evidence + Confidence + Economic Impact;
+   Alternatives/Assumptions/Governance/Chain follow at T3+ per zone space.
+2. Experimental opportunities always carry their EXPERIMENTAL flag and are
+   never the primary recommendation (existing product rule, now law).
+3. Alternatives are visible wherever a primary recommendation renders —
+   a lone option is presented as a ranked choice of one, stated as such.
+4. Confidence is never invented: absent → the block renders its honest
+   fallback (ECF-based health context) and says why.
+5. Economic impact always carries the recorded-basis disclaimer; annualized
+   or projected framings are banned (P2).
+6. Governance status reflects the actual EDA loop state; "not yet governed"
+   is a legitimate display state.
 
-**Acceptance criteria.** Trust-surface inventory complete on every screen
-with data; token/secret leak audit clean; provisional/certified states
-verified against data source in E2E.
+**Acceptance criteria.** Anatomy audit: every recommendation surface carries
+the minimum lawful elements traceable to fields; no bare-text
+recommendations grep-detectable in copy; experimental gating verified in
+E2E; alternatives present wherever primaries render.
 
-**Non-goals.** New auth flows; changing backend security.
+**Non-Goals.** Chat interfaces; generative free-text on-screen; client-side
+model calls; prompt UIs.
 
-**Future extensions.** In-UI certificate verifier (calls existing verify
-endpoint); governance-chain visual explorer.
+**Future Extensions.** Recommendation diffing across certified periods;
+governance-verdict-aware ranking (still recorded-data-only).
+
+**Dependencies.** SPEC-ST (beat 4), SPEC-ID (confidence styling), SPEC-IA
+(Q4); principles P2, P3, P7, P9.
+
+**Examples.**
+- Compliant block: "PREDAIOT Recommendation · OPTIMIZATION — Dynamic
+  dispatch trigger. Reasoning: static thresholds held charge through the
+  19:40 price window (root cause: market-response gap). Evidence: audit
+  EDA-…5c1f · sha256 9f4be6f6a1…. Confidence: INDETERMINATE (JSON audit —
+  DQI not computed). Economic impact: 7,842.11 USD recorded this period —
+  recorded basis only. Alternatives: SOC floor retune (+1,204.55 USD
+  recorded). Status: Decision not yet issued."
+- Governance chip sequence: `EDDEC-…` → `EDLIFE: EXECUTED` → `EDOUT-…` →
+  `EDGOV: VERIFIED` — the loop as jewelry.
+
+**Failure Cases.**
+- "We recommend enabling dynamic dispatch." with nothing else — unlawful
+  render; blocked.
+- Confidence shown as "B (estimated)" when the API returned null —
+  fabrication; worst-class failure.
+- An experimental optimizer surfaced as the primary action — gating
+  violation.
+
+**Governance Rules.** The block anatomy is amendable only by ratification;
+any new machine-output surface must register its anatomy mapping in GOV-DR
+before implementation.
+
+---
+---
+
+# PART III — VISUALIZATION
 
 ---
 
-# 12. SPEC-IX — Interaction Specification 1.0
-**Principles:** P1, P5, P6
+# SPEC-DV — Data Visualization 1.0
 
-**Purpose.** Uniform interaction grammar: every control behaves predictably
-in all states.
+**Purpose.** The rendering discipline for all visual data: truth, restraint,
+and identity in every axis, area, and tooltip — regardless of which
+instrument (SPEC-CH) is being drawn.
 
-**Scope.** Buttons, cards, nav items, inputs, modals, uploads, toasts,
-loading/empty/error states.
+**Vision.** Every visualization reads as economic evidence prepared for a
+board, not as library output.
 
-**Responsibilities.** The state matrix — every interactive element defines
-default / hover / focus / active / disabled / loading; every data surface
-defines loading / empty / error / populated.
+**Responsibilities.**
+- Own the render rules any instrument must obey: quiet hairline grids,
+  tertiary-text axes, panel-styled tooltips, gradient-to-transparent area
+  fills, semantic series colors, mono numerals on axes and tooltips.
+- Own **axis truth**: baselines and breaks explicit; no truncated axis may
+  exaggerate movement without a visible break marker (P2).
+- Own series honesty: real API series only; gaps render as gaps; empty and
+  insufficient states are honest and directive; downsampling must be
+  visually declared when applied.
+- Own labeling: every visualization carries unit, currency, and period;
+  money axes use the registered formatters.
 
-**Boundaries.** Visual tokens from SPEC-DS; motion from SPEC-MO; component
-inventory in SPEC-CO.
+**Boundaries.** How things render — *which* instruments exist and what
+questions they answer is SPEC-CH; colors are SPEC-DS tokens; entrance
+motion is SPEC-MO.
 
-**Inputs.** User events; request lifecycle.
+**Inputs.** Audit ledger series, gap attribution, root causes, history,
+live buffers — existing API only.
 
-**Outputs.** Interaction patterns adopted by all components.
+**Outputs.** The render-discipline ruleset; the shared visualization theme
+contract every instrument implementation must consume.
 
 **Rules.**
-1. One accent primary action per view (header: RUN DEMO); all secondary
-   actions quiet neutral (ratified in Phase 2 work).
-2. **No optimistic UI for economic data** — figures render only from server
-   truth (P2); loading states are explicit.
-3. Empty states are honest and directive ("Run an audit to populate…"),
-   never sample data.
-4. Errors are recoverable in place (retry affordance) and never modal-trap.
-5. Destructive or irreversible actions require explicit confirmation;
-   uploads validate before submit (existing pattern).
-6. Loading: skeleton panels for zones (> 300 ms expected), inline spinners
-   for actions; never full-screen blockers after first paint.
+1. No default library styling may remain visible — fonts, colors, grids,
+   tooltips all themed (identity signature applies inside plots).
+2. One accent series per visualization; comparisons use semantic palette
+   members, never arbitrary hues.
+3. Loss shading below benchmark, recover shading above — the economic
+   orientation is constant product-wide.
+4. Maximum data-ink discipline: no 3D, no drop shadows on marks, no
+   decorative gradients beyond the sanctioned area fill.
+5. Tooltips state figure + unit + timestamp + basis; hover never reveals
+   information unavailable to keyboard/touch users (SPEC-AX).
 
-**Acceptance criteria.** State-matrix audit per component passes; demo→
-audit→certificate flow has zero dead-end states; keyboard parity per
-SPEC-AX.
+**Acceptance criteria.** Screenshot review finds zero default-library
+styling; axis-truth audit passes on every instrument; every plot labeled
+with unit/period; empty-state review passes.
 
-**Non-goals.** Undo infrastructure; collaborative cursors.
+**Non-Goals.** Instrument taxonomy (SPEC-CH); animation choreography
+(SPEC-MO); exotic chart types.
 
-**Future extensions.** Command palette (⌘K) for section jumps (feeds
-SPEC-NV future).
+**Future Extensions.** Canvas/WebGL render path for T5 walls; synchronized
+brushing across instruments in a region.
+
+**Dependencies.** SPEC-DS, SPEC-ID, SPEC-CH, SPEC-MO, SPEC-AX; principles
+P2, P4, P10.
+
+**Examples.**
+- Financial Timeline: ink plot, hairline grid, teal actual vs slate
+  benchmark, rose shading where actual underruns, mono axis money.
+- Tooltip: "14:35 · Price 82.40 USD/MWh · Dispatch 38 MW · EDV gap 41.22
+  USD (recorded)".
+
+**Failure Cases.**
+- Default blue/white tooltip — identity break inside evidence; blocked.
+- A y-axis starting at 90% of range making a 2% dip look like a collapse —
+  axis-truth violation; worst-class P2 defect.
+
+**Governance Rules.** Render rules amendable by ratification; every
+instrument implementation passes DV review before registry activation.
 
 ---
 
-# 13. SPEC-CO — Component Specification 1.0
-**Principles:** P4, P5, P6
+# SPEC-CH — Decision Instrument Library 1.0
+
+**Purpose.** Replace generic charts with **Decision Instruments** — named,
+governed visualizations that each answer one executive question with
+economic meaning. *Charts are forbidden; instruments are required.*
+
+**Vision.** A cockpit of financial instruments as recognizable as a
+Bloomberg pane or an F1 pit wall — but answering PREDAIOT's questions.
+
+**Responsibilities.**
+- Own the **Instrument Registry**. Every visualization in the product is a
+  registered instrument. The word "chart" is banned from product copy.
+- Founding registry (all inputs are existing API data):
+
+| Instrument | Question | Economic meaning | Inputs (existing) |
+|------------|----------|------------------|--------------------|
+| IN-01 Economic Dial | Q3 | Share of achievable value captured | `dq_score` (ECF), `risk_level` |
+| IN-02 Opportunity Ladder | Q4 | Ranked recoverable actions by recorded gain | `opportunities[]` |
+| IN-03 Decision Timeline | Q5/Q7 | When decisions were made and their quality | `decision_log`, DEC-LIFE events |
+| IN-04 Economic Allocation | Q1/Q5 | Where the period's value went (captured / forecast-unreachable / execution gap) | `edv_actual_total`, `gap_attribution`, `edv_optimal_total` |
+| IN-05 Risk Horizon | Q3/Q8 | Risk banding across audited periods | audit history risk levels |
+| IN-06 Leakage Flow | Q5 | Leakage decomposed by root cause | `root_causes[]` |
+| IN-07 Recoverable Value River | Q2 | Cumulative recoverable value across the period | ledger execution-gap series |
+| IN-08 Confidence Spectrum | Q6 | Data-quality components → audit confidence | `data_quality_index.components`, `audit_confidence` |
+| IN-09 Governance Chain | Q6 | Hash-linked verification lineage | governance / lifecycle / outcome records |
+| IN-10 Decision Sankey | Q5/Q6 | Decisions flowing through lifecycle to outcomes | DEC → DEC-LIFE → OUT records |
+| IN-11 Asset Health Matrix | Q8 | Portfolio grid: asset × capture/risk | `/api/v1/audits` history |
+| IN-12 Executive Heatmap | Q5 | Decision quality by time-of-day/step | heat map data (existing S08) |
+| IN-13 Financial Timeline | Q1 | Money over time: actual vs benchmark, loss shaded | ledger series |
+| IN-14 Action Priority Matrix | Q4 | Recorded impact × evidence confidence quadrant | `opportunities[]` (`period_gain` × confidence/experimental flags) |
+
+- Each registered instrument defines, in its registry entry:
+  **Purpose · Question Answered · Economic Meaning · Inputs · Outputs ·
+  Interaction Rules · Acceptance Criteria.** The founding entries above fix
+  the first five; interaction and acceptance follow the global rules below
+  until per-instrument sheets are ratified in Phase 5.
+
+**Boundaries.** Instrument taxonomy and meaning; rendering discipline is
+SPEC-DV; placement is SPEC-WS/DB; motion is SPEC-MO.
+
+**Inputs.** Question Registry (SPEC-IA); frozen API series and records.
+
+**Outputs.** The Instrument Registry (mirrored in GOV-DR); per-instrument
+contract sheets (Phase 5 deliverable).
+
+**Rules.**
+1. No unregistered visualization may ship. Generic "add a chart" requests
+   resolve to an existing instrument or a registry proposal.
+2. Every instrument names exactly one primary question; instruments that
+   answer nothing are removed (Existence Test).
+3. Axes of judgment must be recorded data: e.g., IN-14 uses recorded gain ×
+   evidence confidence — never invented "effort" scores (P2).
+4. Instruments carry their economic orientation constantly (loss below/
+   rose; recover above/green) — a reader who learns one instrument has
+   learned them all.
+5. Interaction: hover inspects, click pins evidence, nothing navigates
+   without explicit affordance; every interaction has keyboard parity.
+6. IN-09 Governance Chain must render real hash linkage — visual chains
+   without verifiable hashes are forbidden.
+
+**Acceptance criteria.** Registry complete and mirrored in GOV-DR; each
+shipped instrument passes its contract sheet + DV render audit; zero
+unregistered visualizations in the tree; copy audit finds no "chart" in
+product surfaces.
+
+**Non-Goals.** Decorative infographics; 3D; instruments for questions
+outside the registry.
+
+**Future Extensions.** IN-15 Outcome Realization instrument (recorded
+realized vs recorded expected) as Outcome history accumulates; T5
+wall-scale composite instruments.
+
+**Dependencies.** SPEC-IA, SPEC-DV, SPEC-DS, SPEC-MO, SPEC-AX; principles
+P1, P2, P6, P7.
+
+**Examples.**
+- IN-04 Economic Allocation replaces the "value flow" stacked view: one
+  horizontal allocation bar — captured (green), execution gap (rose),
+  forecast-unreachable (slate) — with the ceiling explicitly labeled
+  "benchmark, not a target".
+- IN-02 Opportunity Ladder: rungs sorted by recorded gain, EXPERIMENTAL
+  rungs visually quarantined below the line.
+
+**Failure Cases.**
+- A pie chart of asset types — unregistered, answers no question; removed.
+- IN-14 with a made-up "implementation effort" axis — P2 violation.
+- A sparkline added "for texture" — decorative; Existence Test failure.
+
+**Governance Rules.** The registry is append-only; new instruments enter by
+ratified proposal (question + meaning + inputs verified against frozen
+API); instrument retirement requires proof no manifest references it.
+
+---
+
+# SPEC-MO — Motion Language 1.0
+
+**Purpose.** Motion as meaning: animation communicates state change —
+money moved, evidence arrived, a system is live. Nothing else moves.
+
+**Vision.** The stillness of a private bank lobby, broken only when
+something true happens.
+
+**Responsibilities.**
+- Own the motion vocabulary: durations 140ms (state), 260ms (entrance),
+  520ms (money count-up); one easing family (the product's signature
+  deceleration curve); the sanctioned patterns — rise-in for arriving
+  content, count-up for money, pulse for live signals, sweep for gauges.
+- Own the meaning map: each pattern is bound to a semantic event; using a
+  pattern for a different meaning is a violation.
+- Own restraint: motion frequency budgets per screen; loops reserved for
+  genuinely live data.
+
+**Boundaries.** Token values live in SPEC-DS; instrument-entrance specifics
+in SPEC-DV/CH; loading skeletons in SPEC-IX.
+
+**Inputs.** State-change events (data arrival, provenance transitions,
+user actions); reduced-motion preference.
+
+**Outputs.** The motion vocabulary and meaning map; the animation review
+checklist.
+
+**Rules.**
+1. Compositor-only: animate transform and opacity exclusively; 60fps is a
+   law, not a target (P5-perf via SPEC-PF).
+2. Every animation names its meaning at review ("money changed", "evidence
+   arrived", "stream is live"). Unnamed motion is removed (P10).
+3. No bounce, spin, parallax, shimmer-theatrics, or scroll-jacking. Ever.
+4. Looping motion only for live provisional streams; certified/static data
+   never loops.
+5. Reduced-motion disables all non-essential animation; money renders at
+   final value instantly.
+6. Provenance transitions (PROVISIONAL → CERTIFIED) receive the most
+   deliberate animation in the product — trust arriving is the one moment
+   worth ceremony (still ≤ 520ms).
+
+**Acceptance criteria.** Performance trace shows zero layout/paint work
+from animation; motion inventory per screen ≤ budget; reduced-motion audit
+passes; every registered animation carries its meaning in GOV-DR.
+
+**Non-Goals.** Page-transition cinematics; Lottie/video; easter eggs.
+
+**Future Extensions.** T5 wall zone-stagger choreography (ratified
+amendment); haptic-paired motion on touch hardware.
+
+**Dependencies.** SPEC-DS, SPEC-LX, SPEC-PF, SPEC-AX; principles P8, P10.
+
+**Examples.**
+- Audit completes: zones rise-in staggered 60ms; leakage counts up 520ms;
+  evidence chip fades in last — the story lands in hierarchy order.
+- Live tick: the LIVE dot breathes; the leakage numeral steps without
+  easing theatrics.
+
+**Failure Cases.**
+- A hover bounce on KPI cards — banned pattern; removed.
+- Count-up applied to a hash — motion without meaning (hashes don't
+  accumulate); violation.
+- A perpetual sheen sweep across certified panels — loop on non-live data.
+
+**Governance Rules.** The vocabulary is closed; new patterns enter only by
+ratified amendment with a named meaning and performance evidence.
+
+---
+
+# SPEC-LX — Industrial Luxury Language 1.0
+
+**Purpose.** Define how PREDAIOT feels expensive: institutional, executive,
+financial, confident, calm, scientific, trustworthy, premium, timeless.
+Never flashy, gaming, cyberpunk, consumer-SaaS, or futuristic for its own
+sake.
+
+**Vision.** The product feels like a precision instrument delivered in a
+machined case: weight you sense, restraint you trust.
+
+**Responsibilities.**
+- **Materials.** Layered ink surfaces (the luminance staircase bg-0 →
+  panel-3); matte, never glossy; metalized accents only in the certificate
+  seal context.
+- **Depth.** Two elevations (resting, raised) plus the canvas — depth
+  states hierarchy, never spectacle.
+- **Glass.** Blur reserved for sticky chrome (header, drawers) — content
+  never sits on glass; evidence is always on solid ground.
+- **Contrast.** High contrast is spent on money and verdicts; everything
+  else lives in the mid-range. Contrast is the loudest voice in the room
+  and is rationed accordingly.
+- **Lighting.** One implied light source from above: inset top highlights,
+  soft under-shadows; glow only as meaning (money, live, seal).
+- **Animation.** Defers to SPEC-MO — luxury moves rarely and lands softly.
+- **Spacing.** Generosity correlates with consequence: the leakage figure
+  gets the widest margins in the product.
+- **Silence.** The default state of every screen is still and quiet; sound
+  is never used.
+- **Negative Space.** Emptiness is structural — zones breathe between, not
+  inside; a crowded panel is a defect, not density.
+- **Professional Confidence.** The interface never begs (no "Upgrade
+  now!"), never apologizes decoratively, never over-explains. It states,
+  it proves, it waits.
+
+**Boundaries.** Feel and material physics; exact tokens in SPEC-DS;
+identity marks in SPEC-ID; motion mechanics in SPEC-MO.
+
+**Inputs.** SPEC-ID identity; the anti-reference list (what PREDAIOT must
+never feel like).
+
+**Outputs.** The material ruleset; the luxury review rubric used in GOV-AC.
+
+**Rules.**
+1. The anti-list is absolute: no neon-on-black gaming palettes, no
+   cyberpunk glitch, no consumer-SaaS friendliness (rounded mascots,
+   confetti, marketing gradients), no sci-fi HUD cosplay.
+2. Saturated area ≤ 10% of any screen; glow only on money, live, seal.
+3. Nothing blinks for attention; urgency is expressed by hierarchy and
+   semantics, not by alarm aesthetics.
+4. Every surface passes the "timeless test": would this look dated in five
+   years? Trend-driven treatments are rejected.
+5. Density is earned: evidence tables may be dense; answers may not.
+
+**Acceptance criteria.** Luxury rubric passes per screen (materials, depth,
+contrast rationing, negative space); anti-list audit clean; a printed
+grayscale screenshot still reads hierarchy correctly (luxury survives
+without color).
+
+**Non-Goals.** Skeuomorphism; darkening for its own sake; brand marketing
+surfaces.
+
+**Future Extensions.** Light-theme luxury (daylight institutional); physical
+control-room profiles (matte wall displays).
+
+**Dependencies.** SPEC-ID, SPEC-DS, SPEC-MO; principles P4, P8, P10.
+
+**Examples.**
+- The certificate surface: gold seal accent on matte ink, wide margins,
+  mono registry number — a document, not a modal.
+- Severe risk state: rose semantics and hierarchy weight — no siren
+  banners, no flashing.
+
+**Failure Cases.**
+- A glowing grid-line background "for tech feel" — cyberpunk drift;
+  removed.
+- An upgrade banner with a gradient CTA inside the workspace — consumer
+  SaaS drift; removed.
+- Ten saturated series colors in one instrument — contrast inflation.
+
+**Governance Rules.** The anti-list is append-only; material rules amend
+only by ratification; the luxury rubric is part of every acceptance pack.
+
+---
+---
+
+# PART IV — PRODUCT
+
+---
+
+# SPEC-CO — Component Registry 1.0
 
 **Purpose.** A governed component catalog — the UI equivalent of
-METRIC_REGISTRY. New components enter by registration, not improvisation.
+METRIC_REGISTRY. Components enter by registration, never by improvisation.
 
-**Scope.** All reusable UI units.
+**Vision.** Any engineer, in any future year, opens the registry and knows
+exactly what exists, why, and what each piece may and may not do.
 
-**Responsibilities.** The registry:
+**Responsibilities.**
+- Own the registry. Founding entries:
 
-| Component | Status | Spec owner |
+| Component | Status | Owner spec |
 |-----------|--------|------------|
-| Panel, KpiCard, AnimatedNumber, GradeBadge, EvidenceBadge, StatusDot, SectionTitle, Sparkline, Trend, Divider | EXISTS (`design/components.jsx`) | SPEC-DS/CO |
-| SectionHeader (App), Pill, BtnOutline, ProgressBar, Card (legacy) | EXISTS (bridge — migrate to design/) | SPEC-CO |
-| Workspace, Region, Zone, useWorkspaceTier | PLANNED (SPEC-WS) | SPEC-WS |
-| ChartTheme + canonical charts | PLANNED (SPEC-DV) | SPEC-DV |
-| Button family (primary/quiet/danger), Skeleton, Toast, EmptyState | PLANNED | SPEC-IX |
-| ArchetypeSwitcher | PLANNED (SPEC-RB) | SPEC-RB |
+| Panel, KpiCard, AnimatedNumber, GradeBadge, EvidenceBadge, StatusDot, SectionTitle, Sparkline*, Trend, Divider | EXISTS (design system home) | SPEC-DS/CO |
+| SectionHeader, Pill, BtnOutline, ProgressBar, Card (legacy bridge) | EXISTS — migrate & retire | SPEC-CO |
+| Workspace, Region, Zone, tier hook | PLANNED | SPEC-WS |
+| Economic Context Strip | PLANNED | SPEC-DL |
+| Recommendation Block | PLANNED | SPEC-AI |
+| Decision Instruments IN-01…IN-14 | PLANNED | SPEC-CH |
+| Button family, Skeleton, Toast, EmptyState | PLANNED | SPEC-IX |
+| Archetype Switcher | PLANNED | SPEC-RB |
 
-**Boundaries.** Components consume tokens only; they never fetch data
-(data flows in as props from screens/zones).
+  *Sparkline is re-registered as an instrument primitive under SPEC-CH
+  during Phase 5.
+- Enforce: components consume tokens only; components never fetch data
+  (data arrives as props from zones/screens); one component, one
+  responsibility; props are semantic (`grade`, `provisional`, `live`),
+  never raw colors.
 
-**Inputs.** Tokens; interaction grammar; accessibility rules.
+**Boundaries.** Inventory and entry rules; visual identity is SPEC-ID;
+behavior states are SPEC-IX.
 
-**Outputs.** `src/design/` as the single component home; legacy duplicates
-retired on migration.
+**Inputs.** Token registry; interaction grammar; accessibility rules.
+
+**Outputs.** The registry (mirrored in GOV-DR); migration list retiring the
+legacy bridge.
 
 **Rules.**
-1. A new component requires: registry entry, principle citation, state
-   matrix (SPEC-IX), and token-only styling.
-2. One component, one responsibility; composition over configuration.
-3. Props are semantic (`grade`, `provisional`, `live`) — never raw colors.
-4. Legacy bridge components may not gain new features; feature work happens
-   in `design/`.
+1. A new component requires: registry entry, principle citation, question
+   or purpose declaration (Five Purposes Test), state matrix (SPEC-IX),
+   token-only styling, accessibility notes.
+2. Legacy bridge components are frozen — no new features; feature work
+   happens in the design-system home.
+3. Composition over configuration: variants multiply only with registered
+   justification.
+4. No component may embed copy that violates SPEC-ST voice.
 
-**Acceptance criteria.** No unregistered reusable component in the tree;
-`design/` components have zero data-fetching imports.
+**Acceptance criteria.** Zero unregistered reusable components in the tree;
+zero data-fetching imports in registered components; bridge retirement
+tracked to completion during migration phases.
 
-**Non-goals.** Publishing an external component library (future);
-Storybook (Phase 9 decides).
+**Non-Goals.** External publication; visual regression tooling choice
+(Phase 9 decides documentation/tooling).
 
-**Future extensions.** Extraction into a versioned package for future
-PREDAIOT products.
+**Future Extensions.** Extraction as a versioned internal package;
+manifest-driven component provenance stamps.
+
+**Dependencies.** SPEC-DS, SPEC-IX, SPEC-AX; principles P4, P5.
+
+**Examples.**
+- Registering the Recommendation Block cites P9 + Q4 and ships with its
+  full state matrix before first render.
+
+**Failure Cases.**
+- A one-off styled div copy-pasted across three sections — unregistered
+  de-facto component; consolidation required.
+- A component accepting `color="#FF5C7A"` — semantic-prop violation.
+
+**Governance Rules.** Registry is append-only with retirement protocol
+(proof of zero references); entries carry their owning spec and principle
+citations.
 
 ---
 
-# 14. SPEC-NV — Navigation Specification 1.0
-**Principles:** P1, P6
+# SPEC-NV — Navigation 1.0
 
-**Purpose.** Navigation as an instrument rail: grouped, quiet, instant.
+**Purpose.** Navigation as an instrument rail: grouped by the Section
+Taxonomy, quiet, instant — choosing the next executive question.
 
-**Scope.** Sidebar, header actions, section switching, mobile drawer.
+**Vision.** Wayfinding so calm it disappears; the questions are the map.
 
-**Responsibilities.** Render the SPEC-IA taxonomy as grouped navigation
-(COMMAND / ANALYSIS / ACTION / EVIDENCE & GOVERNANCE / OPERATIONS /
-REFERENCE) with the EDA-xx numbering preserved as mono tags; active state =
-accent left rule (existing pattern, kept).
+**Responsibilities.**
+- Render the SPEC-IA taxonomy groups (COMMAND / ANALYSIS / ACTION /
+  EVIDENCE & GOVERNANCE / OPERATIONS / REFERENCE) with microcaps group
+  kickers; items keep number + name in mono tags; glyph tags (⚡/🏆) are
+  retired per SPEC-ID iconography.
+- Own the header action bar: one accent primary, quiet neutral utilities,
+  identity, session badge — nothing more; overflow moves to menus.
+- Own the sidebar geometry contract with SPEC-WS (expanded/rail/drawer).
 
-**Boundaries.** Taxonomy owned by SPEC-IA; widths by SPEC-WS; archetype
-ordering by SPEC-RB.
+**Boundaries.** Chrome only; taxonomy is SPEC-IA; archetype ordering is
+SPEC-RB; widths are SPEC-WS.
 
-**Inputs.** Section registry; tier; archetype.
+**Inputs.** Section registry, tier signal, archetype signal.
 
-**Outputs.** Sidebar component (grouped), header action bar, drawer.
+**Outputs.** Sidebar/heade­r/drawer contracts; active-state language
+(accent left rule, kept).
 
 **Rules.**
-1. Groups are labeled with kickers; items keep number + name; ⚡/🏆 style
-   glyph tags are replaced by consistent mono tags (P5).
-2. Sections never nest deeper than one group level.
-3. Section switch is instant (no data refetch if state unchanged) — P6.
-4. Header carries at most: primary action, quiet utilities, identity,
-   session badge. Anything else moves into menus.
-5. Mobile: drawer with 44px targets (existing), same grouping.
+1. Any section reachable in ≤ 2 interactions from anywhere.
+2. Groups never nest beyond one level; section switching is instant with
+   no data refetch when state is unchanged.
+3. Active section is always visible in the rail and in the workspace
+   header context.
+4. Navigation never carries data or badges that fabricate urgency;
+   counts appear only when they answer a question (e.g., ungoverned
+   decisions count, from real records).
 
-**Acceptance criteria.** Any section reachable in ≤ 2 interactions; grouped
-sidebar matches SPEC-IA table exactly; keyboard navigable per SPEC-AX.
+**Acceptance criteria.** Interaction-distance audit passes; grouped rail
+matches the taxonomy table exactly; keyboard traversal per SPEC-AX;
+switch latency within SPEC-PF budget.
 
-**Non-goals.** Multi-level trees; breadcrumbs; URL routing rework (future).
+**Non-Goals.** Multi-level trees; breadcrumbs; URL routing rework
+(future).
 
-**Future extensions.** Deep links per section (`#/section/exec`); ⌘K
-palette (with SPEC-IX).
+**Future Extensions.** Deep links per section; command palette (with
+SPEC-IX); archetype-ordered rails (SPEC-RB).
+
+**Dependencies.** SPEC-IA, SPEC-WS, SPEC-RB, SPEC-AX; principles P1, P5.
+
+**Examples.**
+- EVIDENCE & GOVERNANCE group: Governance · Certificate · Audit History —
+  the proof shelf, one place.
+
+**Failure Cases.**
+- A red badge pulsing on a nav item to drive engagement — fabricated
+  urgency; removed.
+- A section reachable only through another section — distance violation.
+
+**Governance Rules.** Rail structure changes require SPEC-IA taxonomy
+amendment first; header additions require an Existence Test record.
 
 ---
 
-# 15. SPEC-DB — Dashboard Specification 1.0
-**Principles:** P1, P2, P4, P6
+# SPEC-DB — Dashboard Manifest 1.0
 
-**Purpose.** The assembly contract: how any dashboard is composed from
-workspace zones, so every future page is a composition, not an invention.
+**Purpose.** The assembly contract: every dashboard is a declared
+composition of zones, instruments, and narrative beats — never an
+invention.
 
-**Scope.** All current sections and future dashboards (role lenses,
-portfolio, live operations).
+**Vision.** Dashboards become auditable artifacts: read the manifest,
+know the screen — before it is built.
 
-**Responsibilities.** Every dashboard declares a manifest:
+**Responsibilities.**
+- Own the manifest schema, required before implementation:
 
 ```
-Dashboard manifest (required before implementation)
-- id, title, primary question (from SPEC-IA registry)
-- zones used (from WS catalog) + tier matrix row
-- data endpoints consumed (existing API only)
-- archetype emphasis (if any)
-- acceptance evidence: screenshot set per tier + checklist result
+Dashboard Manifest (required fields)
+- id, title
+- primary question (SPEC-IA registry ref)
+- narrative beat map (SPEC-ST beats → zones)
+- hierarchy declaration (SPEC-DL bands, top to bottom)
+- zones used (WS catalog refs) + tier visibility row
+- instruments used (SPEC-CH registry refs)
+- data endpoints consumed (frozen API refs)
+- archetype emphasis notes (SPEC-RB, if any)
+- acceptance evidence: tier screenshots, five-second test result,
+  compliance checklist outcome
 ```
+- Hold S01 Executive Command Center as the reference manifest.
 
-**Boundaries.** Zones/tiers from SPEC-WS; questions from SPEC-IA; visuals
-from SPEC-DS/DV.
+**Boundaries.** Composition contracts; the parts belong to their owning
+specs.
 
-**Inputs.** Ratified zone catalog, question registry, component registry.
+**Inputs.** All Part I–III registries.
 
-**Outputs.** Dashboard manifests (S01 Executive is the reference
-implementation and first manifest).
+**Outputs.** The manifest registry (GOV-DR mirror); the acceptance evidence
+packs consumed by GOV-AC.
 
 **Rules.**
-1. No dashboard without a manifest; no zone outside the catalog.
-2. The primary question's answer occupies the visual apex (P4).
-3. Dashboards degrade by tier via the WS matrix — never by ad-hoc CSS.
-4. All data honest: provisional marked, empty states directive, basis
-   disclaimers on any value framing (P2).
+1. No dashboard without a ratified manifest; no zone or instrument outside
+   the registries.
+2. The primary question's answer occupies the visual apex (SPEC-DL).
+3. Dashboards degrade across tiers only via the WS visibility matrix —
+   never by ad-hoc styling.
+4. Manifests are living contracts: implementation drift from manifest is a
+   defect on whichever side is wrong — reconciled before ship.
 
-**Acceptance criteria.** Manifest exists and matches implementation; tier
-screenshots archived; compliance checklist (§16) passes.
+**Acceptance criteria.** Manifest exists and matches implementation
+one-to-one; evidence pack archived; checklist passes; drift audit clean at
+each release.
 
-**Non-goals.** User-built custom dashboards (future).
+**Non-Goals.** User-built dashboards (future); manifest-driven runtime
+rendering (future).
 
-**Future extensions.** Manifest-driven rendering (dashboards as data).
+**Future Extensions.** Manifests as machine-readable artifacts driving
+scaffolding; portfolio and wall-mode manifests.
+
+**Dependencies.** Everything in Parts I–III; principles P1, P2, P6.
+
+**Examples.**
+- S01 manifest: Q1 primary; beats 1–6 mapped to Z1/Z2/Z3/Z4(+Z5/Z6 T3+);
+  instruments IN-13, IN-01, IN-02; endpoints: audit response (+ live state
+  when streaming).
+
+**Failure Cases.**
+- A screen shipped from a Figma-style improvisation with no manifest —
+  blocked at review regardless of quality.
+- Manifest listing IN-09 while the screen renders an unregistered chain
+  graphic — drift; reconciliation required.
+
+**Governance Rules.** Manifests are versioned and append-only; amendments
+follow GOV-RP; the reference manifest (S01) changes only with re-run
+five-second evidence.
 
 ---
 
-# 16. Global compliance checklist (every screen, every release)
+# SPEC-IX — Interaction Language 1.0
 
-- [ ] Cites its SPEC-IDs and principles (P1–P6) — unjustifiable elements removed
-- [ ] Composes `<Workspace>`; no bespoke layout; no max-width container
-- [ ] Primary question answered first; Q1–Q4 never displaced from S01
-- [ ] All data from frozen production APIs; no fabrication; provisional/certified honest
-- [ ] Tokens only — no stray hex/px conventions outside the system
-- [ ] Chart language applied; no library-default styling
-- [ ] State matrix complete (loading/empty/error/populated)
-- [ ] axe-core clean; keyboard path complete; reduced-motion honored
-- [ ] No horizontal scroll 390→5120px; numerals never clip
-- [ ] Bundle and render budgets hold (SPEC-PF)
-- [ ] Evidence affordance within reach of every economic figure
+**Purpose.** One interaction grammar: every control behaves predictably in
+every state; every data surface declares its lifecycle states.
 
-# 17. Amendments log
+**Vision.** Interaction so consistent that learning one screen teaches the
+whole product.
 
-| # | Date | Spec | Change | Ratified by |
-|---|------|------|--------|-------------|
-| — | — | — | (none — initial proposal) | — |
+**Responsibilities.**
+- Own the state matrices: interactive elements (default / hover / focus /
+  active / disabled / loading) and data surfaces (loading / empty / error /
+  populated), with SPEC-ID's state languages as the visual layer.
+- Own the action hierarchy: one accent primary per view; quiet neutrals for
+  everything else (ratified pattern).
+- Own feedback: inline confirmation at the artifact, skeletons shaped like
+  incoming answers, recoverable in-place errors, no dead ends.
 
-# 18. Implementation order (after ratification — the nine phases)
+**Boundaries.** Grammar only; visuals from SPEC-ID/DS; motion from SPEC-MO;
+copy from SPEC-ST.
 
-1. **Workspace System** — primitives (`useWorkspaceTier`, Workspace/Region/
-   Zone), remove 1720px cap, migrate all 16 sections onto the workspace.
-2. **Information Architecture** — grouped navigation, question registry
-   applied, section manifests drafted.
-3. **Executive Dashboard** — S01 rebuilt to full SPEC-EX + WS matrix
-   (T3/T4/T5 zones activate).
-4. **Role-Based Dashboards** — archetype lenses (SPEC-RB).
-5. **Chart Language** — ChartTheme + canonical charts replace defaults
-   (SPEC-DV).
-6. **Motion System** — vocabulary applied product-wide (SPEC-MO).
-7. **Accessibility & Responsiveness** — audits + fixes to AA (SPEC-AX/RS).
-8. **Performance & Load Testing** — budgets enforced, live-feed profiling
-   (SPEC-PF).
-9. **Design Documentation** — component registry docs, dashboard manifests,
-   contribution guide (makes the system survivable beyond any engineer).
+**Inputs.** Request lifecycle; user events; provenance transitions.
 
-Phases execute strictly in order. No phase begins before the previous one's
-acceptance criteria pass.
+**Outputs.** State-matrix templates for component registration; interaction
+review checklist.
+
+**Rules.**
+1. **No optimistic UI for economic data** — figures render only from server
+   truth; pending states are explicit (P2).
+2. Empty states are directive; errors state impact + recovery path; neither
+   ever fabricates content.
+3. Destructive or irreversible actions require explicit typed/structured
+   confirmation; uploads validate before submission.
+4. Hover is never the sole carrier of information (SPEC-AX parity).
+5. Toasts only confirm what the surface already shows; they never carry
+   sole evidence.
+6. Focus is managed at every transition (modals, drawers, section switch)
+   — keyboard users never lose their place.
+
+**Acceptance criteria.** State-matrix audit passes per registered
+component; demo→audit→certificate flow has zero dead ends; keyboard parity
+verified; optimistic-render grep audit clean for economic surfaces.
+
+**Non-Goals.** Undo infrastructure; collaborative presence.
+
+**Future Extensions.** Command palette; keyboard shortcut map; T4/T5
+pin-to-rail interactions.
+
+**Dependencies.** SPEC-ID, SPEC-MO, SPEC-AX, SPEC-ST; principles P3, P5.
+
+**Examples.**
+- Running an audit: primary button → engine phrase skeleton in Z2 shapes →
+  zones rise-in with results → evidence chip lands last.
+
+**Failure Cases.**
+- Leakage number animating to a guessed value before the response —
+  optimistic economics; worst-class violation.
+- An error modal with only "OK" — dead end; must offer retry/path.
+
+**Governance Rules.** Grammar changes by amendment; every new interactive
+pattern registers its matrix before first use.
+
+---
+
+# SPEC-SX — Security UX 1.0
+
+**Purpose.** Render the platform's real security architecture visibly —
+trust must be perceivable — without security theater.
+
+**Vision.** Users feel custody: every figure visibly chained to evidence,
+every session honestly stated, every boundary quietly firm.
+
+**Responsibilities.**
+- Surface the evidence chain: truncated SHA-256 chips with copy-full,
+  certificate registry numbers with verification URL, governance/lifecycle
+  chain chips (IN-09), provenance badges (CERTIFIED/PROVISIONAL) with
+  EDA-RECON semantics.
+- Surface session truth: identity, org, trial state and expiry — factual,
+  quiet.
+- Own data-sensitivity presentation: masked emails, no tokens/secrets in
+  URLs or full plaintext, no internal identifiers in errors.
+
+**Boundaries.** Presentation of the frozen security layer only; enforcement
+(RBAC, headers, encryption, rate limits, hash chains) is backend-owned.
+
+**Inputs.** Existing fields: manifests, certificates, governance records,
+session/trial state, roles.
+
+**Outputs.** Trust-surface inventory per screen; masking rules; error
+disclosure policy.
+
+**Rules.**
+1. Every economic figure sits within reach of its evidence affordance (P7)
+   — hash, badge, grade, or chain link.
+2. PROVISIONAL and CERTIFIED are never conflated — visually, verbally, or
+   by animation; transitions between them are explicit (SPEC-MO ceremony).
+3. Errors disclose what failed and the next step — never stack traces,
+   never internals (P4).
+4. No decorative security iconography — padlocks appear only where a
+   verifiable property exists.
+5. Copy-to-clipboard of evidence always copies the full value with its
+   context label.
+
+**Acceptance criteria.** Trust-surface inventory complete for every
+data-bearing screen; secret-leak audit clean (URLs, DOM, clipboard);
+provenance E2E verified; error-disclosure review passes.
+
+**Non-Goals.** New auth flows; changing backend security; compliance
+certifications UI (future).
+
+**Future Extensions.** In-UI certificate verifier (existing verify
+endpoint); governance-chain explorer as IN-09 deepens.
+
+**Dependencies.** SPEC-ID (evidence styling), SPEC-CH (IN-09), SPEC-IX;
+principles P2, P3, P4, P7.
+
+**Examples.**
+- Certificate surface: registry number mono, issue context, verification
+  URL, DQI/confidence grades — a document with provable anchors.
+
+**Failure Cases.**
+- A trial token appearing in a shareable URL — leak class; blocked.
+- A padlock icon on a marketing claim — theater; removed.
+
+**Governance Rules.** Masking and disclosure rules amend only by
+ratification; every new surface passes the trust-inventory check before
+ship.
+
+---
+
+# SPEC-AX — Accessibility 1.0
+
+**Purpose.** WCAG 2.2 AA: institutional software operable by every
+executive and operator, under boardroom or plant-floor conditions.
+
+**Vision.** Accessibility as institutional quality — the same rigor the
+platform applies to economic truth, applied to human access.
+
+**Responsibilities.** Contrast floors; keyboard completeness; semantic
+structure; focus management; non-color encodings; touch targets; motion
+opt-out.
+
+**Boundaries.** Token contrast set in SPEC-DS; motion opt-out in SPEC-MO;
+state parity in SPEC-IX; responsive targets shared with SPEC-RS.
+
+**Inputs.** Tokens, component registry, instrument registry, audit tooling
+results.
+
+**Outputs.** Per-screen audit reports in acceptance packs; the exception
+register (empty by default).
+
+**Rules.**
+1. Text contrast ≥ 4.5:1 (≥ 3:1 for large text); verified for every text
+   token on every sanctioned surface.
+2. Color never the sole carrier: grades keep letters, badges keep words,
+   trends keep direction glyphs, instruments keep labels/patterns.
+3. Full keyboard path through every flow; visible focus ring in accent;
+   no hover-only information anywhere (with SPEC-IX).
+4. Landmarks and headings semantically ordered; instruments expose text
+   alternatives stating their answer ("Capture 3.1% — Severe risk").
+5. Touch targets ≥ 44px on T1; reduced-motion honored globally.
+
+**Acceptance criteria.** Zero critical/serious findings per screen in
+automated audit; keyboard-only completion of demo → audit → certificate;
+instrument text alternatives reviewed; reports archived per release.
+
+**Non-Goals.** AAA conformance; screen-reader table optimization for
+288-step ledgers (summary + export covers duty).
+
+**Future Extensions.** High-contrast theme via the token scaffold; RTL
+support paired with SPEC-ST localization.
+
+**Dependencies.** SPEC-DS, SPEC-IX, SPEC-MO, SPEC-RS; principles P4, P5.
+
+**Examples.**
+- IN-01 Economic Dial exposes: role, label, value, risk verdict — a
+  screen-reader user hears the answer, not geometry.
+
+**Failure Cases.**
+- Severity conveyed by hue alone in IN-12 — non-color encoding violation.
+- Focus trapped in the trial gate modal — flow-blocking defect.
+
+**Governance Rules.** Exceptions require ratified amendment with expiry;
+the exception register is reviewed every release.
+
+---
+
+# SPEC-RS — Responsive System 1.0
+
+**Purpose.** Desktop-first adaptation inside the WS tiers: the same truth
+from a 49-inch wall to a phone, degrading co-presence — never integrity.
+
+**Vision.** T1 is a faithful pocket briefing of the same institution — not
+a different product.
+
+**Responsibilities.** Component-level adaptation: stack order on T1
+preserving Q1→Q4; ledger tables transform to evidence cards; header
+condenses per existing pattern; numerals scale by clamp; instruments define
+their compact renders.
+
+**Boundaries.** Zone visibility is SPEC-WS's matrix; this spec governs
+inside-zone reflow.
+
+**Inputs.** Tier signal; existing drawer threshold (720px); instrument
+compact contracts.
+
+**Outputs.** Reflow rules per component class; instrument compact-mode
+requirements.
+
+**Rules.**
+1. Desktop is the origin; T1 reduces faithfully — no separate mobile
+   product, no lost evidence.
+2. No horizontal scroll; no clipped numerals; clamp scaling mandatory.
+3. T1 reading order = Q1→Q4 then beats 5–6 (SPEC-DL/ST preserved).
+4. Touch affordances on T1: 44px targets, drawer navigation, no
+   hover-dependence.
+5. Every instrument ships a compact render or declares itself T2+-only in
+   its registry entry (then its answer appears as a stated figure on T1).
+
+**Acceptance criteria.** 390/768/1024/1440/1920/2560/3440 clean renders
+(no overflow/clipping); T1 shows all four answers within two screenfuls;
+instrument compact audits pass.
+
+**Non-Goals.** Native apps; print styles (PDF path exists); offline mode.
+
+**Future Extensions.** Compact density mode for control rooms; foldable
+postures.
+
+**Dependencies.** SPEC-WS, SPEC-DL, SPEC-AX, SPEC-CH; principles P1, P5.
+
+**Examples.**
+- T1 S01: leakage card → recoverable card → health card → recommendation
+  block → evidence chips — the briefing in one thumb-length.
+
+**Failure Cases.**
+- A table forcing horizontal scroll at 390px — law violation.
+- An instrument silently absent on T1 with its answer nowhere — integrity
+  loss; must state its figure.
+
+**Governance Rules.** Reflow rules amend by ratification; instrument
+compact contracts live in the CH registry.
+
+---
+
+# SPEC-PF — Performance 1.0
+
+**Purpose.** Institutional speed: latency erodes trust; the product must
+feel instantaneous at every tier.
+
+**Vision.** The instrument responds like a machined dial — immediate,
+damped, certain.
+
+**Responsibilities.** Budgets and enforcement: bundle, runtime, streaming,
+animation cost; the techniques ledger (splitting, virtualization,
+memoization, throttling).
+
+**Boundaries.** Backend latency out of scope (frozen); this spec owns
+everything after bytes arrive.
+
+**Inputs.** Build stats, runtime profiles, live message rates, tier
+signal.
+
+**Outputs.** Enforced budget gates; the lazy-loading map; virtualization
+inventory; per-release performance evidence.
+
+**Rules (budgets).**
+1. Initial JS ≤ 250 kB gzip (regression gate at current ~214 kB).
+2. Heavy, non-first surfaces split: instrument vendor code, Math Appendix,
+   Certificate/PDF, Live Monitor.
+3. Lists > 100 rows virtualized or paginated (ledgers, history, streams).
+4. Live feed commits batched ≤ 4/s; zone boundaries memoized against
+   re-render storms.
+5. Animation ≤ 16 ms/frame (SPEC-MO compositor law); tier/section switch
+   < 200 ms perceived.
+6. Reference scores: Lighthouse desktop ≥ 90 on S01 with demo data.
+
+**Acceptance criteria.** CI bundle gate green; live-mode profile shows
+bounded commits; budget evidence archived per release; no jank traces on
+instrument entrances.
+
+**Non-Goals.** SSR/SEO; offline caching; premature micro-optimization.
+
+**Future Extensions.** WebGL instrument offload at T5; worker-side series
+downsampling; performance telemetry dashboards (internal).
+
+**Dependencies.** SPEC-MO, SPEC-WS, SPEC-CH; principle P5.
+
+**Examples.**
+- Opening Math Appendix loads its chunk on demand; S01 never pays for it.
+
+**Failure Cases.**
+- A dependency bump pushing initial JS to 280 kB — gate failure, ship
+  blocked.
+- Live telemetry re-rendering the whole workspace per tick — storm class;
+  fix before ship.
+
+**Governance Rules.** Budgets amend only by ratification with evidence;
+every release attaches its performance pack to GOV-AC.
+
+---
+---
+
+# PART V — GOVERNANCE
+
+---
+
+# GOV-CM — Compliance Matrix 1.0
+
+**Purpose.** The living cross-reference proving that every shipped artifact
+satisfies its governing specs and principles.
+
+**Structure.** One row per registered artifact (screen, zone, component,
+instrument, animation pattern), columns: artifact id · owning manifest ·
+SPEC-IDs satisfied · principles cited (P1–P10) · Existence Test record ·
+Five Purposes declaration · last acceptance date · evidence pack reference.
+
+**Rules.**
+1. An artifact absent from the matrix may not ship.
+2. Empty principle citations fail review — "it looks good" is not a row.
+3. The matrix is regenerated and archived at every release; drift between
+   matrix and tree is a release blocker.
+
+**Governance Rules.** Matrix format amends by ratification; rows are
+append-only with retirement markers.
+
+---
+
+# GOV-DR — Design Registry 1.0
+
+**Purpose.** The registry-of-registries — the frontend's METRIC_REGISTRY.
+
+**Contents.**
+- Token Registry (SPEC-DS): every design token with identity citation.
+- Component Registry (SPEC-CO): every reusable component with owner spec,
+  state matrix, and status (EXISTS / PLANNED / BRIDGE-FROZEN / RETIRED).
+- Instrument Registry (SPEC-CH): IN-01…IN-14 founding set with question,
+  meaning, inputs; per-instrument contract sheets attach in Phase 5.
+- Dashboard Manifest Registry (SPEC-DB): every dashboard's ratified
+  manifest and evidence packs; S01 is the reference entry.
+- Question Registry (SPEC-IA): Q1–Q9 with API bindings.
+- Motion Vocabulary (SPEC-MO): each pattern with its bound meaning.
+- Brand Signature list (SPEC-ID): the five marks.
+
+**Rules.**
+1. Registration precedes existence: nothing renders before its registry
+   entry exists.
+2. Every entry carries: owner spec, principle citations, data bindings
+   (frozen API refs where applicable), status, and version.
+3. Retirement requires proof of zero references (grep-verifiable) and a
+   registry marker — entries are never deleted.
+
+**Governance Rules.** The registry lives beside this document and is the
+first artifact reviewed at every acceptance; unregistered artifacts found
+in the tree are defects regardless of quality.
+
+---
+
+# GOV-AL — Amendment Log 1.0
+
+**Purpose.** The append-only record of every ratified change to any
+specification after ratification — the immutability mechanism.
+
+**Format.**
+
+| # | Date | Spec | Change | Rationale | Ratified by |
+|---|------|------|--------|-----------|-------------|
+| — | — | — | (none — initial proposal) | — | — |
+
+**Rules.**
+1. Amendments are proposed in writing, reviewed against affected specs
+   (cascade analysis mandatory), and ratified explicitly before any
+   implementation reflects them.
+2. Amendments never rewrite history: the original text stays; the
+   amendment states the delta.
+3. Emergency changes do not exist. A defect fix that contradicts a spec is
+   an amendment like any other — reviewed first.
+
+**Governance Rules.** The log itself is unamendable; only appendable.
+
+---
+
+# GOV-AC — Acceptance Process 1.0
+
+**Purpose.** The gate every artifact passes before shipping — the frontend
+analog of the EDA production-verification ritual.
+
+**Process (per artifact / release).**
+1. **Manifest first** — the Dashboard Manifest (or registry entry) exists
+   and is ratified before implementation begins.
+2. **Implementation** — built against RATIFIED specs only.
+3. **Evidence pack assembly** — tier screenshots (390 → 3440 as
+   applicable), five-second test result (for question-bearing screens),
+   accessibility report, performance numbers, axis-truth and identity
+   checks, state-matrix walkthrough.
+4. **Compliance review** — GOV-CM row completed; Existence Test and Five
+   Purposes recorded; SPEC-ST voice review for copy.
+5. **Sign-off** — recorded with date and reviewer; artifact status flips
+   to ACCEPTED in GOV-DR.
+
+**Global compliance checklist (every screen, every release).**
+- [ ] Cites SPEC-IDs and principles; no uncited elements (Existence Test)
+- [ ] Composes the Workspace; no max-width container; no centered column
+- [ ] Primary question answered at the visual apex; hierarchy bands intact
+      (Money → Risk → Opportunity → Decision → Evidence → Details)
+- [ ] Six narrative beats mapped and ordered; voice rules pass
+- [ ] All data from frozen APIs; provenance honest; basis disclaimers
+      present; no fabrication anywhere
+- [ ] Recommendation surfaces use the full SPEC-AI anatomy
+- [ ] Only registered instruments; no "charts"; axis truth holds
+- [ ] Tokens only; identity signature marks present; luxury rubric passes
+- [ ] State matrices complete; no dead ends; no optimistic economics
+- [ ] Accessibility clean; keyboard parity; reduced-motion honored
+- [ ] No horizontal scroll 390 → 5120px; numerals never clip
+- [ ] Performance budgets hold; evidence pack archived
+
+**Governance Rules.** The checklist amends only by ratification; skipped
+steps void the acceptance.
+
+---
+
+# GOV-RP — Ratification Procedure 1.0
+
+**Purpose.** How this document and its parts become law, and how they
+change afterward.
+
+**Procedure.**
+1. **Proposal** — a spec (or amendment) is authored in full contract form
+   (the fourteen fields) and marked PROPOSED.
+2. **Review** — the owner (the platform's architect — the user) reviews;
+   amendments are stated explicitly, as in the EDA contract ritual.
+3. **Ratification** — an explicit ratification statement freezes the spec:
+   status flips to RATIFIED; the text becomes immutable except through
+   GOV-AL amendments.
+4. **Implementation authorization** — only RATIFIED specs may be
+   implemented; implementation follows the phase order below, no phase
+   starting before the previous one's acceptance criteria pass:
+   1. Workspace System → 2. Information Architecture → 3. Executive
+   Dashboard → 4. Role-Based Dashboards → 5. Chart Language (Decision
+   Instruments) → 6. Motion System → 7. Accessibility & Responsiveness →
+   8. Performance & Load Testing → 9. Design Documentation.
+5. **Perpetuity** — future engineers inherit the specs, the registries,
+   and the logs; nothing about the product's architecture lives only in
+   anyone's memory.
+
+**Rules.**
+1. Partial ratification is permitted per-spec (e.g., ratify Part I while
+   Part III is amended) — the index tracks status per spec.
+2. Ratification of SPEC-WS ratifies its annex (`WORKSPACE_SPEC.md`).
+3. A ratified spec contradicted by a later ratified spec requires an
+   explicit reconciliation amendment — silent precedence does not exist.
+
+**Governance Rules.** This procedure itself is amendable only by explicit
+ratification; the procedure's history lives in GOV-AL like everything
+else.
+
+---
+---
+
+*End of PREDAIOT-FE-2.0. Status: PROPOSED in every part. No implementation
+is authorized by this document until ratification. Upon ratification this
+specification becomes the immutable governing contract for every future
+frontend implementation of the PREDAIOT Economic Decision Intelligence
+Platform.*
+
+
+
+
