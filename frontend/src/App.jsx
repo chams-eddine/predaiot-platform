@@ -7,6 +7,7 @@ import {
 } from 'recharts';
 import ExecutiveCommandCenter from './components/ExecutiveCommandCenter';
 import { Workspace, Zone, useWorkspaceTier, tierAtLeast } from './workspace/Workspace';
+import { AXIS_TICK, GRID_PROPS, TOOLTIP_STYLE, TOOLTIP_LABEL, TOOLTIP_ITEM, TOOLTIP_CURSOR } from './instruments/theme';
 
 // ══════════════════════════════════════════════════════════════════════
 // TRIAL GATE — 7-day free diagnostic token (lead capture)
@@ -1169,18 +1170,21 @@ function IngestionNotesBanner({ notes, onDismiss }) {
 // glow; ComposedChart for the market-vs-action audit; live-telemetry
 // strip; discrepancy timeline; asset performance tiles.
 // ══════════════════════════════════════════════════════════════════════
+// Ops-console palette bridge — values mirror the PREDAIOT tokens (SPEC-DS),
+// exactly like the DS bridge: raw hex so ${color}NN alpha-concat keeps
+// working. The neon set (#00FF9D/#FF3366/#FFD600/#38BDF8) is retired.
 const OPS = {
-  bg:      '#0b1015',
-  card:    '#121820',
-  border:  '#1e2835',
-  green:   '#00FF9D',
-  red:     '#FF3366',
-  amber:   '#FFB020',
-  yellow:  '#FFD600',
-  blue:    '#38BDF8',
-  text:    '#E2E8F0',
-  sub:     '#8B9BB4',
-  dim:     '#4A5568',
+  bg:      '#0A0E16',   // --pds-bg-1
+  card:    '#0E1420',   // --pds-panel
+  border:  '#1B2536',   // --pds-border
+  green:   '#2FD69B',   // --pds-recover
+  red:     '#FF5C7A',   // --pds-loss
+  amber:   '#F3B24C',   // --pds-warn
+  yellow:  '#F3B24C',   // --pds-warn (single caution hue — no second yellow)
+  blue:    '#5AA9FF',   // --pds-info
+  text:    '#EAF1F8',   // --pds-text
+  sub:     '#97A6BC',   // --pds-text-2
+  dim:     '#5E6E88',   // --pds-text-3
 };
 
 function OpsFinancialCard({ label, value, color, sub, arrow, glow }) {
@@ -1271,8 +1275,9 @@ function DQScoreGauge({ value, count }) {
 }
 
 function MarketOptimizationChart({ log }) {
-  // Bar sign is derived from edv_actual_step — positive (green) = value captured,
-  // negative (red) = destroyed value at this step.
+  // IN-13 Financial Timeline (SPEC-CH) — money over time: market price
+  // context line + per-step EDV bars. Bar sign derives from edv_actual_step:
+  // positive (recover) = value captured, negative (loss) = value destroyed.
   if (!log || log.length === 0) return null;
   return (
     <ResponsiveContainer width="100%" height={230}>
@@ -1283,12 +1288,12 @@ function MarketOptimizationChart({ log }) {
             <stop offset="100%" stopColor={OPS.sub} stopOpacity={0} />
           </linearGradient>
         </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke={OPS.border} vertical={false} />
-        <XAxis dataKey="hour" stroke={OPS.sub} tick={{ fill: OPS.sub, fontSize: 9 }} />
-        <YAxis yAxisId="L" stroke={OPS.sub} tick={{ fill: OPS.sub, fontSize: 9 }} tickFormatter={(v) => `$${v}`} />
-        <YAxis yAxisId="R" orientation="right" stroke={OPS.sub} tick={{ fill: OPS.sub, fontSize: 9 }} />
+        <CartesianGrid {...GRID_PROPS} />
+        <XAxis dataKey="hour" stroke={OPS.border} tick={AXIS_TICK} tickLine={false} />
+        <YAxis yAxisId="L" stroke={OPS.border} tick={AXIS_TICK} tickLine={false} tickFormatter={(v) => `$${v}`} />
+        <YAxis yAxisId="R" orientation="right" stroke={OPS.border} tick={AXIS_TICK} tickLine={false} />
         <Tooltip
-          contentStyle={{ background: '#0f1318', border: `1px solid ${OPS.border}`, borderRadius: 8, fontSize: 11 }}
+          contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL} itemStyle={TOOLTIP_ITEM} cursor={TOOLTIP_CURSOR}
           formatter={(v, name) => [typeof v === 'number' ? `$${v.toFixed(2)}` : v, name]}
           labelFormatter={(h) => `Step ${h}`}
         />
@@ -2519,7 +2524,8 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {/* ══ S04: Root Cause Analysis ════════════════════════════ */}
           {hasData && activeSection === 'rootcause' && (
             <div>
-              <SectionHeader tag="04" title="Root Cause Analysis — Pareto" />
+              <SectionHeader tag="04" title="Root Cause Analysis"
+                sub="Recorded leakage decomposed by cause — ranked by economic loss." />
               {(data.root_causes || []).length === 0 ? <EmptyMsg>Run an audit to generate the root cause analysis.</EmptyMsg> : (
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
                   <Card>
@@ -2537,13 +2543,14 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                     ))}
                   </Card>
                   <Card>
-                    <Label style={{ marginBottom: 12 }}>Pareto Chart</Label>
+                    {/* IN-06 Leakage Flow — leakage decomposed by root cause. */}
+                    <Label style={{ marginBottom: 12 }}>Leakage Flow — Root-Cause Contribution</Label>
                     <ResponsiveContainer width="100%" height={260}>
                       <BarChart data={data.root_causes || []} layout="vertical" margin={{ top: 0, right: 20, left: 0, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={DS.border} />
-                        <XAxis type="number" stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} tickFormatter={(v) => `${v}%`} />
-                        <YAxis type="category" dataKey="category" stroke={DS.dim} tick={{ fill: DS.sub, fontSize: 9 }} width={140} />
-                        <Tooltip contentStyle={{ background: '#0f1318', border: `1px solid ${DS.border}`, borderRadius: 8, fontSize: 11 }} formatter={(v) => [`${v}%`, 'Contribution']} />
+                        <CartesianGrid {...GRID_PROPS} />
+                        <XAxis type="number" stroke={DS.border} tick={AXIS_TICK} tickLine={false} tickFormatter={(v) => `${v}%`} />
+                        <YAxis type="category" dataKey="category" stroke={DS.border} tick={AXIS_TICK} tickLine={false} width={140} />
+                        <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL} itemStyle={TOOLTIP_ITEM} cursor={TOOLTIP_CURSOR} formatter={(v) => [`${v}%`, 'Contribution']} />
                         <Bar dataKey="contribution_pct" radius={[0, 4, 4, 0]}>
                           {(data.root_causes || []).map((_, i) => (
                             <Cell key={i} fill={[DS.loss, DS.orange, DS.warning, DS.blue, DS.cyan, DS.purple][i % 6]} />
@@ -2588,10 +2595,10 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                           <stop offset="5%" stopColor={DS.blue} stopOpacity={0.25} /><stop offset="95%" stopColor={DS.blue} stopOpacity={0} />
                         </linearGradient>
                       </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke={DS.border} />
-                      <XAxis dataKey="hour" stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} />
-                      <YAxis stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} />
-                      <Tooltip contentStyle={{ background: '#0f1318', border: `1px solid ${DS.border}`, borderRadius: 8, fontSize: 11 }} />
+                      <CartesianGrid {...GRID_PROPS} />
+                      <XAxis dataKey="hour" stroke={DS.border} tick={AXIS_TICK} tickLine={false} />
+                      <YAxis stroke={DS.border} tick={AXIS_TICK} tickLine={false} />
+                      <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL} itemStyle={TOOLTIP_ITEM} cursor={TOOLTIP_CURSOR} />
                       <Legend wrapperStyle={{ fontSize: 11, color: DS.sub }} />
                       <Area type="monotone" dataKey="optimal_action" name="Optimal Dispatch (MW)" stroke={DS.optimal} fill="url(#gOpt)" strokeWidth={2} dot={false} />
                       <Area type="monotone" dataKey="actual_action" name="Actual Dispatch (MW)" stroke={DS.blue} fill="url(#gAct)" strokeWidth={2} dot={false} />
@@ -2698,10 +2705,10 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                 </div>
                 <ResponsiveContainer width="100%" height={200}>
                   <BarChart data={histData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={DS.border} />
-                    <XAxis dataKey="day" stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} />
-                    <YAxis stroke={DS.dim} tickFormatter={(v) => `$${v}`} tick={{ fill: DS.dim, fontSize: 9 }} />
-                    <Tooltip contentStyle={{ background: '#0f1318', border: `1px solid ${DS.border}`, borderRadius: 8, fontSize: 11 }} formatter={(v) => [`$${v} lost`, 'Daily Leakage']} />
+                    <CartesianGrid {...GRID_PROPS} />
+                    <XAxis dataKey="day" stroke={DS.border} tick={AXIS_TICK} tickLine={false} />
+                    <YAxis stroke={DS.border} tickFormatter={(v) => `$${v}`} tick={AXIS_TICK} tickLine={false} />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL} itemStyle={TOOLTIP_ITEM} cursor={TOOLTIP_CURSOR} formatter={(v) => [`$${v} lost`, 'Daily Leakage']} />
                     <Bar dataKey="daily_gap" fill={DS.loss} radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
@@ -3305,10 +3312,10 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                             <stop offset="95%" stopColor={DS.loss} stopOpacity={0} />
                           </linearGradient>
                         </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke={DS.border} />
-                        <XAxis dataKey="step" stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} />
-                        <YAxis stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} tickFormatter={(v) => `$${v}`} />
-                        <Tooltip contentStyle={{ background: '#0f1318', border: `1px solid ${DS.border}`, fontSize: 11 }} formatter={(v) => [`$${v}`, 'Cumulative Gap']} />
+                        <CartesianGrid {...GRID_PROPS} />
+                        <XAxis dataKey="step" stroke={DS.border} tick={AXIS_TICK} tickLine={false} />
+                        <YAxis stroke={DS.border} tick={AXIS_TICK} tickLine={false} tickFormatter={(v) => `$${v}`} />
+                        <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL} itemStyle={TOOLTIP_ITEM} cursor={TOOLTIP_CURSOR} formatter={(v) => [`$${v}`, 'Cumulative Gap']} />
                         <Area type="monotone" dataKey="cumulative_gap" stroke={DS.loss} fill="url(#gGap)" strokeWidth={2} dot={false} />
                       </AreaChart>
                     </ResponsiveContainer>
@@ -3317,10 +3324,10 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                     <Label style={{ marginBottom: 12 }}>Live Decision Quality Score</Label>
                     <ResponsiveContainer width="100%" height={150}>
                       <AreaChart data={liveData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={DS.border} />
-                        <XAxis dataKey="step" stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} />
-                        <YAxis domain={[0, 100]} stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} tickFormatter={(v) => `${v}%`} />
-                        <Tooltip contentStyle={{ background: '#0f1318', border: `1px solid ${DS.border}`, fontSize: 11 }} formatter={(v) => [`${v}%`, 'DQ Score']} />
+                        <CartesianGrid {...GRID_PROPS} />
+                        <XAxis dataKey="step" stroke={DS.border} tick={AXIS_TICK} tickLine={false} />
+                        <YAxis domain={[0, 100]} stroke={DS.border} tick={AXIS_TICK} tickLine={false} tickFormatter={(v) => `${v}%`} />
+                        <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL} itemStyle={TOOLTIP_ITEM} cursor={TOOLTIP_CURSOR} formatter={(v) => [`${v}%`, 'DQ Score']} />
                         <Area type="monotone" dataKey="dq_score_live" stroke={DS.cyan} fill={`${DS.cyan}18`} strokeWidth={2} dot={false} />
                       </AreaChart>
                     </ResponsiveContainer>
