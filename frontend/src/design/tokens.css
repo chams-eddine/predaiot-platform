@@ -54,6 +54,35 @@
   --pds-verified: #2FD69B;
   --pds-provisional: #F3B24C;
   --pds-seal: #E4C674;         /* certificate gold */
+  --pds-evidence: #5E6E88;     /* hash chips, manifest refs (quiet mono) */
+
+  /* — Risk bands (backend risk_level: Low / Moderate / Severe) — */
+  --pds-risk-low: var(--pds-recover);
+  --pds-risk-moderate: var(--pds-warn);
+  --pds-risk-severe: var(--pds-loss);
+
+  /* — Opportunity (SPEC-EV: money recoverable; EXPERIMENTAL quarantined) — */
+  --pds-opportunity: var(--pds-recover);
+  --pds-opportunity-exp: var(--pds-text-3);
+
+  /* — Governance verdicts (EDA-GOV-1.0) — */
+  --pds-gov-verified: var(--pds-recover);
+  --pds-gov-rejected: var(--pds-loss);
+  --pds-gov-inconclusive: var(--pds-warn);
+  --pds-gov-pending: var(--pds-text-3);
+
+  /* — Decision lifecycle (EDA-DEC-LIFE-1.0 states) — */
+  --pds-life-proposed: var(--pds-info);
+  --pds-life-accepted: var(--pds-accent);
+  --pds-life-execution: var(--pds-warn);
+  --pds-life-executed: var(--pds-recover);
+  --pds-life-deferred: var(--pds-text-3);
+  --pds-life-rejected: var(--pds-loss);
+
+  /* — Grid / content caps (SPEC-WS §6.3) — */
+  --pds-card-min: 260px;
+  --pds-card-max: 560px;
+  --pds-prose-max: 72ch;
 
   /* — Typography — */
   --pds-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui, sans-serif;

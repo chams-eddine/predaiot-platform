@@ -19,8 +19,10 @@ export const PDS = {
   recover: v('recover'), recoverSoft: v('recover-soft'),
   warn: v('warn'), warnSoft: v('warn-soft'),
   info: v('info'), infoSoft: v('info-soft'),
-  // trust
-  verified: v('verified'), provisional: v('provisional'), seal: v('seal'),
+  // trust / evidence
+  verified: v('verified'), provisional: v('provisional'), seal: v('seal'), evidence: v('evidence'),
+  // grid / content caps (SPEC-WS §6.3)
+  cardMin: v('card-min'), cardMax: v('card-max'), proseMax: v('prose-max'),
   // type
   sans: v('font-sans'), mono: v('font-mono'),
   // spacing
@@ -52,8 +54,25 @@ export const severityColor = (ratio) => {
 };
 
 export const riskColor = (level) => ({
-  low: v('recover'), moderate: v('warn'), severe: v('loss'),
+  low: v('risk-low'), moderate: v('risk-moderate'), severe: v('risk-severe'),
 }[(level || '').toLowerCase()] || v('text-3'));
+
+// Decision lifecycle states (EDA-DEC-LIFE-1.0).
+export const lifecycleColor = (state) => ({
+  PROPOSED: v('life-proposed'), ACCEPTED: v('life-accepted'),
+  IN_EXECUTION: v('life-execution'), EXECUTED: v('life-executed'),
+  DEFERRED: v('life-deferred'), REJECTED: v('life-rejected'),
+}[(state || '').toUpperCase()] || v('text-3'));
+
+// Governance verdicts (EDA-GOV-1.0).
+export const verdictColor = (verdict) => ({
+  VERIFIED: v('gov-verified'), REJECTED: v('gov-rejected'),
+  INCONCLUSIVE: v('gov-inconclusive'), PENDING: v('gov-pending'),
+}[(verdict || '').toUpperCase()] || v('gov-pending'));
+
+// Opportunities (SPEC-EV money-recoverable; EXPERIMENTAL quarantined).
+export const opportunityColor = (experimental) =>
+  experimental ? v('opportunity-exp') : v('opportunity');
 
 // — Money / number formatting (institutional, compact when large) —
 export const fmtMoney = (val, currency = '') => {
@@ -65,7 +84,7 @@ export const fmtMoney = (val, currency = '') => {
   if (abs >= 1e9) body = (abs / 1e9).toFixed(2) + 'B';
   else if (abs >= 1e6) body = (abs / 1e6).toFixed(2) + 'M';
   else if (abs >= 1e3) body = (abs / 1e3).toFixed(1) + 'K';
-  else body = abs.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  else body = abs.toLocaleString('en-US', { maximumFractionDigits: 2 });
   return `${sign}${body}${currency ? ' ' + currency : ''}`;
 };
 
