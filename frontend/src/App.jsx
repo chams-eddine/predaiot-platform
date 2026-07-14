@@ -150,7 +150,6 @@ const fmtMoney = (n, cur) => {
 };
 const fmtPct = (n, decimals = 1) => n == null ? '—' : `${Number(n).toFixed(decimals)}%`;
 const riskColor = (r) => r === 'Low' ? DS.optimal : r === 'Moderate' ? DS.warning : DS.loss;
-const riskEmoji = (r) => r === 'Low' ? '🟢' : r === 'Moderate' ? '🟡' : '🔴';
 const heatColor = (s) => ({
   optimal: DS.optimal, acceptable: DS.warning, poor: DS.orange, critical: DS.loss,
 }[s] || DS.dim);
@@ -305,7 +304,6 @@ const FileUploadZone = ({ onFile, loading }) => {
         }}
       >
         <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls" onChange={(e) => process(e.target.files[0])} style={{ display: 'none' }} />
-        <div style={{ fontSize: 36, marginBottom: 14 }}>📊</div>
         <div style={{ color: DS.text, fontSize: 16, fontWeight: 700, marginBottom: 8 }}>
           {loading ? 'Processing your data…' : 'Drop any energy asset data file here'}
         </div>
@@ -1057,7 +1055,7 @@ function IngestionNotesBanner({ notes, onDismiss }) {
         ✕
       </button>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <span style={{ fontSize: 14 }}>🧭</span>
+        
         <div style={{ color: DS.cyan, fontSize: 10, fontWeight: 700, letterSpacing: '0.15em' }}>
           INGESTION AUTO-CORRECTIONS APPLIED
         </div>
@@ -1491,6 +1489,7 @@ function OpsConsoleExec({ data, log, m, ingestionNotes, onDismissNotes }) {
 export default function App() {
   const [data, setData]                   = useState(EMPTY);
   const [loading, setLoading]             = useState(false);
+  const [actionError, setActionError]     = useState(null);   // SPEC-IX: no silent dead ends
   const [uploading, setUploading]         = useState(false);
   const [shareLink, setShareLink]         = useState('');
   const [activeSection, setActiveSection] = useState('exec');
@@ -1788,7 +1787,12 @@ export default function App() {
       setAiText('');
       setIngestionNotes(null);  // demo data is synthetic; no ingestion notes
       setActiveSection('exec');
-    } catch (e) { console.error(e); }
+      setActionError(null);
+    } catch (e) {
+      console.error(e);
+      // SPEC-IX rule 4: errors state impact + recovery path, in place.
+      setActionError('The demo audit could not be completed — the audit engine did not respond. Check your connection and run the demo again.');
+    }
     setLoading(false);
   };
 
@@ -2187,11 +2191,11 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   {account.organization?.name || account.email}
                 </span>
               )}
-              <BtnOutline color={DS.dim} onClick={signOut}>{isMobile ? '⎋' : 'SIGN OUT'}</BtnOutline>
+              <BtnOutline color={DS.dim} onClick={signOut}>SIGN OUT</BtnOutline>
             </div>
           ) : (
             <BtnOutline color={DS.sub} onClick={() => { setGateMode('signin'); setGateError(''); setGateOpen(true); }}>
-              {isMobile ? '⎆' : 'SIGN IN'}
+              SIGN IN
             </BtnOutline>
           )}
           <SessionBadge liveMode={liveMode} simRunning={simRunning} dataSource={dataSource} />
@@ -2200,7 +2204,22 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
 
       {shareLink && (
         <div style={{ background: `${DS.warning}10`, borderBottom: `1px solid ${DS.warning}30`, padding: '8px 28px', fontSize: 11, color: DS.warning }}>
-          🔗 {shareLink}
+          <span style={{ letterSpacing: '0.1em', fontWeight: 700, marginRight: 8 }}>SHARE LINK</span>
+          <span className="pds-num">{shareLink}</span>
+        </div>
+      )}
+      {/* SPEC-IX error surface — institutional candor: what failed + the
+          recovery path, recoverable in place, dismissible. */}
+      {actionError && (
+        <div role="alert" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          gap: 16, background: `${DS.loss}10`, borderBottom: `1px solid ${DS.loss}30`,
+          padding: '10px 28px', fontSize: 12, color: DS.text }}>
+          <span><span style={{ color: DS.loss, fontWeight: 700, letterSpacing: '0.08em', marginRight: 10 }}>AUDIT FAILED</span>{actionError}</span>
+          <button onClick={() => setActionError(null)} aria-label="Dismiss error"
+            style={{ background: 'none', border: `1px solid ${DS.border}`, color: DS.sub,
+                     borderRadius: DS.r8, padding: '4px 10px', cursor: 'pointer', fontSize: 11 }}>
+            DISMISS
+          </button>
         </div>
       )}
 
@@ -2299,7 +2318,6 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
               independently of audit data. */}
           {!hasData && !showUpload && !['live', 'appendix', 'govern', 'history', 'realtime'].includes(activeSection) && (
             <div style={{ textAlign: 'center', padding: '70px 40px' }}>
-              <div style={{ fontSize: 48, marginBottom: 16 }}>⚡</div>
               <div style={{ color: DS.text, fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Economic Decision Audit™</div>
               <div style={{ color: DS.dim, fontSize: 11, letterSpacing: '0.1em', marginBottom: 20 }}>
                 THE UNIVERSAL ECONOMIC DECISION ENGINE FOR ENERGY INFRASTRUCTURE
@@ -2318,10 +2336,10 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   UPLOAD MY DATA
                 </BtnOutline>
                 <BtnOutline color={DS.warning} onClick={() => setActiveSection('live')}>
-                  ⚡ LIVE MONITOR
+                  LIVE MONITOR
                 </BtnOutline>
                 <BtnOutline color={DS.purple} onClick={() => setActiveSection('appendix')}>
-                  📐 SEE THE MATH
+                  SEE THE MATH
                 </BtnOutline>
               </div>
               <div style={{ color: DS.dim, fontSize: 10, marginTop: 24 }}>
@@ -2860,7 +2878,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                     </div>
                     {hasData && (
                       <div style={{ textAlign: 'right' }}>
-                        <Pill label={data.risk_level === 'Severe' ? '🔴 CRITICAL' : data.risk_level === 'Moderate' ? '🟡 MODERATE' : '🟢 LOW RISK'} color={riskColor(data.risk_level)} />
+                        <Pill label={data.risk_level === 'Severe' ? 'CRITICAL' : data.risk_level === 'Moderate' ? 'MODERATE' : 'LOW RISK'} color={riskColor(data.risk_level)} />
                         <div style={{ color: DS.dim, fontSize: 9, marginTop: 4 }}>{data.audit_period_label}</div>
                       </div>
                     )}
@@ -3108,14 +3126,14 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
 
           {activeSection === 'live' && (
             <div>
-              <SectionHeader tag="⚡" title="Real-Time Live Monitor — Economic Advisory Observer" />
+              <SectionHeader tag="RT" title="Real-Time Live Monitor — Economic Advisory Observer" />
 
               <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
                 <BtnOutline
                   color={liveMode ? DS.loss : DS.optimal}
                   onClick={() => (liveMode ? disconnectLive() : startLive())}
                 >
-                  {liveMode ? '⏹ DISCONNECT' : '▶ CONNECT TO /ws/live'}
+                  {liveMode ? 'DISCONNECT' : 'CONNECT TO /ws/live'}
                 </BtnOutline>
 
                 {/* Sector profile selector — chooses which synthetic feed shape to emit */}
@@ -3168,7 +3186,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                     }
                   }}
                 >
-                  {simRunning ? '⏹ STOP SIMULATED FEED' : `🧪 SIMULATE ${SIM_PROFILES[simProfile]?.label.split(' ·')[0] || 'BESS'} FEED`}
+                  {simRunning ? 'STOP SIMULATED FEED' : `SIMULATE ${SIM_PROFILES[simProfile]?.label.split(' ·')[0] || 'BESS'} FEED`}
                 </BtnOutline>
 
                 {liveData.length > 0 && (
@@ -3310,7 +3328,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {/* ══ S14: EDPC Certificate ════════════════════════════ */}
           {hasData && activeSection === 'cert' && (
             <div>
-              <SectionHeader tag="🏆" title="Economic Decision Performance Certificate™ (EDPC)" />
+              <SectionHeader tag="CT" title="Economic Decision Performance Certificate™ (EDPC)" />
               <div style={{ color: DS.sub, fontSize: 11, marginBottom: 20, maxWidth: 600 }}>
                 The EDPC is a formal economic performance rating for energy assets — the PREDAIOT equivalent of Moody's for industrial infrastructure. Composite rating from 4 weighted dimensions.
               </div>
@@ -3324,7 +3342,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   } catch (_) { alert('Generate an audit first, then request the certificate.'); }
                   setCertLoading(false);
                 }} disabled={!hasData || certLoading}>
-                  {certLoading ? 'GENERATING…' : '🏆 GENERATE EDPC CERTIFICATE'}
+                  {certLoading ? 'GENERATING…' : 'GENERATE EDPC CERTIFICATE'}
                 </BtnOutline>
                 {certificate && (
                   <>
@@ -3476,8 +3494,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                 </div>
               ) : (
                 <div style={{ textAlign: 'center', padding: '60px 40px' }}>
-                  <div style={{ fontSize: 52, marginBottom: 16 }}>🏆</div>
-                  <div style={{ color: DS.text, fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Economic Decision Performance Certificate™</div>
+                                    <div style={{ color: DS.text, fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Economic Decision Performance Certificate™</div>
                   <div style={{ color: DS.sub, fontSize: 12, maxWidth: 500, margin: '0 auto 28px', lineHeight: 1.8 }}>
                     Composite rating across 4 weighted dimensions: Decision Quality (40%), Economic Efficiency (30%), Revenue Capture (20%), Governance (10%).
                     Equivalent to Moody's for energy asset economic performance.
