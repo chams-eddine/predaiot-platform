@@ -202,14 +202,16 @@ const BtnOutline = ({ color, children, onClick, disabled, style }) => (
     color: disabled ? DS.dim : color, border: `1px solid ${disabled ? DS.dim : color}`,
     borderRadius: DS.r8, cursor: disabled ? 'not-allowed' : 'pointer',
     fontSize: 11, letterSpacing: '0.1em', fontWeight: 700,
-    fontFamily: DS.sans, transition: 'all 0.15s', ...style,
+    fontFamily: DS.sans, ...style,
   }}>{children}</button>
 );
 
 // ── Progress Bar ─────────────────────────────────────────────────────
 const ProgressBar = ({ pct, color }) => (
   <div style={{ height: 5, background: DS.border, borderRadius: 3, marginTop: 8, overflow: 'hidden' }}>
-    <div style={{ width: `${Math.min(100, pct || 0)}%`, height: '100%', background: color, borderRadius: 3, transition: 'width 0.6s ease' }} />
+    <div style={{ width: '100%', height: '100%', background: color, borderRadius: 3,
+                  transform: `scaleX(${Math.min(100, pct || 0) / 100})`, transformOrigin: 'left',
+                  transition: 'transform var(--pds-dur-slow) var(--pds-ease)' }} />
   </div>
 );
 
@@ -289,7 +291,6 @@ const FileUploadZone = ({ onFile, loading }) => {
           borderRadius: DS.r16, padding: '52px 40px', textAlign: 'center',
           background: dragging ? `${DS.cyan}08` : DS.surface,
           cursor: loading ? 'wait' : 'pointer',
-          transition: 'all 0.2s ease',
         }}
       >
         <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls" onChange={(e) => process(e.target.files[0])} style={{ display: 'none' }} />
@@ -2240,10 +2241,12 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           />
         )}
         <nav style={isMobile ? {
-          position: 'fixed', left: sidebarOpen ? 0 : -272, top: 0, bottom: 0,
+          /* SPEC-MO compositor law: drawer slides via transform, never left. */
+          position: 'fixed', left: 0, top: 0, bottom: 0,
+          transform: sidebarOpen ? 'translateX(0)' : 'translateX(-272px)',
           width: 272, padding: '76px 0 20px 0', background: DS.bgRaised,
           borderRight: `1px solid ${DS.borderHi}`,
-          transition: 'left 0.24s ease', overflowY: 'auto',
+          transition: 'transform var(--pds-dur) var(--pds-ease)', overflowY: 'auto',
           zIndex: 100, boxShadow: sidebarOpen ? '4px 0 30px rgba(0,0,0,0.5)' : 'none',
         } : {
           /* SPEC-WS §4: sidebar = clamp(248px, 18vw, 400px); 18–20% share on
@@ -2285,7 +2288,6 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                       color: active ? DS.cyan : DS.sub,
                       opacity: dimmed ? 0.55 : 1,
                       borderLeft: `2px solid ${active ? DS.cyan : 'transparent'}`,
-                      transition: 'all 0.12s',
                     }}
                   >
                     <span style={{ fontFamily: DS.mono, fontSize: isMobile ? 10 : 9, color: active ? DS.cyan : DS.dim, marginRight: 8 }}>{n.tag}</span>

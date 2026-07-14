@@ -161,9 +161,12 @@
 .pds-kicker { font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--pds-text-3); font-weight: 600; }
 
 /* — Motion primitives — */
+/* SPEC-MO closed vocabulary — every pattern is bound to a meaning:
+   pds-pulse = a genuinely live signal (loops allowed on live data ONLY);
+   pds-rise  = content arrived (single entrance, 260ms).
+   Unused decorative keyframes (breathe, sheen) removed — motion without a
+   named meaning does not exist (SPEC-MO rule 2). */
 @keyframes pds-pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.82); } }
-@keyframes pds-breathe { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
-@keyframes pds-sheen { 0% { background-position: -160% 0; } 100% { background-position: 260% 0; } }
 @keyframes pds-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 
 .pds-rise { animation: pds-rise var(--pds-dur) var(--pds-ease) both; }

@@ -131,7 +131,7 @@ function DecisionHealthCard({ ecfPct, riskLevel, acGrade, acPct, dqiPct }) {
           <circle cx="42" cy="42" r={R} fill="none" stroke={PDS.border} strokeWidth="7" />
           <circle cx="42" cy="42" r={R} fill="none" stroke={c} strokeWidth="7" strokeLinecap="round"
                   strokeDasharray={C} strokeDashoffset={off}
-                  style={{ transition: 'stroke-dashoffset 0.8s var(--pds-ease)', filter: `drop-shadow(0 0 6px ${c}88)` }} />
+                  style={{ transition: 'stroke-dashoffset var(--pds-dur-slow) var(--pds-ease)', filter: `drop-shadow(0 0 6px ${c}88)` }} />
         </svg>
         <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
                       alignItems: 'center', justifyContent: 'center', color: c }}>
@@ -279,9 +279,12 @@ function ReasoningPanel({ rcs, leakage, currency }) {
             </span>
           </div>
           <div style={{ height: 4, background: PDS.hairline, borderRadius: 2, overflow: 'hidden' }}>
-            <div style={{ width: `${Math.min(100, rc.contribution_pct || 0)}%`, height: '100%',
+            {/* SPEC-MO compositor law: bars fill via scaleX, never width. */}
+            <div style={{ width: '100%', height: '100%',
                           background: PDS.loss, borderRadius: 2, opacity: 0.8,
-                          transition: 'width var(--pds-dur-slow) var(--pds-ease)' }} />
+                          transform: `scaleX(${Math.min(100, rc.contribution_pct || 0) / 100})`,
+                          transformOrigin: 'left',
+                          transition: 'transform var(--pds-dur-slow) var(--pds-ease)' }} />
           </div>
         </div>
       ))}
