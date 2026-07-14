@@ -33,8 +33,15 @@ export function useWorkspaceTier() {
     const onChange = () => setTier(currentTier());
     mqls.forEach((m) => (m.addEventListener
       ? m.addEventListener('change', onChange) : m.addListener(onChange)));
-    return () => mqls.forEach((m) => (m.removeEventListener
-      ? m.removeEventListener('change', onChange) : m.removeListener(onChange)));
+    // Belt-and-braces: some embedded/driven browsers deliver window resize
+    // without MediaQueryList change events. Same-value setState is a no-op,
+    // so this costs nothing when mql events do fire.
+    window.addEventListener('resize', onChange);
+    return () => {
+      mqls.forEach((m) => (m.removeEventListener
+        ? m.removeEventListener('change', onChange) : m.removeListener(onChange)));
+      window.removeEventListener('resize', onChange);
+    };
   }, []);
   return tier;
 }
