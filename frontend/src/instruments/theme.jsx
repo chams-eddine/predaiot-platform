@@ -44,6 +44,13 @@ export const TOOLTIP_ITEM = {
 };
 export const TOOLTIP_CURSOR = { stroke: 'var(--pds-hairline)' };
 
+/* SPEC-IX loading state: a still, panel-shaped placeholder the size of the
+   incoming instrument — no spinners, no shimmer (SPEC-MO). */
+export const ChartSkeleton = ({ h = 200 }) => (
+  <div aria-hidden style={{ height: h, borderRadius: 'var(--pds-r)',
+    background: 'var(--pds-panel-2)', border: '1px solid var(--pds-border)' }} />
+);
+
 /* Shared area-fill gradient — accent fades to transparent (SPEC-DV). */
 export function AreaGradient({ id, color, from = 0.28 }) {
   return (

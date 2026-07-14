@@ -13,12 +13,7 @@ const LeakageHistory    = lazy(() => chartsModule().then((m) => ({ default: m.Le
 const LiveGapFlow       = lazy(() => chartsModule().then((m) => ({ default: m.LiveGapFlow })));
 const LiveCaptureScore  = lazy(() => chartsModule().then((m) => ({ default: m.LiveCaptureScore })));
 
-/* SPEC-IX loading state: a still, panel-shaped placeholder the size of the
-   incoming instrument — no spinners, no shimmer (SPEC-MO). */
-const ChartSkeleton = ({ h = 200 }) => (
-  <div aria-hidden style={{ height: h, borderRadius: 'var(--pds-r)',
-    background: 'var(--pds-panel-2)', border: '1px solid var(--pds-border)' }} />
-);
+import { ChartSkeleton } from './instruments/theme';
 
 // ══════════════════════════════════════════════════════════════════════
 // TRIAL GATE — 7-day free diagnostic token (lead capture)
@@ -1200,288 +1195,9 @@ const OPS = {
   dim:     '#7A89A3',   // --pds-text-3 (AA)
 };
 
-function OpsFinancialCard({ label, value, color, sub, arrow, glow }) {
-  return (
-    <div style={{
-      background: OPS.card,
-      border: `1px solid ${glow ? OPS.green : OPS.border}`,
-      borderRadius: 10, padding: '18px 20px', marginBottom: 14,
-      boxShadow: glow ? `0 0 30px ${OPS.green}30, inset 0 0 20px ${OPS.green}08` : '0 4px 6px rgba(0,0,0,0.3)',
-      position: 'relative', overflow: 'hidden',
-    }}>
-      {glow && <div style={{
-        position: 'absolute', inset: 0, pointerEvents: 'none',
-        background: `radial-gradient(circle at top left, ${OPS.green}10, transparent 60%)`,
-      }} />}
-      <div style={{
-        color: OPS.sub, fontSize: 10, letterSpacing: '0.12em',
-        textTransform: 'uppercase', marginBottom: 6,
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-      }}>
-        <span>{label}</span>
-        {arrow && <span style={{ color, fontSize: 14 }}>{arrow}</span>}
-      </div>
-      <div style={{
-        color, fontSize: glow ? 34 : 30, fontWeight: 800,
-        fontFamily: DS.mono, letterSpacing: '-0.02em',
-        textShadow: `0 0 12px ${color}30`,
-        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-      }}>{value}</div>
-      {sub && <div style={{ color: OPS.sub, fontSize: 10, marginTop: 4 }}>{sub}</div>}
-    </div>
-  );
-}
+// (S01 ops-console widget cluster removed — the Executive Experience is a
+//  six-act decision narrative in components/ExecutiveCommandCenter.jsx.)
 
-function DQScoreGauge({ value, count }) {
-  const R = 110, CX = 150, CY = 130;
-  const semiLen = Math.PI * R;
-  const clamped = Math.max(0, Math.min(100, value));
-  const dashLen = (clamped / 100) * semiLen;
-  const pathD   = `M ${CX - R},${CY} A ${R},${R} 0 0,1 ${CX + R},${CY}`;
-  const label   =
-    clamped < 40 ? { text: 'Needs Optimization', color: OPS.amber } :
-    clamped < 70 ? { text: 'Room for Growth',    color: OPS.yellow } :
-                   { text: 'Optimal Performance', color: OPS.green };
-  return (
-    <div style={{ position: 'relative', width: '100%', maxWidth: 340, margin: '0 auto', textAlign: 'center' }}>
-      <svg width="100%" viewBox="0 0 300 175" style={{ display: 'block' }}>
-        <defs>
-          <filter id="dqGlow" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="4" result="b" />
-            <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
-          </filter>
-        </defs>
-        {/* Track */}
-        <path d={pathD} fill="none" stroke="#1a2532" strokeWidth={14} strokeLinecap="round" />
-        {/* Value arc */}
-        <path
-          d={pathD}
-          fill="none"
-          stroke={OPS.green}
-          strokeWidth={14}
-          strokeLinecap="round"
-          strokeDasharray={`${dashLen} ${semiLen}`}
-          filter="url(#dqGlow)"
-        />
-      </svg>
-      <div style={{ position: 'absolute', top: 26, left: 0, right: 0, textAlign: 'center' }}>
-        <div style={{ color: OPS.sub, fontSize: 11, letterSpacing: '0.2em', fontWeight: 600, lineHeight: 1.4 }}>
-          DECISION<br />QUALITY SCORE
-        </div>
-      </div>
-      <div style={{ position: 'absolute', top: 78, left: 0, right: 0, textAlign: 'center' }}>
-        <div style={{
-          fontSize: 60, color: OPS.green, fontWeight: 900,
-          fontFamily: DS.mono, textShadow: `0 0 24px ${OPS.green}70`, lineHeight: 1,
-        }}>
-          {clamped.toFixed(0)}<span style={{ fontSize: 32 }}>%</span>
-        </div>
-      </div>
-      <div style={{ marginTop: 12, color: label.color, fontWeight: 700, fontSize: 15, letterSpacing: '0.03em' }}>
-        {label.text}
-      </div>
-      <div style={{ color: OPS.sub, fontSize: 11, marginTop: 4 }}>
-        Based on {(count || 0).toLocaleString()} decisions (24h)
-      </div>
-    </div>
-  );
-}
-
-// (IN-13 Financial Timeline moved to instruments/charts.jsx — code-split.)
-
-function LiveTelemetryStrip({ assetName, soc, power, temp }) {
-  const cell = (label, val, color) => (
-    <div style={{ textAlign: 'center', minWidth: 62 }}>
-      <div style={{ color: OPS.sub, fontSize: 10, letterSpacing: '0.1em' }}>{label}</div>
-      <div style={{ color, fontFamily: DS.mono, fontSize: 16, fontWeight: 800, textShadow: `0 0 10px ${color}40` }}>{val}</div>
-    </div>
-  );
-  return (
-    <div style={{
-      background: OPS.card, border: `1px solid ${OPS.border}`, borderRadius: 12,
-      padding: '14px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    }}>
-      <div>
-        <div style={{ color: OPS.text, fontSize: 13, fontWeight: 700 }}>{assetName || 'Asset'}</div>
-        <div style={{ color: OPS.sub, fontSize: 10, letterSpacing: '0.05em', marginTop: 2 }}>Live Telemetry</div>
-      </div>
-      <div style={{ display: 'flex', gap: 22 }}>
-        {cell('SoC',   soc   != null ? `${soc.toFixed(0)}%`    : '—', soc   != null ? OPS.green : OPS.sub)}
-        {cell('Power', power != null ? `${power.toFixed(0)} MW` : '—', power != null ? OPS.green : OPS.sub)}
-        {cell('Temp',  temp  != null ? `${temp.toFixed(0)}°C`  : '—', temp  != null ? OPS.green : OPS.sub)}
-      </div>
-    </div>
-  );
-}
-
-function DecisionDiscrepancyStrip({ log }) {
-  if (!log || log.length === 0) {
-    return <div style={{ color: OPS.sub, fontSize: 11 }}>—</div>;
-  }
-  return (
-    <div>
-      <div style={{ display: 'flex', width: '100%', height: 26, borderRadius: 4, overflow: 'hidden', border: `1px solid ${OPS.border}` }}>
-        {log.map((r, i) => {
-          const gap = r.gap_step || 0;
-          const opt = r.edv_optimal_step || 0;
-          const color = gap <= 0 ? OPS.green
-                      : (opt > 0 && gap / opt > 0.7) ? OPS.red
-                      : OPS.yellow;
-          return <div key={i} title={`Step ${r.hour} · gap $${gap.toFixed(2)}`}
-                      style={{ flex: 1, background: color, opacity: 0.9 }} />;
-        })}
-      </div>
-      <div style={{ display: 'flex', gap: 14, fontSize: 10, color: OPS.sub, marginTop: 8 }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ width: 10, height: 10, background: OPS.green, borderRadius: 2 }} />Optimal Dispatch
-        </span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ width: 10, height: 10, background: OPS.yellow, borderRadius: 2 }} />Inefficient Charging
-        </span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ width: 10, height: 10, background: OPS.red, borderRadius: 2 }} />Missed Opportunity
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function AssetPerformanceTiles({ data, log, m }) {
-  // Ledger-derived tiles only. The former "Availability" (max(85, 100 −
-  // override%)) and "MTD Revenue" (period × 30) were fabricated constructs;
-  // the discharge/charge ratio was structurally meaningless for file audits
-  // (actual_action carries discharge only). Removed — docs/REMOVED_HEURISTICS.md.
-  const opsEff = m?.economic_decision_efficiency ?? ((data.dq_score || 0) * 100);
-  const overrideRate = m?.override_rate_pct;
-  const curtailedMwh = m?.curtailed_energy_mwh;
-  const captured = data.edv_actual_total;
-
-  const tile = (label, value, color) => (
-    <div style={{
-      background: OPS.card, border: `1px solid ${OPS.border}`, borderRadius: 10,
-      padding: '14px 16px',
-    }}>
-      <div style={{ color: OPS.sub, fontSize: 10, letterSpacing: '0.12em' }}>{label}</div>
-      <div style={{ color, fontFamily: DS.mono, fontSize: 22, fontWeight: 800, marginTop: 4 }}>
-        {value}
-      </div>
-    </div>
-  );
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-      {tile('Capture Efficiency (EDE)', `${(opsEff || 0).toFixed(1)}%`, OPS.green)}
-      {tile('Override Rate', overrideRate != null ? `${overrideRate.toFixed(1)}%` : '—', OPS.blue)}
-      {tile('Curtailed Energy', curtailedMwh != null ? `${curtailedMwh.toFixed(1)} MWh` : '—', OPS.sub)}
-      {tile('Captured Value (Period)', captured != null ? fmtMoney(captured, data.currency) : '—', captured >= 0 ? OPS.green : OPS.red)}
-    </div>
-  );
-}
-
-function OpsConsoleExec({ data, log, m, ingestionNotes, onDismissNotes }) {
-  // Benchmark hierarchy (Scientific Hardening item 2): the optimum is the
-  // Theoretical Economic Ceiling — a perfect-foresight UPPER BOUND, not an
-  // achievable target. Only the execution gap (Ch 8.2 split, present when the
-  // source data carried a forecast column) is presented as recoverable.
-  const potential  = data.edv_optimal_total || 0;
-  const captured   = data.edv_actual_total || 0;
-  const destroyed  = data.total_gap_usd || 0;
-  const execGap    = data.gap_attribution?.execution_gap ?? null;
-  const cur        = data.currency;
-  const dqPct      = (data.dq_score || 0) * 100;
-  const count      = (log || []).length;
-  const last       = (log || [])[log.length - 1] || {};
-  // SoC arrives as 0–1 fraction from some feeds and 0–100 percent from
-  // others (real SCADA exports use percent) — normalise by magnitude.
-  // Absent telemetry renders '—': the former placeholders (68% SoC, 120 MW,
-  // 24 °C) were fabricated readings (docs/REMOVED_HEURISTICS.md).
-  const liveSoc    = last.soc != null ? (last.soc > 1.5 ? last.soc : last.soc * 100) : null;
-  const livePower  = last.actual_action != null ? Math.abs(last.actual_action) : null;
-  const liveTemp   = null; // no temperature channel in the audit ledger
-  const isMobile   = useIsMobile();
-  return (
-    <div>
-      <div style={{ color: OPS.sub, fontSize: 11, marginBottom: 8, letterSpacing: '0.04em' }}>
-        <span style={{ color: OPS.green }}>▪</span> {data.asset_name || 'Energy Asset'} —{' '}
-        {data.asset_type || 'Generic'} · {data.audit_period_label || '—'}
-      </div>
-      {ingestionNotes && (
-        <IngestionNotesBanner notes={ingestionNotes} onDismiss={onDismissNotes} />
-      )}
-      {data.data_quality_index && (
-        <DataQualityPanel dqi={data.data_quality_index} ac={data.audit_confidence} fr={data.forecast_reliability} compact />
-      )}
-
-      {/* Row 1 — Financial Impact | DQ Gauge | Market Audit + Telemetry */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: isMobile ? '1fr' : 'minmax(240px, 1fr) minmax(320px, 1.1fr) minmax(360px, 1.6fr)',
-        gap: 20, marginBottom: 22,
-      }}>
-        <div>
-          <div style={{ color: OPS.text, fontSize: 12, fontWeight: 700, letterSpacing: '0.15em', marginBottom: 14 }}>
-            FINANCIAL IMPACT
-          </div>
-          {execGap != null ? (
-            <OpsFinancialCard label="Recoverable Execution Gap" value={fmtMoney(execGap, cur)} color={OPS.red} glow arrow="↓" />
-          ) : (
-            <OpsFinancialCard label="Ceiling Gap (Upper Bound)" value={fmtMoney(destroyed, cur)} color={OPS.red} glow arrow="↓" />
-          )}
-          <OpsFinancialCard label="Theoretical Ceiling (Benchmark)" value={fmtMoney(potential, cur)} color={OPS.sub} />
-          <OpsFinancialCard label="Captured Value" value={fmtMoney(captured, cur)} color={captured >= 0 ? OPS.green : OPS.red} />
-          <div style={{ color: OPS.sub, fontSize: 9.5, lineHeight: 1.5, marginTop: 6 }}>
-            {execGap != null
-              ? 'Recoverable = achievable with information available at decision time (Ch 8.2). Ceiling = perfect-foresight upper bound.'
-              : 'Ceiling gap is an upper bound vs a perfect-foresight benchmark; a forecast column is required to isolate the recoverable portion.'}
-          </div>
-        </div>
-
-        <div style={{
-          background: OPS.card, border: `1px solid ${OPS.border}`, borderRadius: 14,
-          padding: '24px 12px 20px', display: 'flex', flexDirection: 'column', justifyContent: 'center',
-        }}>
-          <DQScoreGauge value={dqPct} count={count} />
-        </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div style={{ background: OPS.card, border: `1px solid ${OPS.border}`, borderRadius: 12, padding: '14px 16px 4px' }}>
-            <div style={{ color: OPS.text, fontSize: 12, fontWeight: 700, letterSpacing: '0.12em', marginBottom: 8 }}>
-              MARKET OPTIMIZATION AUDIT (24h)
-            </div>
-            <Suspense fallback={<ChartSkeleton h={230} />}>
-              <FinancialTimeline log={log} />
-            </Suspense>
-          </div>
-          <LiveTelemetryStrip
-            assetName={`${data.asset_name || 'Asset'} — ${data.asset_type || 'BESS'}`}
-            soc={liveSoc} power={livePower} temp={liveTemp}
-          />
-        </div>
-      </div>
-
-      {/* Row 2 — Discrepancy Timeline | Asset Performance tiles */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: isMobile ? '1fr' : '1.4fr 1fr',
-        gap: 20,
-      }}>
-        <div style={{
-          background: OPS.card, border: `1px solid ${OPS.border}`, borderRadius: 12, padding: '16px 18px',
-        }}>
-          <div style={{ color: OPS.text, fontSize: 12, fontWeight: 700, letterSpacing: '0.12em', marginBottom: 12 }}>
-            DECISION DISCREPANCY TIMELINE
-          </div>
-          <DecisionDiscrepancyStrip log={log} />
-        </div>
-        <div>
-          <div style={{ color: OPS.text, fontSize: 12, fontWeight: 700, letterSpacing: '0.12em', marginBottom: 12 }}>
-            ASSET PERFORMANCE SUMMARY
-          </div>
-          <AssetPerformanceTiles data={data} log={log} m={m} />
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ══════════════════════════════════════════════════════════════════════
 // MAIN APP
@@ -1975,7 +1691,6 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
   // ── Derived ────────────────────────────────────────────────────────
   const log         = Array.isArray(data.decision_log) ? data.decision_log : [];
   const captureRate = data.edv_optimal_total > 0 ? (data.edv_actual_total / data.edv_optimal_total) * 100 : 0;
-  const m           = data.eda_metrics;
   // "An audit is loaded" = the decision log has rows. NOT dq_score > 0 —
   // an honest DQ of 0.0 (destructive dispatch) is a real, displayable audit.
   const hasData     = log.length > 0;
@@ -2354,14 +2069,11 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
               canvas is absorbed by the zone system, not stretched cards. */}
           {hasData && activeSection === 'exec' && (
             <Workspace>
-              <ExecutiveCommandCenter data={data} live={dataSource === 'live'} />
-              <OpsConsoleExec
-                data={data}
-                log={log}
-                m={m}
-                ingestionNotes={ingestionNotes}
-                onDismissNotes={() => setIngestionNotes(null)}
-              />
+              {ingestionNotes && (
+                <IngestionNotesBanner notes={ingestionNotes} onDismiss={() => setIngestionNotes(null)} />
+              )}
+              <ExecutiveCommandCenter data={data} log={log} live={dataSource === 'live'}
+                onOpenLive={() => setActiveSection('live')} />
             </Workspace>
           )}
 

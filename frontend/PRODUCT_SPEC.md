@@ -2402,6 +2402,7 @@ specification after ratification — the immutability mechanism.
 | # | Date | Spec | Change | Rationale | Ratified by |
 |---|------|------|--------|-----------|-------------|
 | 0 | 2026-07-14 | ALL | PREDAIOT-FE-2.0 ratified in full (Parts 0–V + WS-1.0 annex); execution authorization issued; implementation phases 1–15 commence | Constitution complete after Part 0 consistency review | Platform architect |
+| 1 | 2026-07-14 | SPEC-EX, SPEC-WS | S01 recomposed as a five-act decision narrative (Loss → Opportunity → Action+Impact → Evidence → Operations Record); the Z2 KPI card row is replaced by the Act-01 hero + IN-04 Economic Allocation; Z5/Z6 (Evidence act) join the spine at T2+ (was T3+); the legacy ops-console widget cluster is retired | Architect directive: the Executive Experience must read as one continuous story, not a widget collection (SPEC-ID Visual Rhythm; SPEC-ST) | Platform architect |
 
 **Rules.**
 1. Amendments are proposed in writing, reviewed against affected specs
