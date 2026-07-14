@@ -1,6 +1,7 @@
 # PREDAIOT Workspace Specification — WS-1.0
 
-**Status:** PROPOSED — awaiting ratification.
+**Status:** RATIFIED — 2026-07-14, via ratification of SPEC-WS
+(PREDAIOT-FE-2.0, GOV-RP rule 2).
 **Position:** Normative annex of `PRODUCT_SPEC.md` (PREDAIOT-FE-2.0,
 Part I, SPEC-WS). Ratification of SPEC-WS ratifies this annex (GOV-RP
 rule 2). Interim note: the 1720px executive cap referenced in §1.1 is
