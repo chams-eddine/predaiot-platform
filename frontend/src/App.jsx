@@ -1511,6 +1511,16 @@ export default function App() {
   const isMobile = useIsMobile();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [reportsOpen, setReportsOpen] = useState(false);   // header REPORTS menu (SPEC-NV rule 4)
+  const [lensOpen, setLensOpen] = useState(false);         // archetype lens menu (SPEC-RB)
+  // SPEC-RB: presentation lens — emphasis only, never truth. CFO is the
+  // native grip (the moat is economic truth). Explicit choice persists.
+  const [archetype, setArchetype] = useState(() => {
+    try { return localStorage.getItem('predaiot.archetype.v1') || 'CFO'; } catch { return 'CFO'; }
+  });
+  const chooseLens = (a) => {
+    setArchetype(a); setLensOpen(false);
+    try { localStorage.setItem('predaiot.archetype.v1', a); } catch { /* private mode */ }
+  };
   useEffect(() => {
     // Close the drawer if the viewport transitions back to desktop
     if (!isMobile && sidebarOpen) setSidebarOpen(false);
@@ -2007,6 +2017,25 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
     { label: 'Reference',             ids: ['appendix'] },
   ].map((g) => ({ ...g, items: g.ids.map((id) => navItems.find((n) => n.id === id)) }));
 
+  // SPEC-RB emphasis matrix — group order + elevated/de-emphasized sections
+  // per archetype. Same data, same evidence, different reading order.
+  const ARCHETYPE_EMPHASIS = {
+    CFO:           { order: ['Command', 'Analysis', 'Action', 'Evidence & Governance', 'Operations', 'Reference'],
+                     up: ['flow', 'leakage', 'cert'], down: ['live', 'realtime'] },
+    CEO:           { order: ['Command', 'Evidence & Governance', 'Action', 'Analysis', 'Operations', 'Reference'],
+                     up: ['govern', 'history'], down: ['appendix', 'metrics'] },
+    Operations:    { order: ['Command', 'Action', 'Operations', 'Analysis', 'Evidence & Governance', 'Reference'],
+                     up: ['opps', 'live'], down: ['appendix'] },
+    Engineer:      { order: ['Command', 'Analysis', 'Reference', 'Action', 'Evidence & Governance', 'Operations'],
+                     up: ['rootcause', 'counter', 'metrics', 'appendix'], down: [] },
+    Administrator: { order: ['Command', 'Evidence & Governance', 'Operations', 'Analysis', 'Action', 'Reference'],
+                     up: ['history'], down: [] },
+  };
+  const ARCHETYPES = Object.keys(ARCHETYPE_EMPHASIS);
+  const lens = ARCHETYPE_EMPHASIS[archetype] || ARCHETYPE_EMPHASIS.CFO;
+  const orderedGroups = lens.order
+    .map((label) => NAV_GROUPS.find((g) => g.label === label)).filter(Boolean);
+
   // ══════════════════════════════════════════════════════════════════
   // RENDER
   // ══════════════════════════════════════════════════════════════════
@@ -2122,6 +2151,44 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
               </>
             )}
           </div>
+          {/* SPEC-RB archetype lens — one interaction, always visible,
+              instantly reversible. Emphasis only; figures never change. */}
+          {!isMobile && (
+            <div style={{ position: 'relative' }}>
+              <BtnOutline color={DS.sub} onClick={() => setLensOpen((v) => !v)}
+                aria-haspopup="menu" aria-expanded={lensOpen}>
+                LENS · {archetype.toUpperCase()} {lensOpen ? '▴' : '▾'}
+              </BtnOutline>
+              {lensOpen && (
+                <>
+                  <div onClick={() => setLensOpen(false)}
+                       style={{ position: 'fixed', inset: 0, zIndex: 120 }} />
+                  <div role="menu" style={{
+                    position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 121,
+                    background: DS.bgRaised, border: `1px solid ${DS.borderHi}`,
+                    borderRadius: DS.r12, boxShadow: 'var(--pds-shadow-2)',
+                    minWidth: 190, padding: 6,
+                  }}>
+                    {ARCHETYPES.map((a) => (
+                      <button key={a} role="menuitemradio" aria-checked={a === archetype}
+                        className="pds-menu-item"
+                        onClick={() => chooseLens(a)}
+                        style={{
+                          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                          width: '100%', textAlign: 'left', padding: '10px 12px',
+                          background: 'none', border: 'none', borderRadius: DS.r8,
+                          cursor: 'pointer', fontSize: 12, fontFamily: DS.sans,
+                          color: a === archetype ? DS.cyan : DS.text,
+                        }}>
+                        {a}
+                        {a === archetype && <span aria-hidden style={{ fontSize: 10 }}>●</span>}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           {account?.token ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               {!isMobile && (
@@ -2182,8 +2249,9 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           position: 'sticky', top: 'var(--ws-header-h)',
           height: 'calc(100vh - var(--ws-header-h))', overflowY: 'auto',
         }}>
-          {/* SPEC-NV: grouped instrument rail — the taxonomy is the map. */}
-          {NAV_GROUPS.map((g) => (
+          {/* SPEC-NV: grouped instrument rail — the taxonomy is the map,
+              ordered by the active SPEC-RB lens (emphasis, never truth). */}
+          {orderedGroups.map((g) => (
             <div key={g.label} style={{ marginBottom: 14 }}>
               <div style={{
                 padding: isMobile ? '8px 22px 5px' : '6px 20px 5px',
@@ -2192,6 +2260,8 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
               }}>{g.label}</div>
               {g.items.map((n) => {
                 const active = activeSection === n.id;
+                const elevated = lens.up.includes(n.id);
+                const dimmed = lens.down.includes(n.id) && !active;
                 return (
                   <button
                     key={n.id}
@@ -2208,12 +2278,17 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                       border: 'none', cursor: 'pointer',
                       letterSpacing: '0.04em',
                       color: active ? DS.cyan : DS.sub,
+                      opacity: dimmed ? 0.55 : 1,
                       borderLeft: `2px solid ${active ? DS.cyan : 'transparent'}`,
                       transition: 'all 0.12s',
                     }}
                   >
                     <span style={{ fontFamily: DS.mono, fontSize: isMobile ? 10 : 9, color: active ? DS.cyan : DS.dim, marginRight: 8 }}>{n.tag}</span>
                     {n.label}
+                    {elevated && !active && (
+                      <span aria-hidden style={{ display: 'inline-block', width: 4, height: 4, borderRadius: '50%',
+                        background: DS.cyan, marginLeft: 7, verticalAlign: 'middle', opacity: 0.8 }} />
+                    )}
                   </button>
                 );
               })}
