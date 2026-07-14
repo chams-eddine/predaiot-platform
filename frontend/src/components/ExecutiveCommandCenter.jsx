@@ -1,15 +1,11 @@
 // ============================================================================
-// PREDAIOT — The Executive Briefing (SPEC-EX + SPEC-ST + SPEC-DL).
-// S01 is ONE continuous decision narrative, not a widget grid:
-//   Act 01 THE LOSS         → Q1  How much are we losing?
-//   Act 02 THE OPPORTUNITY  → Q2  How much can we recover? (+ Q9 if we wait)
-//   Act 03 THE ACTION       → Q4  What should we do next?  (SPEC-AI block,
-//                                  Expected Impact = the block's right column)
-//   Act 04 THE EVIDENCE     → Q5/Q6  Why — and can we prove it?
-//   Act 05 THE OPERATIONS RECORD → Q7  What happened, step by step / live?
-// Every act header names the executive question it answers (the Existence
-// Test, rendered). Consumes ONLY the existing audit response; absent data
-// renders as absent (SPEC-TR; FM-1/FM-3); annualized figures never render.
+// PREDAIOT — THE EXECUTIVE BRIEFING (S01). GOV-AL amendment #2.
+// Six Executive Acts on one continuous spine — a board presentation, never a
+// dashboard. Each Act carries a formal contract (below, defined before its
+// implementation), answers exactly ONE executive question, consumes only the
+// frozen audit API, and leads into the next Act. No KPI appears twice.
+// Absent data renders as absent (SPEC-TR; FM-1/FM-3); annualized figures
+// never render (SPEC-AI rule 5).
 // ============================================================================
 import React, { lazy, Suspense } from 'react';
 import { PDS, gradeColor, riskColor, opportunityColor, fmtMoney, fmtPct } from '../design/ds';
@@ -22,15 +18,28 @@ const FinancialTimeline = lazy(() =>
 
 const num = (x) => (x == null || Number.isNaN(Number(x)) ? null : Number(x));
 
-/* Act header — the narrative spine. Each act states its question outright. */
-function ActHeader({ n, title, question }) {
+/* ── The spine ───────────────────────────────────────────────────────────
+   Acts sit on a single vertical rail; each Act's numeral is a node on it.
+   The rail is the visual transition between Acts — the page reads as one
+   document flowing downward, never as adjacent widgets. */
+function Act({ n, title, question, children }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 14 }}>
-      <span className="pds-num" style={{ fontSize: 11, color: PDS.accent, fontWeight: 700 }}>{n}</span>
-      <span className="pds-kicker" style={{ color: PDS.accent }}>{title}</span>
-      <span aria-hidden style={{ flex: 1, height: 1, background: PDS.hairline, alignSelf: 'center' }} />
-      <span style={{ fontSize: 10, color: PDS.text3, fontStyle: 'italic', flexShrink: 0 }}>{question}</span>
-    </div>
+    <section aria-label={`Act ${n} — ${title}`} style={{ position: 'relative', paddingLeft: 34 }}>
+      {/* node on the spine */}
+      <span aria-hidden className="pds-num" style={{
+        position: 'absolute', left: 0, top: 0, width: 22, height: 22,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 10, fontWeight: 800, color: PDS.accent,
+        border: `1px solid ${PDS.accent}55`, borderRadius: '50%',
+        background: PDS.panel,
+      }}>{n}</span>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 14, minHeight: 22 }}>
+        <span className="pds-kicker" style={{ color: PDS.accent }}>{title}</span>
+        <span aria-hidden style={{ flex: 1, height: 1, background: PDS.hairline, alignSelf: 'center' }} />
+        <span style={{ fontSize: 10, color: PDS.text3, fontStyle: 'italic', flexShrink: 0 }}>{question}</span>
+      </div>
+      {children}
+    </section>
   );
 }
 
@@ -66,100 +75,236 @@ export default function ExecutiveCommandCenter({ data, log, live, onOpenLive }) 
   const period = data.audit_period_label || 'the audited period';
 
   return (
-    <div className="pds-rise" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--ws-zone-gap)' }}>
+    <div className="pds-rise" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 'var(--ws-zone-gap)' }}>
+      {/* the spine rail itself — accent at the top, fading to hairline */}
+      <div aria-hidden style={{
+        position: 'absolute', left: 10, top: 22, bottom: 10, width: 1,
+        background: `linear-gradient(180deg, ${PDS.accent}66, var(--pds-hairline) 30%, var(--pds-hairline))`,
+      }} />
 
-      {/* ═══ ACT 01 — THE LOSS ═══════════════════════════════════════ */}
-      <section aria-label="The loss">
-        <ActHeader n="01" title="The Loss" question="How much are we losing?" />
-        <Panel pad={PDS.s6} style={{ boxShadow: 'var(--pds-glow-loss), var(--pds-shadow-1)' }}>
-          <div style={{ display: 'flex', gap: PDS.s6, flexWrap: 'wrap', alignItems: 'stretch' }}>
-            {/* The statement — one sentence, one dominant number. */}
+      {/* ══════════════════════════════════════════════════════════════
+          ACT I — ECONOMIC SITUATION
+          · Executive Question   What is our current economic reality?
+          · Purpose              Orient the executive: which asset, which
+                                 period, how healthy its decisions are, and
+                                 whether this picture is certified truth.
+          · Required API fields  asset_name, asset_type, audit_period_label,
+                                 dq_score (ECF), risk_level, audit_confidence,
+                                 data_quality_index, audit_manifest hash,
+                                 provenance (live flag).
+          · Why it exists        No figure is meaningful before identity,
+                                 verdict, and trust state are established.
+          · Decision supported   "Do I need to act on this asset at all?"
+          · Why before Act II    Situation precedes quantification — a board
+                                 hears the state of affairs before the bill.
+          · Instrument           IN-01 Economic Dial (compact verdict form).
+          · Never inside it      Money numerals of any value class (they
+                                 belong to Act II), charts, opportunities.
+      ══════════════════════════════════════════════════════════════ */}
+      <Act n="I" title="Economic Situation" question="What is our current economic reality?">
+        <Panel pad={PDS.s6}>
+          <div style={{ display: 'flex', gap: PDS.s6, flexWrap: 'wrap', alignItems: 'center' }}>
             <div style={{ flex: 2, minWidth: 300 }}>
-              <div style={{ fontSize: 15, color: PDS.text2, lineHeight: 1.6 }}>
-                <span style={{ color: PDS.text, fontWeight: 700 }}>{data.asset_name || 'This asset'}</span>
-                {' '}left
+              <div style={{ fontSize: 24, fontWeight: 800, color: PDS.text, letterSpacing: '-0.015em' }}>
+                {data.asset_name || 'Energy Asset'}
               </div>
-              <div className="pds-num" style={{
-                fontSize: 'clamp(44px, 4.6vw, 72px)', fontWeight: 800, lineHeight: 1.05,
-                color: PDS.loss, letterSpacing: '-0.02em',
-                textShadow: '0 0 40px rgba(255,92,122,0.18)',
-              }}>
-                {leakage != null
-                  ? Math.abs(leakage).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                  : '—'}
-                <span style={{ fontSize: '0.32em', color: PDS.text2, fontWeight: 600, marginLeft: 10 }}>{currency}</span>
+              <div style={{ fontSize: 13, color: PDS.text2, lineHeight: 1.7, marginTop: 8, maxWidth: 'var(--pds-prose-max)' }}>
+                Over {period}, this {data.asset_type || 'asset'} operated at{' '}
+                <span style={{ color: riskColor(data.risk_level), fontWeight: 700 }}>
+                  {ecfPct != null ? `${ecfPct.toFixed(1)}%` : 'an unmeasured share'} of its achievable economic optimum
+                </span>
+                {data.risk_level && <> — a <span style={{ color: riskColor(data.risk_level), fontWeight: 700 }}>{data.risk_level.toLowerCase()}-risk</span> decision posture</>}.
               </div>
-              <div style={{ fontSize: 15, color: PDS.text2, lineHeight: 1.6, marginTop: 4 }}>
-                of achievable value unrealized in {period}
-                {ecfPct != null && <> — <span style={{ color: PDS.text, fontWeight: 700 }}>{ecfPct.toFixed(1)}%</span> of the optimum was captured.</>}
-              </div>
-            </div>
-            {/* The verdict — dial + risk + provenance (Q3, folded into Act 01). */}
-            <div style={{ minWidth: 220, display: 'flex', flexDirection: 'column', gap: 10,
-                          justifyContent: 'center', alignItems: 'flex-start',
-                          borderLeft: `1px solid ${PDS.hairline}`, paddingLeft: PDS.s5 }}>
-              <VerdictDial ecfPct={ecfPct} riskLevel={data.risk_level} />
-              <div style={{ fontSize: 11, color: PDS.text3 }}>
+              <div style={{ fontSize: 11, color: PDS.text3, marginTop: 10 }}>
                 {acGrade ? `Audit confidence ${acGrade}${acPct != null ? ` · ${acPct.toFixed(0)}%` : ''}`
                   : dqiPct != null ? `Data quality ${dqiPct.toFixed(0)}%`
-                  : 'Capture measured against the optimal dispatch benchmark'}
+                  : 'Measured against the optimal-dispatch benchmark of the certified audit engine'}
               </div>
-              <EvidenceBadge provisional={isLive} hash={datasetHash}
-                status={isLive ? 'PROVISIONAL' : 'CERTIFIED'} />
+              <div style={{ marginTop: 12 }}>
+                <EvidenceBadge provisional={isLive} hash={datasetHash}
+                  status={isLive ? 'PROVISIONAL' : 'CERTIFIED'} />
+              </div>
+            </div>
+            <div style={{ borderLeft: `1px solid ${PDS.hairline}`, paddingLeft: PDS.s5 }}>
+              <VerdictDial ecfPct={ecfPct} riskLevel={data.risk_level} />
             </div>
           </div>
-          {/* IN-04 Economic Allocation — where the period's value went. */}
-          <AllocationBar captured={captured} recoverable={recoverable}
-            forecastGap={forecastGap} leakage={leakage} ceiling={ceiling} currency={currency} />
         </Panel>
-      </section>
+      </Act>
 
-      {/* ═══ ACT 02 — THE OPPORTUNITY ════════════════════════════════ */}
-      <section aria-label="The opportunity">
-        <ActHeader n="02" title="The Opportunity" question="How much can we recover?" />
-        <div style={{ padding: `0 ${PDS.s2}` }}>
-          <div style={{ fontSize: 17, color: PDS.text2, lineHeight: 1.7, maxWidth: 'var(--pds-prose-max)' }}>
-            <span className="pds-num" style={{ fontSize: 26, fontWeight: 800, color: PDS.recover }}>
+      {/* ══════════════════════════════════════════════════════════════
+          ACT II — FINANCIAL IMPACT
+          · Executive Question   How much value are we losing or protecting?
+          · Purpose              Quantify the situation: the loss, what was
+                                 protected, and what is winnable — with the
+                                 recorded cost of waiting.
+          · Required API fields  total_gap_usd, edv_actual_total,
+                                 gap_attribution.{execution_gap,forecast_gap},
+                                 recoverable_execution_gap, edv_optimal_total,
+                                 currency.
+          · Why it exists        Money is the platform's native language; the
+                                 briefing's single dominant numeral lives here.
+          · Decision supported   "Is the stake large enough to command my
+                                 attention now?"
+          · Why before Act III   The magnitude justifies the analysis; a board
+                                 asks 'how much' before 'why'.
+          · Instrument           IN-04 Economic Allocation (one bar: where the
+                                 period's value went).
+          · Never inside it      Capture % or risk verdict (Act I), causes
+                                 (Act III), recommendations (Act IV).
+      ══════════════════════════════════════════════════════════════ */}
+      <Act n="II" title="Financial Impact" question="How much value are we losing or protecting?">
+        <Panel pad={PDS.s6} style={{ boxShadow: 'var(--pds-glow-loss), var(--pds-shadow-1)' }}>
+          <div style={{ fontSize: 15, color: PDS.text2, lineHeight: 1.6 }}>Value left unrealized:</div>
+          <div className="pds-num" style={{
+            fontSize: 'clamp(44px, 4.6vw, 72px)', fontWeight: 800, lineHeight: 1.05,
+            color: PDS.loss, letterSpacing: '-0.02em',
+            textShadow: '0 0 40px rgba(255,92,122,0.18)',
+          }}>
+            {leakage != null
+              ? Math.abs(leakage).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+              : '—'}
+            <span style={{ fontSize: '0.32em', color: PDS.text2, fontWeight: 600, marginLeft: 10 }}>{currency}</span>
+          </div>
+          <div style={{ fontSize: 14, color: PDS.text2, lineHeight: 1.7, marginTop: 10, maxWidth: 'var(--pds-prose-max)' }}>
+            Of this,{' '}
+            <span className="pds-num" style={{ color: PDS.recover, fontWeight: 800 }}>
               {recoverable != null ? fmtMoney(Math.abs(recoverable), currency) : '—'}
             </span>
-            {recPct != null && <> — <span style={{ color: PDS.text, fontWeight: 700 }}>{fmtPct(recPct)}</span> of the loss —</>}
-            {' '}was winnable with the information available at decision time.
+            {recPct != null && <> ({fmtPct(recPct)})</>} was winnable with the information available at
+            decision time
             {forecastGap != null && forecastGap > 0 && (
-              <span style={{ color: PDS.text3 }}> The remaining {fmtMoney(forecastGap, currency)} required
-              perfect price foresight and is not operator-attributable.</span>
-            )}
+              <span style={{ color: PDS.text3 }}> — the remaining {fmtMoney(forecastGap, currency)} required
+              perfect price foresight and is not operator-attributable</span>
+            )}.
           </div>
-          {/* Q9 — the cost of waiting, in recorded terms only. */}
+          <AllocationBar captured={captured} recoverable={recoverable}
+            forecastGap={forecastGap} leakage={leakage} ceiling={ceiling} currency={currency} />
+          {/* Q9 — the recorded cost of waiting. */}
           {recoverable != null && (
-            <div style={{ fontSize: 11, color: PDS.text3, marginTop: 10 }}>
+            <div style={{ fontSize: 11, color: PDS.text3, marginTop: 12 }}>
               This period recorded {fmtMoney(Math.abs(recoverable), currency)} recoverable in {period}.
               Basis: recorded period only — no forward projection.
             </div>
           )}
-        </div>
-      </section>
+        </Panel>
+      </Act>
 
-      {/* ═══ ACT 03 — THE ACTION (+ Expected Impact) ═════════════════ */}
-      <section aria-label="The recommended action">
-        <ActHeader n="03" title="The Action" question="What should we do — and what is it worth?" />
-        <RecommendationBlock primary={primary} alternatives={alternatives}
-          currency={currency} acGrade={acGrade} acPct={acPct} dqiPct={dqiPct}
-          fallbackRc={rcs[0]} />
-      </section>
+      {/* ══════════════════════════════════════════════════════════════
+          ACT III — DECISION ANALYSIS
+          · Executive Question   Why is this happening?
+          · Purpose              Attribute the loss to recorded causes so the
+                                 coming decision targets truth, not symptoms.
+          · Required API fields  root_causes[] {category, loss_usd,
+                                 contribution_pct}.
+          · Why it exists        A recommendation without attribution is an
+                                 opinion; this act is the causal bridge.
+          · Decision supported   "Which failure mode am I about to fix?"
+          · Why before Act IV    Cause precedes prescription — the diagnosis
+                                 legitimizes the treatment.
+          · Instrument           IN-06 Leakage Flow (attribution bars).
+          · Never inside it      Totals from Act II, actions, evidence
+                                 artifacts, confidence grades.
+      ══════════════════════════════════════════════════════════════ */}
+      <Act n="III" title="Decision Analysis" question="Why is this happening?">
+        <Panel pad={PDS.s5}>
+          {(!rcs || rcs.length === 0) ? (
+            <div style={{ fontSize: 12, color: PDS.text3 }}>No root-cause decomposition recorded for this audit.</div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))', gap: PDS.s5 }}>
+              {rcs.slice(0, 4).map((rc) => (
+                <div key={rc.category}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+                    <span style={{ fontSize: 12, color: PDS.text2 }}>{rc.category}</span>
+                    <span className="pds-num" style={{ fontSize: 12, color: PDS.loss, fontWeight: 700 }}>
+                      {fmtMoney(rc.loss_usd, currency)}
+                      <span style={{ color: PDS.text3, fontWeight: 400 }}> · {fmtPct(rc.contribution_pct, 0)}</span>
+                    </span>
+                  </div>
+                  <div style={{ height: 4, background: PDS.hairline, borderRadius: 2, overflow: 'hidden' }}>
+                    <div style={{ width: '100%', height: '100%',
+                                  background: PDS.loss, borderRadius: 2, opacity: 0.8,
+                                  transform: `scaleX(${Math.min(100, rc.contribution_pct || 0) / 100})`,
+                                  transformOrigin: 'left',
+                                  transition: 'transform var(--pds-dur-slow) var(--pds-ease)' }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
+      </Act>
 
-      {/* ═══ ACT 04 — THE EVIDENCE ═══════════════════════════════════ */}
-      <section aria-label="The evidence">
-        <ActHeader n="04" title="The Evidence" question="Why did it happen — and can we prove it?" />
+      {/* ══════════════════════════════════════════════════════════════
+          ACT IV — RECOMMENDED DECISION
+          · Executive Question   What should we do now?
+          · Purpose              Present the governed decision: designation,
+                                 the action, its reasoning, and the ranked
+                                 alternatives (SPEC-AI rules 2–3).
+          · Required API fields  opportunities[] {name, description,
+                                 experimental}, root_causes (fallback).
+          · Why it exists        The briefing exists to improve decisions
+                                 (FM-10); this is the decision.
+          · Decision supported   The decision itself — accept, defer, or
+                                 choose an alternative.
+          · Why before Act V     The proposal precedes its valuation and
+                                 proof — a board hears the motion, then the
+                                 case for it.
+          · Instrument           None — a decision is text, not a chart.
+          · Never inside it      Money (the expected outcome belongs to
+                                 Act V), confidence grades, hashes.
+      ══════════════════════════════════════════════════════════════ */}
+      <Act n="IV" title="Recommended Decision" question="What should we do now?">
+        <DecisionPanel primary={primary} alternatives={alternatives} fallbackRc={rcs[0]} currency={currency} />
+      </Act>
+
+      {/* ══════════════════════════════════════════════════════════════
+          ACT V — EXPECTED OUTCOME & EVIDENCE
+          · Executive Question   Why should we trust this recommendation?
+          · Purpose              Value the decision in recorded terms and
+                                 chain it to verifiable artifacts: ledger
+                                 evidence, method, confidence, dataset hash.
+          · Required API fields  primary opportunity {period_gain, evidence,
+                                 derivation, intervals_observed,
+                                 confidence_pct}, audit_confidence,
+                                 data_quality_index, manifest hashes.
+          · Why it exists        Trust is shown, never asserted (SPEC-TM);
+                                 every figure must sit near its proof (P7).
+          · Decision supported   "Do I sign off on Act IV?"
+          · Why before Act VI    Proof closes the case before attention
+                                 returns to the running plant.
+          · Instrument           Evidence ledger rows (SPEC-ID evidence-as-
+                                 jewelry); mono numerals.
+          · Never inside it      The recommendation text (Act IV), situation
+                                 verdicts (Act I), loss totals (Act II).
+      ══════════════════════════════════════════════════════════════ */}
+      <Act n="V" title="Expected Outcome & Evidence" question="Why should we trust this recommendation?">
         <Zone row="primary">
-          <ReasoningPanel rcs={rcs} currency={currency} />
-          <EvidencePanel isLive={isLive} datasetHash={datasetHash} dqi={dqi} ac={ac} data={data} />
+          <OutcomePanel primary={primary} currency={currency}
+            acGrade={acGrade} acPct={acPct} dqiPct={dqiPct} />
+          <EvidencePanel datasetHash={datasetHash} dqi={dqi} ac={ac} />
         </Zone>
-      </section>
+      </Act>
 
-      {/* ═══ ACT 05 — THE OPERATIONS RECORD ══════════════════════════ */}
-      <section aria-label="The operations record">
-        <ActHeader n="05" title="The Operations Record"
-          question={isLive ? 'What is happening right now?' : 'What happened, step by step?'} />
+      {/* ══════════════════════════════════════════════════════════════
+          ACT VI — LIVE OPERATIONAL CONTEXT
+          · Executive Question   What is happening right now while we decide?
+          · Purpose              Ground the decision in the operating record:
+                                 the step-by-step economics of the period, and
+                                 the doorway to the live stream.
+          · Required API fields  decision_log[] {hour, price,
+                                 edv_actual_step}; dataSource (live flag).
+          · Why it exists        Decisions age; the executive leaves the
+                                 briefing knowing what the plant is doing.
+          · Decision supported   "Does current operation change my sign-off?"
+          · Why it closes        The story returns from judgment to reality —
+                                 the last word belongs to the machine.
+          · Instrument           IN-13 Financial Timeline (lazy chunk).
+          · Never inside it      Recommendations, totals, verdicts, evidence
+                                 artifacts — context only.
+      ══════════════════════════════════════════════════════════════ */}
+      <Act n="VI" title="Live Operational Context"
+           question={isLive ? 'What is happening right now?' : 'What is happening while we decide?'}>
         <Panel pad={PDS.s5}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
                         marginBottom: 10, gap: 12, flexWrap: 'wrap' }}>
@@ -181,12 +326,12 @@ export default function ExecutiveCommandCenter({ data, log, live, onOpenLive }) 
             <FinancialTimeline log={log} />
           </Suspense>
         </Panel>
-      </section>
+      </Act>
     </div>
   );
 }
 
-/* IN-01 Economic Dial — compact verdict form for the Act-01 hero. */
+/* IN-01 Economic Dial — Act I verdict form. */
 function VerdictDial({ ecfPct, riskLevel }) {
   const c = riskColor(riskLevel);
   const pct = ecfPct != null ? ecfPct : 0;
@@ -219,16 +364,16 @@ function VerdictDial({ ecfPct, riskLevel }) {
   );
 }
 
-/* IN-04 Economic Allocation — one full-width bar: where the value went.
+/* IN-04 Economic Allocation — Act II: where the period's value went.
    Ceiling is context, never a value class (SPEC-EV rule 2). */
 function AllocationBar({ captured, recoverable, forecastGap, leakage, ceiling, currency }) {
   const segs = [];
-  if (captured != null) segs.push({ k: 'Captured', v: Math.max(0, captured), c: PDS.recover, cls: 'money protected' });
-  if (recoverable != null) segs.push({ k: 'Recoverable execution gap', v: Math.abs(recoverable), c: PDS.loss, cls: 'money recoverable' });
-  if (forecastGap != null && forecastGap > 0) segs.push({ k: 'Forecast-unreachable', v: forecastGap, c: PDS.text3, cls: 'benchmark context' });
+  if (captured != null) segs.push({ k: 'Protected (captured)', v: Math.max(0, captured), c: PDS.recover });
+  if (recoverable != null) segs.push({ k: 'Recoverable execution gap', v: Math.abs(recoverable), c: PDS.loss });
+  if (forecastGap != null && forecastGap > 0) segs.push({ k: 'Forecast-unreachable', v: forecastGap, c: PDS.text3 });
   if (segs.length < 2 && leakage != null && captured != null) {
     segs.length = 0;
-    segs.push({ k: 'Captured', v: Math.max(0, captured), c: PDS.recover });
+    segs.push({ k: 'Protected (captured)', v: Math.max(0, captured), c: PDS.recover });
     segs.push({ k: 'Economic gap', v: Math.abs(leakage), c: PDS.loss });
   }
   const total = segs.reduce((a, s) => a + s.v, 0);
@@ -259,10 +404,9 @@ function AllocationBar({ captured, recoverable, forecastGap, leakage, ceiling, c
   );
 }
 
-/* Act 03 — the PREDAIOT Recommendation Block (SPEC-AI minimum lawful
-   anatomy). Expected Impact is the block's right column; alternatives are
-   always visible; annualized gains never render (rule 5). */
-function RecommendationBlock({ primary, alternatives, currency, acGrade, acPct, dqiPct, fallbackRc }) {
+/* Act IV — the decision itself. Money and proof live in Act V; together the
+   two acts form the complete SPEC-AI Recommendation anatomy on one screen. */
+function DecisionPanel({ primary, alternatives, fallbackRc, currency }) {
   if (!primary && !fallbackRc) {
     return (
       <Panel pad={PDS.s6}>
@@ -274,68 +418,30 @@ function RecommendationBlock({ primary, alternatives, currency, acGrade, acPct, 
     );
   }
   const p = primary || {
-    name: fallbackRc.category, period_gain: fallbackRc.loss_usd,
+    name: fallbackRc.category,
     description: 'Largest recorded economic-loss bucket in this audit period.',
-    evidence: null, derivation: null, intervals_observed: null, experimental: false,
+    experimental: false,
   };
-  const confidenceLine = p.confidence_pct != null
-    ? `Opportunity confidence ${fmtPct(p.confidence_pct, 0)}`
-    : acGrade
-      ? `Audit confidence ${acGrade}${acPct != null ? ` · ${acPct.toFixed(0)}%` : ''}`
-      : dqiPct != null
-        ? `Data quality ${dqiPct.toFixed(0)}%`
-        : 'Confidence INDETERMINATE — data-quality index not computed on this audit path';
   return (
-    <Panel pad={PDS.s6}>
-      <div style={{ display: 'flex', gap: PDS.s6, flexWrap: 'wrap' }}>
-        <div style={{ flex: 2, minWidth: 300 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-            <span className="pds-kicker" style={{ color: PDS.accent }}>PREDAIOT Recommendation</span>
-            {p.experimental && (
-              <span className="pds-num" style={{ fontSize: 9, letterSpacing: '0.1em', color: PDS.text3,
-                border: `1px solid ${PDS.border}`, borderRadius: PDS.rPill, padding: '2px 8px' }}>
-                EXPERIMENTAL
-              </span>
-            )}
-          </div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: PDS.text, marginBottom: 6 }}>{p.name}</div>
-          <div style={{ fontSize: 13, color: PDS.text2, lineHeight: 1.6, maxWidth: 'var(--pds-prose-max)' }}>
-            {p.description}
-          </div>
-          {p.evidence && (
-            <div style={{ fontSize: 11, color: PDS.text3, marginTop: 10, lineHeight: 1.55,
-                          maxWidth: 'var(--pds-prose-max)' }}>
-              <span style={{ color: PDS.text2, fontWeight: 700 }}>Evidence · </span>{p.evidence}
-            </div>
-          )}
-          <div style={{ fontSize: 11, color: PDS.text3, marginTop: 6 }}>
-            <span style={{ color: PDS.text2, fontWeight: 700 }}>Confidence · </span>{confidenceLine}
-          </div>
-          {p.derivation && (
-            <div style={{ fontSize: 10, color: PDS.text3, marginTop: 6, opacity: 0.8,
-                          maxWidth: 'var(--pds-prose-max)' }}>
-              <span style={{ fontWeight: 700 }}>Method · </span>{p.derivation}
-            </div>
-          )}
-        </div>
-        <div style={{ textAlign: 'right', minWidth: 180, flex: 1 }}>
-          <div className="pds-kicker" style={{ marginBottom: 8 }}>Expected Impact</div>
-          <div style={{ fontSize: 34, fontWeight: 800, color: PDS.recover, lineHeight: 1 }}>
-            <span className="pds-num">{fmtMoney(Math.abs(num(p.period_gain) ?? 0), currency)}</span>
-          </div>
-          <div style={{ fontSize: 10, color: PDS.text3, marginTop: 8 }}>
-            recorded this period — no forward projection
-          </div>
-          {p.intervals_observed != null && (
-            <div className="pds-num" style={{ fontSize: 10, color: PDS.text3, marginTop: 4 }}>
-              {p.intervals_observed} intervals observed
-            </div>
-          )}
-        </div>
+    <Panel pad={PDS.s6} accent>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <span className="pds-kicker" style={{ color: PDS.accent }}>PREDAIOT Recommendation</span>
+        {p.experimental && (
+          <span className="pds-num" style={{ fontSize: 9, letterSpacing: '0.1em', color: PDS.text3,
+            border: `1px solid ${PDS.border}`, borderRadius: PDS.rPill, padding: '2px 8px' }}>
+            EXPERIMENTAL
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 22, fontWeight: 800, color: PDS.text, marginBottom: 8, letterSpacing: '-0.01em' }}>
+        {p.name}
+      </div>
+      <div style={{ fontSize: 13, color: PDS.text2, lineHeight: 1.65, maxWidth: 'var(--pds-prose-max)' }}>
+        {p.description}
       </div>
       {alternatives && alternatives.length > 0 && (
         <div style={{ marginTop: PDS.s5, paddingTop: PDS.s4, borderTop: `1px solid ${PDS.hairline}` }}>
-          <div className="pds-kicker" style={{ marginBottom: 8 }}>Alternative Actions</div>
+          <div className="pds-kicker" style={{ marginBottom: 8 }}>Alternative Decisions</div>
           <div style={{ display: 'flex', gap: PDS.s5, flexWrap: 'wrap' }}>
             {alternatives.map((a) => {
               const gain = num(a.period_gain);
@@ -361,49 +467,62 @@ function RecommendationBlock({ primary, alternatives, currency, acGrade, acPct, 
   );
 }
 
-/* Act 04 left — why value leaked: recorded root-cause attribution. */
-function ReasoningPanel({ rcs, currency }) {
+/* Act V left — the decision's worth, in recorded terms, with its case. */
+function OutcomePanel({ primary, currency, acGrade, acPct, dqiPct }) {
+  const gain = primary ? num(primary.period_gain) : null;
+  const confidenceLine = primary && primary.confidence_pct != null
+    ? `Opportunity confidence ${fmtPct(primary.confidence_pct, 0)}`
+    : acGrade
+      ? `Audit confidence ${acGrade}${acPct != null ? ` · ${acPct.toFixed(0)}%` : ''}`
+      : dqiPct != null
+        ? `Data quality ${dqiPct.toFixed(0)}%`
+        : 'Confidence INDETERMINATE — data-quality index not computed on this audit path';
   return (
     <Panel pad={PDS.s5}>
-      <div className="pds-kicker" style={{ color: PDS.accent, marginBottom: 12 }}>Why Value Leaked</div>
-      {(!rcs || rcs.length === 0) ? (
-        <div style={{ fontSize: 12, color: PDS.text3 }}>No root-cause decomposition recorded for this audit.</div>
-      ) : rcs.slice(0, 4).map((rc) => (
-        <div key={rc.category} style={{ marginBottom: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 5 }}>
-            <span style={{ fontSize: 12, color: PDS.text2 }}>{rc.category}</span>
-            <span className="pds-num" style={{ fontSize: 12, color: PDS.loss, fontWeight: 700 }}>
-              {fmtMoney(rc.loss_usd, currency)}
-              <span style={{ color: PDS.text3, fontWeight: 400 }}> · {fmtPct(rc.contribution_pct, 0)}</span>
-            </span>
-          </div>
-          <div style={{ height: 4, background: PDS.hairline, borderRadius: 2, overflow: 'hidden' }}>
-            <div style={{ width: '100%', height: '100%',
-                          background: PDS.loss, borderRadius: 2, opacity: 0.8,
-                          transform: `scaleX(${Math.min(100, rc.contribution_pct || 0) / 100})`,
-                          transformOrigin: 'left',
-                          transition: 'transform var(--pds-dur-slow) var(--pds-ease)' }} />
-          </div>
+      <div className="pds-kicker" style={{ marginBottom: 10 }}>Expected Outcome</div>
+      <div style={{ fontSize: 34, fontWeight: 800, color: PDS.recover, lineHeight: 1 }}>
+        <span className="pds-num">{gain != null ? fmtMoney(Math.abs(gain), currency) : '—'}</span>
+      </div>
+      <div style={{ fontSize: 10, color: PDS.text3, marginTop: 8 }}>
+        recorded this period — no forward projection
+        {primary && primary.intervals_observed != null && (
+          <span className="pds-num"> · {primary.intervals_observed} intervals observed</span>
+        )}
+      </div>
+      {primary && primary.evidence && (
+        <div style={{ fontSize: 11, color: PDS.text3, marginTop: 12, lineHeight: 1.55 }}>
+          <span style={{ color: PDS.text2, fontWeight: 700 }}>Evidence · </span>{primary.evidence}
         </div>
-      ))}
+      )}
+      <div style={{ fontSize: 11, color: PDS.text3, marginTop: 8 }}>
+        <span style={{ color: PDS.text2, fontWeight: 700 }}>Confidence · </span>{confidenceLine}
+      </div>
+      {primary && primary.derivation && (
+        <div style={{ fontSize: 10, color: PDS.text3, marginTop: 8, opacity: 0.8 }}>
+          <span style={{ fontWeight: 700 }}>Method · </span>{primary.derivation}
+        </div>
+      )}
     </Panel>
   );
 }
 
-/* Act 04 right — evidence: only artifacts that actually exist render. */
-function EvidencePanel({ isLive, datasetHash, dqi, ac, data }) {
+/* Act V right — the artifact ledger. Only what exists renders; provenance
+   and period live in Act I and never repeat here (no-duplication law). */
+function EvidencePanel({ datasetHash, dqi, ac }) {
   const rows = [
-    { k: 'Provenance', v: isLive ? 'PROVISIONAL — live state, awaiting reconciliation' : 'CERTIFIED — batch audit engine', c: isLive ? PDS.provisional : PDS.verified },
     datasetHash && { k: 'Dataset SHA-256', v: `${String(datasetHash).slice(0, 18)}…`, mono: true, full: datasetHash },
-    data.audit_period_label && { k: 'Audited period', v: data.audit_period_label },
     dqi.grade && { k: 'Data quality', v: `Grade ${dqi.grade}${dqi.value_pct != null ? ` · ${dqi.value_pct}%` : ''}`, c: gradeColor(dqi.grade) },
+    dqi.version && { k: 'DQI methodology', v: dqi.version, mono: true },
     ac.grade && { k: 'Audit confidence', v: `${ac.grade}${ac.value_pct != null ? ` · ${ac.value_pct}%` : ''}`, c: gradeColor(ac.grade) },
+    ac.version && { k: 'Confidence methodology', v: ac.version, mono: true },
     !datasetHash && { k: 'Input manifest', v: 'None — JSON audit input (no file manifest)' },
   ].filter(Boolean);
   return (
     <Panel pad={PDS.s5}>
-      <div className="pds-kicker" style={{ color: PDS.accent, marginBottom: 12 }}>Evidence</div>
-      {rows.map((r) => (
+      <div className="pds-kicker" style={{ color: PDS.accent, marginBottom: 12 }}>Evidence Chain</div>
+      {rows.length === 0 ? (
+        <div style={{ fontSize: 11, color: PDS.text3 }}>No additional artifacts on this audit path.</div>
+      ) : rows.map((r) => (
         <div key={r.k} style={{ display: 'flex', justifyContent: 'space-between', gap: 12,
                                 padding: '7px 0', borderBottom: `1px solid ${PDS.hairline}` }}>
           <span style={{ fontSize: 11, color: PDS.text3, flexShrink: 0 }}>{r.k}</span>
