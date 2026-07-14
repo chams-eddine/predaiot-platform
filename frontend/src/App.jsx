@@ -1,13 +1,24 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import axios from 'axios';
-import {
-  BarChart, Bar, AreaChart, Area, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell,
-  ComposedChart,
-} from 'recharts';
 import ExecutiveCommandCenter from './components/ExecutiveCommandCenter';
 import { Workspace, Zone, useWorkspaceTier, tierAtLeast } from './workspace/Workspace';
-import { AXIS_TICK, GRID_PROPS, TOOLTIP_STYLE, TOOLTIP_LABEL, TOOLTIP_ITEM, TOOLTIP_CURSOR } from './instruments/theme';
+
+// SPEC-PF rule 2: recharts and every instrument travel in a code-split
+// chunk, loaded on demand — never on the initial path.
+const chartsModule = () => import('./instruments/charts');
+const FinancialTimeline = lazy(() => chartsModule().then((m) => ({ default: m.FinancialTimeline })));
+const LeakageFlow       = lazy(() => chartsModule().then((m) => ({ default: m.LeakageFlow })));
+const DispatchCurve     = lazy(() => chartsModule().then((m) => ({ default: m.DispatchCurve })));
+const LeakageHistory    = lazy(() => chartsModule().then((m) => ({ default: m.LeakageHistory })));
+const LiveGapFlow       = lazy(() => chartsModule().then((m) => ({ default: m.LiveGapFlow })));
+const LiveCaptureScore  = lazy(() => chartsModule().then((m) => ({ default: m.LiveCaptureScore })));
+
+/* SPEC-IX loading state: a still, panel-shaped placeholder the size of the
+   incoming instrument — no spinners, no shimmer (SPEC-MO). */
+const ChartSkeleton = ({ h = 200 }) => (
+  <div aria-hidden style={{ height: h, borderRadius: 'var(--pds-r)',
+    background: 'var(--pds-panel-2)', border: '1px solid var(--pds-border)' }} />
+);
 
 // ══════════════════════════════════════════════════════════════════════
 // TRIAL GATE — 7-day free diagnostic token (lead capture)
@@ -1278,40 +1289,7 @@ function DQScoreGauge({ value, count }) {
   );
 }
 
-function MarketOptimizationChart({ log }) {
-  // IN-13 Financial Timeline (SPEC-CH) — money over time: market price
-  // context line + per-step EDV bars. Bar sign derives from edv_actual_step:
-  // positive (recover) = value captured, negative (loss) = value destroyed.
-  if (!log || log.length === 0) return null;
-  return (
-    <ResponsiveContainer width="100%" height={230}>
-      <ComposedChart data={log} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-        <defs>
-          <linearGradient id="opsPriceFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%"   stopColor={OPS.sub} stopOpacity={0.28} />
-            <stop offset="100%" stopColor={OPS.sub} stopOpacity={0} />
-          </linearGradient>
-        </defs>
-        <CartesianGrid {...GRID_PROPS} />
-        <XAxis dataKey="hour" stroke={OPS.border} tick={AXIS_TICK} tickLine={false} />
-        <YAxis yAxisId="L" stroke={OPS.border} tick={AXIS_TICK} tickLine={false} tickFormatter={(v) => `$${v}`} />
-        <YAxis yAxisId="R" orientation="right" stroke={OPS.border} tick={AXIS_TICK} tickLine={false} />
-        <Tooltip
-          contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL} itemStyle={TOOLTIP_ITEM} cursor={TOOLTIP_CURSOR}
-          formatter={(v, name) => [typeof v === 'number' ? `$${v.toFixed(2)}` : v, name]}
-          labelFormatter={(h) => `Step ${h}`}
-        />
-        <Area yAxisId="L" type="monotone" dataKey="price" name="Market Price"
-              stroke={OPS.sub} strokeWidth={2} fill="url(#opsPriceFill)" dot={false} />
-        <Bar yAxisId="R" dataKey="edv_actual_step" name="AI Action">
-          {log.map((entry, i) => (
-            <Cell key={i} fill={(entry.edv_actual_step || 0) >= 0 ? OPS.green : OPS.red} />
-          ))}
-        </Bar>
-      </ComposedChart>
-    </ResponsiveContainer>
-  );
-}
+// (IN-13 Financial Timeline moved to instruments/charts.jsx — code-split.)
 
 function LiveTelemetryStrip({ assetName, soc, power, temp }) {
   const cell = (label, val, color) => (
@@ -1471,7 +1449,9 @@ function OpsConsoleExec({ data, log, m, ingestionNotes, onDismissNotes }) {
             <div style={{ color: OPS.text, fontSize: 12, fontWeight: 700, letterSpacing: '0.12em', marginBottom: 8 }}>
               MARKET OPTIMIZATION AUDIT (24h)
             </div>
-            <MarketOptimizationChart log={log} />
+            <Suspense fallback={<ChartSkeleton h={230} />}>
+              <FinancialTimeline log={log} />
+            </Suspense>
           </div>
           <LiveTelemetryStrip
             assetName={`${data.asset_name || 'Asset'} — ${data.asset_type || 'BESS'}`}
@@ -2551,19 +2531,9 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   <Card>
                     {/* IN-06 Leakage Flow — leakage decomposed by root cause. */}
                     <Label style={{ marginBottom: 12 }}>Leakage Flow — Root-Cause Contribution</Label>
-                    <ResponsiveContainer width="100%" height={260}>
-                      <BarChart data={data.root_causes || []} layout="vertical" margin={{ top: 0, right: 20, left: 0, bottom: 0 }}>
-                        <CartesianGrid {...GRID_PROPS} />
-                        <XAxis type="number" stroke={DS.border} tick={AXIS_TICK} tickLine={false} tickFormatter={(v) => `${v}%`} />
-                        <YAxis type="category" dataKey="category" stroke={DS.border} tick={AXIS_TICK} tickLine={false} width={140} />
-                        <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL} itemStyle={TOOLTIP_ITEM} cursor={TOOLTIP_CURSOR} formatter={(v) => [`${v}%`, 'Contribution']} />
-                        <Bar dataKey="contribution_pct" radius={[0, 4, 4, 0]}>
-                          {(data.root_causes || []).map((_, i) => (
-                            <Cell key={i} fill={[DS.loss, DS.orange, DS.warning, DS.blue, DS.cyan, DS.purple][i % 6]} />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
+                    <Suspense fallback={<ChartSkeleton h={260} />}>
+                      <LeakageFlow rootCauses={data.root_causes || []} />
+                    </Suspense>
                   </Card>
                 </div>
               )}
@@ -2591,25 +2561,9 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
               {log.length > 0 && (
                 <Card style={{ marginBottom: 16 }}>
                   <Label style={{ marginBottom: 14 }}>Optimal vs Actual Dispatch Curve</Label>
-                  <ResponsiveContainer width="100%" height={260}>
-                    <AreaChart data={log.slice(0, 120)} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="gOpt" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={DS.optimal} stopOpacity={0.3} /><stop offset="95%" stopColor={DS.optimal} stopOpacity={0} />
-                        </linearGradient>
-                        <linearGradient id="gAct" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={DS.blue} stopOpacity={0.25} /><stop offset="95%" stopColor={DS.blue} stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid {...GRID_PROPS} />
-                      <XAxis dataKey="hour" stroke={DS.border} tick={AXIS_TICK} tickLine={false} />
-                      <YAxis stroke={DS.border} tick={AXIS_TICK} tickLine={false} />
-                      <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL} itemStyle={TOOLTIP_ITEM} cursor={TOOLTIP_CURSOR} />
-                      <Legend wrapperStyle={{ fontSize: 11, color: DS.sub }} />
-                      <Area type="monotone" dataKey="optimal_action" name="Optimal Dispatch (MW)" stroke={DS.optimal} fill="url(#gOpt)" strokeWidth={2} dot={false} />
-                      <Area type="monotone" dataKey="actual_action" name="Actual Dispatch (MW)" stroke={DS.blue} fill="url(#gAct)" strokeWidth={2} dot={false} />
-                    </AreaChart>
-                  </ResponsiveContainer>
+                  <Suspense fallback={<ChartSkeleton h={260} />}>
+                    <DispatchCurve log={log} />
+                  </Suspense>
                 </Card>
               )}
               {data.counterfactual_summary && (
@@ -2709,15 +2663,9 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                     {histLoading ? 'QUERYING…' : 'SYNC HISTORY'}
                   </BtnOutline>
                 </div>
-                <ResponsiveContainer width="100%" height={200}>
-                  <BarChart data={histData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
-                    <CartesianGrid {...GRID_PROPS} />
-                    <XAxis dataKey="day" stroke={DS.border} tick={AXIS_TICK} tickLine={false} />
-                    <YAxis stroke={DS.border} tickFormatter={(v) => `$${v}`} tick={AXIS_TICK} tickLine={false} />
-                    <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL} itemStyle={TOOLTIP_ITEM} cursor={TOOLTIP_CURSOR} formatter={(v) => [`$${v} lost`, 'Daily Leakage']} />
-                    <Bar dataKey="daily_gap" fill={DS.loss} radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+                <Suspense fallback={<ChartSkeleton h={200} />}>
+                  <LeakageHistory histData={histData} />
+                </Suspense>
                 {histData.length === 0 && !histLoading && (
                   <div style={{ textAlign: 'center', color: DS.dim, marginTop: 10, fontSize: 11 }}>
                     Connect to a production database to display historical trend data.
@@ -3310,33 +3258,15 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                   <Card>
                     <Label style={{ marginBottom: 12 }}>Live Gap Accumulation</Label>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <AreaChart data={liveData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
-                        <defs>
-                          <linearGradient id="gGap" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor={DS.loss} stopOpacity={0.3} />
-                            <stop offset="95%" stopColor={DS.loss} stopOpacity={0} />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid {...GRID_PROPS} />
-                        <XAxis dataKey="step" stroke={DS.border} tick={AXIS_TICK} tickLine={false} />
-                        <YAxis stroke={DS.border} tick={AXIS_TICK} tickLine={false} tickFormatter={(v) => `$${v}`} />
-                        <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL} itemStyle={TOOLTIP_ITEM} cursor={TOOLTIP_CURSOR} formatter={(v) => [`$${v}`, 'Cumulative Gap']} />
-                        <Area type="monotone" dataKey="cumulative_gap" stroke={DS.loss} fill="url(#gGap)" strokeWidth={2} dot={false} />
-                      </AreaChart>
-                    </ResponsiveContainer>
+                    <Suspense fallback={<ChartSkeleton h={200} />}>
+                      <LiveGapFlow liveData={liveData} />
+                    </Suspense>
                   </Card>
                   <Card>
                     <Label style={{ marginBottom: 12 }}>Live Decision Quality Score</Label>
-                    <ResponsiveContainer width="100%" height={150}>
-                      <AreaChart data={liveData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
-                        <CartesianGrid {...GRID_PROPS} />
-                        <XAxis dataKey="step" stroke={DS.border} tick={AXIS_TICK} tickLine={false} />
-                        <YAxis domain={[0, 100]} stroke={DS.border} tick={AXIS_TICK} tickLine={false} tickFormatter={(v) => `${v}%`} />
-                        <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL} itemStyle={TOOLTIP_ITEM} cursor={TOOLTIP_CURSOR} formatter={(v) => [`${v}%`, 'DQ Score']} />
-                        <Area type="monotone" dataKey="dq_score_live" stroke={DS.cyan} fill={`${DS.cyan}18`} strokeWidth={2} dot={false} />
-                      </AreaChart>
-                    </ResponsiveContainer>
+                    <Suspense fallback={<ChartSkeleton h={150} />}>
+                      <LiveCaptureScore liveData={liveData} />
+                    </Suspense>
                   </Card>
                 </div>
               ) : (
