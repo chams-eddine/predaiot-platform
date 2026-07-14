@@ -89,29 +89,35 @@ function useIsMobile() {
 // ══════════════════════════════════════════════════════════════════════
 // DESIGN SYSTEM — PREDAIOT Economic Decision Audit™
 // ══════════════════════════════════════════════════════════════════════
+// Legacy inline-style token object. Its hex VALUES now mirror the PREDAIOT
+// design system (design/tokens.css) so every section that styles via `DS`
+// inherits the quiet, premium palette at once — while `${DS.color}30` alpha
+// concatenation keeps working (raw hex, not var() refs). Semantic source of
+// truth remains tokens.css / PDS; this is the bridge for legacy inline styles.
 const DS = {
-  bg:           '#030508',
-  bgRaised:     '#080c12',
+  bg:           '#06090F',   // --pds-bg-0 (matches index.css canvas)
+  bgRaised:     '#0E1420',   // --pds-panel
   surface:      'rgba(255,255,255,0.025)',
   surfaceHi:    'rgba(255,255,255,0.05)',
-  border:       'rgba(255,255,255,0.06)',
-  borderHi:     'rgba(255,255,255,0.14)',
+  border:       'rgba(255,255,255,0.07)',
+  borderHi:     'rgba(255,255,255,0.15)',
 
-  optimal:  '#00E676',
-  warning:  '#FFD600',
-  loss:     '#FF1744',
-  blue:     '#4BBFFF',
-  cyan:     '#00E5FF',
-  orange:   '#FF6D00',
-  purple:   '#BB86FC',
+  optimal:  '#2FD69B',   // --pds-recover  (was neon #00E676)
+  warning:  '#F3B24C',   // --pds-warn     (was pure #FFD600)
+  loss:     '#FF5C7A',   // --pds-loss     (was neon #FF1744)
+  blue:     '#5AA9FF',   // --pds-info
+  cyan:     '#34E0C8',   // --pds-accent   (signature teal, was #00E5FF)
+  orange:   '#F5945B',   // --pds-grade-d
+  purple:   '#7C9CFF',   // --pds-dec-recovery
 
-  text:    '#E8EAF0',
-  sub:     '#8A94A6',
-  dim:     '#4A5468',
+  text:    '#EAF1F8',    // --pds-text
+  sub:     '#97A6BC',    // --pds-text-2
+  dim:     '#5E6E88',    // --pds-text-3
+  seal:    '#E4C674',    // --pds-seal (certificate gold)
 
   mono: "'JetBrains Mono','Fira Code','Courier New',monospace",
   sans: "'Inter','Segoe UI',sans-serif",
-  r8: '8px', r12: '12px', r16: '16px', r20: '20px',
+  r8: '10px', r12: '14px', r16: '18px', r20: '24px',   // --pds radii
 };
 
 // ── Utilities ────────────────────────────────────────────────────────
@@ -171,10 +177,16 @@ const Pill = ({ label, color }) => (
 
 const Divider = ({ style }) => <div style={{ height: 1, background: DS.border, margin: '16px 0', ...style }} />;
 
-const SectionHeader = ({ tag, title }) => (
-  <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, marginBottom: 24 }}>
-    {tag && <span style={{ color: DS.dim, fontFamily: DS.mono, fontSize: 10, letterSpacing: '0.25em' }}>EDA-{tag}</span>}
-    <h2 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: DS.text, letterSpacing: '0.12em', textTransform: 'uppercase' }}>{title}</h2>
+const SectionHeader = ({ tag, title, sub, right }) => (
+  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end',
+                gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
+    <div>
+      {tag && <div style={{ color: DS.cyan, fontFamily: DS.mono, fontSize: 10, fontWeight: 600,
+                            letterSpacing: '0.22em', marginBottom: 7 }}>EDA-{tag}</div>}
+      <h2 style={{ margin: 0, fontSize: 21, fontWeight: 800, color: DS.text, letterSpacing: '-0.012em' }}>{title}</h2>
+      {sub && <div style={{ fontSize: 12, color: DS.dim, marginTop: 5, maxWidth: 620, lineHeight: 1.55 }}>{sub}</div>}
+    </div>
+    {right}
   </div>
 );
 
@@ -2051,20 +2063,22 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
         </div>
 
         <div style={{ display: 'flex', gap: isMobile ? 6 : 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {/* Restrained hierarchy: one accent primary (RUN DEMO), everything
+              else a uniform quiet neutral — premium, never rainbow. */}
           <BtnOutline color={DS.cyan} onClick={runDemo} disabled={loading || uploading}>
             {loading ? 'OPTIMIZING…' : (isMobile ? 'DEMO' : 'RUN DEMO')}
           </BtnOutline>
-          <BtnOutline color={DS.optimal} onClick={() => setShowUpload(!showUpload)} disabled={uploading}>
+          <BtnOutline color={DS.sub} onClick={() => setShowUpload(!showUpload)} disabled={uploading}>
             {uploading ? 'PARSING…' : (isMobile ? 'UPLOAD' : 'UPLOAD DATA')}
           </BtnOutline>
           {!isMobile && (
-            <BtnOutline color={DS.warning} onClick={handleShare}>SHARE REPORT</BtnOutline>
+            <BtnOutline color={DS.sub} onClick={handleShare}>SHARE REPORT</BtnOutline>
           )}
-          <BtnOutline color={DS.purple} onClick={downloadPdf} disabled={pdfLoading || !hasData}>
+          <BtnOutline color={DS.sub} onClick={downloadPdf} disabled={pdfLoading || !hasData}>
             {pdfLoading ? 'PDF…' : (isMobile ? '⬇ PDF' : '⬇ DOWNLOAD PDF')}
           </BtnOutline>
           {!isMobile && (
-            <BtnOutline color={DS.cyan} onClick={downloadLedger} disabled={!hasData}>
+            <BtnOutline color={DS.sub} onClick={downloadLedger} disabled={!hasData}>
               ⬇ LEDGER CSV
             </BtnOutline>
           )}
@@ -2083,7 +2097,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
               <BtnOutline color={DS.dim} onClick={signOut}>{isMobile ? '⎋' : 'SIGN OUT'}</BtnOutline>
             </div>
           ) : (
-            <BtnOutline color={DS.cyan} onClick={() => { setGateMode('signin'); setGateError(''); setGateOpen(true); }}>
+            <BtnOutline color={DS.sub} onClick={() => { setGateMode('signin'); setGateError(''); setGateOpen(true); }}>
               {isMobile ? '⎆' : 'SIGN IN'}
             </BtnOutline>
           )}
