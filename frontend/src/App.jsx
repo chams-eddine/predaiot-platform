@@ -6,6 +6,7 @@ import {
   ComposedChart,
 } from 'recharts';
 import ExecutiveCommandCenter from './components/ExecutiveCommandCenter';
+import { Workspace, Zone, useWorkspaceTier, tierAtLeast } from './workspace/Workspace';
 
 // ══════════════════════════════════════════════════════════════════════
 // TRIAL GATE — 7-day free diagnostic token (lead capture)
@@ -2025,7 +2026,8 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
       {/* ── TOP BAR ──────────────────────────────────────────────── */}
       <header style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        padding: isMobile ? '11px 14px' : '13px 28px',
+        minHeight: 'var(--ws-header-h)',
+        padding: isMobile ? '8px 14px' : '10px 28px',
         borderBottom: `1px solid ${DS.border}`,
         position: 'sticky', top: 0, backgroundColor: `${DS.bg}f0`, backdropFilter: 'blur(12px)',
         zIndex: 100, gap: 8,
@@ -2137,9 +2139,13 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           transition: 'left 0.24s ease', overflowY: 'auto',
           zIndex: 100, boxShadow: sidebarOpen ? '4px 0 30px rgba(0,0,0,0.5)' : 'none',
         } : {
-          width: 210, minWidth: 210, padding: '20px 0',
+          /* SPEC-WS §4: sidebar = clamp(248px, 18vw, 400px); 18–20% share on
+             1440–2200px displays, capped beyond so surplus canvas feeds
+             intelligence zones, never navigation. */
+          width: 'var(--ws-sidebar-w)', minWidth: 248, flexShrink: 0, padding: '20px 0',
           borderRight: `1px solid ${DS.border}`,
-          position: 'sticky', top: 67, height: 'calc(100vh - 67px)', overflowY: 'auto',
+          position: 'sticky', top: 'var(--ws-header-h)',
+          height: 'calc(100vh - var(--ws-header-h))', overflowY: 'auto',
         }}>
           {navItems.map((n) => {
             const active = activeSection === n.id;
@@ -2169,10 +2175,10 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           })}
         </nav>
 
-        {/* ── MAIN CONTENT ──────────────────────────────────────── */}
+        {/* ── MAIN CONTENT — the Executive Workspace (SPEC-WS §5) ── */}
         <main style={{
           flex: 1, minWidth: 0,
-          padding: isMobile ? '18px 14px' : '28px 32px',
+          padding: 'var(--ws-pad)',
           overflowX: 'hidden',
         }}>
 
@@ -2212,15 +2218,13 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
             </div>
           )}
 
-          {/* ══ S01: Executive Summary — Ops Console redesign ══════════ */}
-          {/* Full-bleed shell, content capped at a generous 1720px and centered
-              so the executive hero stays dense on laptops and elegant (not
-              stretched) on ultra-wide displays and video walls. */}
+          {/* ══ S01: Executive Summary — SPEC-EX on the Workspace ══════ */}
+          {/* SPEC-WS §1: no max-width container, no centered column — the
+              1720px interim cap is removed per the ratified contract. Extra
+              canvas is absorbed by the zone system, not stretched cards. */}
           {hasData && activeSection === 'exec' && (
-            <div style={{ maxWidth: 1720, margin: '0 auto' }}>
-              <div style={{ marginBottom: 28 }}>
-                <ExecutiveCommandCenter data={data} live={dataSource === 'live'} />
-              </div>
+            <Workspace>
+              <ExecutiveCommandCenter data={data} live={dataSource === 'live'} />
               <OpsConsoleExec
                 data={data}
                 log={log}
@@ -2228,7 +2232,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                 ingestionNotes={ingestionNotes}
                 onDismissNotes={() => setIngestionNotes(null)}
               />
-            </div>
+            </Workspace>
           )}
 
           {/* ══ S02: Economic Value Flow ════════════════════════════ */}

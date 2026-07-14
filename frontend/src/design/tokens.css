@@ -78,6 +78,32 @@
   --pds-dur-fast: 140ms;
   --pds-dur: 260ms;
   --pds-dur-slow: 520ms;
+
+  /* — Workspace layout tokens (SPEC-WS / WS-1.0 §4–§5) —
+     Tier-driven via the media queries below. Defaults = T2 STANDARD. */
+  --ws-header-h: 64px;
+  --ws-sidebar-w: clamp(248px, 18vw, 400px);
+  --ws-rail-w: 64px;
+  --ws-pad: 32px;
+  --ws-zone-gap: 32px;
+  --ws-card-gap: 16px;
+}
+
+/* T1 COMPACT — < 1024px (tablet, small laptop; drawer below 720px) */
+@media (max-width: 1023px) {
+  :root { --ws-header-h: 56px; --ws-pad: 16px; --ws-zone-gap: 24px; --ws-card-gap: 12px; }
+}
+/* T3 EXTENDED — 1680–2239px */
+@media (min-width: 1680px) {
+  :root { --ws-pad: 40px; --ws-zone-gap: 40px; --ws-card-gap: 20px; }
+}
+/* T4 COMMAND — 2240–3199px */
+@media (min-width: 2240px) {
+  :root { --ws-pad: 48px; --ws-zone-gap: 48px; --ws-card-gap: 24px; }
+}
+/* T5 WALL — ≥ 3200px (3440 ultrawide, 49-inch, video walls) */
+@media (min-width: 3200px) {
+  :root { --ws-pad: 56px; --ws-zone-gap: 56px; --ws-card-gap: 24px; }
 }
 
 /* Light theme scaffold (future) — semantic names stay identical. */

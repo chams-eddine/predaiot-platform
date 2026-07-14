@@ -10,10 +10,12 @@
 import React from 'react';
 import { PDS, gradeColor, riskColor, fmtMoney, fmtPct } from '../design/ds';
 import { Panel, KpiCard, GradeBadge, EvidenceBadge, StatusDot } from '../design/components';
+import { useWorkspaceTier } from '../workspace/tier';
 
 const num = (x) => (x == null || Number.isNaN(Number(x)) ? null : Number(x));
 
 export default function ExecutiveCommandCenter({ data, live }) {
+  const tier = useWorkspaceTier();
   if (!data) return null;
   const currency = data.currency || 'USD';
   const leakage = num(data.total_gap_usd);
@@ -82,7 +84,12 @@ export default function ExecutiveCommandCenter({ data, live }) {
       </div>
 
       {/* ── The four executive answers ─────────────────────────────── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: PDS.s4 }}>
+      {/* SPEC-WS §6.3 card-grid: three answer cards, each capped at 560px;
+          when they hit max, surplus width belongs to chart/rail zones —
+          never card fat. Single column on T1. */}
+      <div style={{ display: 'grid',
+                    gridTemplateColumns: tier === 'T1' ? '1fr' : 'repeat(3, minmax(0, 560px))',
+                    justifyContent: 'start', gap: 'var(--ws-card-gap)' }}>
         <KpiCard label="Financial Leakage" value={leakage != null ? Math.abs(leakage) : '—'}
           decimals={2} currency={currency} color={PDS.loss} big live={isLive}
           sub="economic gap this period" />
@@ -94,7 +101,7 @@ export default function ExecutiveCommandCenter({ data, live }) {
       </div>
 
       {/* ── What to do next ────────────────────────────────────────── */}
-      <div style={{ marginTop: PDS.s4 }}>
+      <div style={{ marginTop: 'var(--ws-card-gap)' }}>
         <Panel pad={PDS.s6} style={{ display: 'flex', gap: PDS.s6, alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 280 }}>
             <div className="pds-kicker" style={{ color: PDS.accent, marginBottom: 10 }}>Recommended Action Now</div>
