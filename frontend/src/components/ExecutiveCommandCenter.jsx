@@ -127,7 +127,9 @@ function DecisionHealthCard({ ecfPct, riskLevel, acGrade, acPct, dqiPct }) {
   return (
     <Panel pad={PDS.s5} style={{ flex: 1, minWidth: 240, display: 'flex', gap: PDS.s5, alignItems: 'center' }}>
       <div style={{ position: 'relative', width: 84, height: 84, flexShrink: 0 }}>
-        <svg width="84" height="84" style={{ transform: 'rotate(-90deg)' }}>
+        {/* IN-01 Economic Dial — SPEC-AX rule 4: expose the answer, not geometry. */}
+        <svg width="84" height="84" style={{ transform: 'rotate(-90deg)' }} role="img"
+             aria-label={`Decision health: ${ecfPct != null ? ecfPct.toFixed(1) : 'unknown'} percent of achievable value captured${riskLevel ? ` — ${riskLevel} risk` : ''}`}>
           <circle cx="42" cy="42" r={R} fill="none" stroke={PDS.border} strokeWidth="7" />
           <circle cx="42" cy="42" r={R} fill="none" stroke={c} strokeWidth="7" strokeLinecap="round"
                   strokeDasharray={C} strokeDashoffset={off}

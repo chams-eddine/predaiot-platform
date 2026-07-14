@@ -18,7 +18,7 @@
   /* — Text — */
   --pds-text: #EAF1F8;
   --pds-text-2: #97A6BC;
-  --pds-text-3: #5E6E88;
+  --pds-text-3: #7A89A3;   /* AA: >=4.5:1 on all sanctioned surfaces */
   --pds-text-inverse: #0A0E16;
 
   /* — PREDAIOT signature accent (economic intelligence teal) — */
@@ -54,7 +54,7 @@
   --pds-verified: #2FD69B;
   --pds-provisional: #F3B24C;
   --pds-seal: #E4C674;         /* certificate gold */
-  --pds-evidence: #5E6E88;     /* hash chips, manifest refs (quiet mono) */
+  --pds-evidence: #7A89A3;     /* hash chips, manifest refs (quiet mono) */
 
   /* — Risk bands (backend risk_level: Low / Moderate / Severe) — */
   --pds-risk-low: var(--pds-recover);
@@ -154,6 +154,9 @@
   font-family: var(--pds-font-sans);
   -webkit-font-smoothing: antialiased;
 }
+
+/* SPEC-AX: visible keyboard focus everywhere, in the accent voice. */
+:focus-visible { outline: 2px solid var(--pds-accent); outline-offset: 2px; border-radius: 4px; }
 
 .pds-num { font-family: var(--pds-font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
 .pds-menu-item:hover:not(:disabled) { background: var(--pds-panel-3) !important; }

@@ -114,7 +114,7 @@ const DS = {
 
   text:    '#EAF1F8',    // --pds-text
   sub:     '#97A6BC',    // --pds-text-2
-  dim:     '#5E6E88',    // --pds-text-3
+  dim:     '#7A89A3',    // --pds-text-3
   seal:    '#E4C674',    // --pds-seal (certificate gold)
 
   mono: "'JetBrains Mono','Fira Code','Courier New',monospace",
@@ -735,7 +735,8 @@ function TrialGate({ busy, error, onSubmit, onDismiss, onSignIn, onRegister, ini
   );
   if (mode === 'signin' || mode === 'register') {
     return (
-      <div style={overlayStyle} role="dialog" aria-modal="true">
+      <div style={overlayStyle} role="dialog" aria-modal="true"
+           aria-label={mode === 'signin' ? 'Sign in to PREDAIOT' : 'Create a PREDAIOT organization account'}>
         <div style={cardStyle}>
           <div style={{ fontSize: 10, letterSpacing: '0.2em', color: DS.cyan, marginBottom: 6 }}>
             {mode === 'signin' ? 'SIGN IN' : 'CREATE ORGANIZATION ACCOUNT'}
@@ -780,7 +781,8 @@ function TrialGate({ busy, error, onSubmit, onDismiss, onSignIn, onRegister, ini
     );
   }
   return (
-    <div style={overlayStyle} role="dialog" aria-modal="true">
+    <div style={overlayStyle} role="dialog" aria-modal="true"
+         aria-label="Start your free PREDAIOT economic diagnostic">
       <div style={cardStyle}>
         <div style={{ fontSize: 10, letterSpacing: '0.2em', color: DS.cyan, marginBottom: 6 }}>
           FREE 7-DAY DIAGNOSTIC
@@ -839,7 +841,8 @@ function TrialGate({ busy, error, onSubmit, onDismiss, onSignIn, onRegister, ini
 function TrialExpired({ info, onStartNew, onClose }) {
   const bookingUrl = info?.booking_url || 'mailto:chams@preda-iot.com';
   return (
-    <div style={overlayStyle} role="dialog" aria-modal="true">
+    <div style={overlayStyle} role="dialog" aria-modal="true"
+         aria-label="Your free diagnostic period has ended">
       <div style={cardStyle}>
         <div style={{ fontSize: 10, letterSpacing: '0.2em', color: DS.warning, marginBottom: 6 }}>
           FREE DIAGNOSTIC ENDED
@@ -1185,7 +1188,7 @@ const OPS = {
   blue:    '#5AA9FF',   // --pds-info
   text:    '#EAF1F8',   // --pds-text
   sub:     '#97A6BC',   // --pds-text-2
-  dim:     '#5E6E88',   // --pds-text-3
+  dim:     '#7A89A3',   // --pds-text-3 (AA)
 };
 
 function OpsFinancialCard({ label, value, color, sub, arrow, glow }) {
@@ -2285,8 +2288,9 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                       background: active ? `${DS.cyan}0C` : 'none',
                       border: 'none', cursor: 'pointer',
                       letterSpacing: '0.04em',
-                      color: active ? DS.cyan : DS.sub,
-                      opacity: dimmed ? 0.55 : 1,
+                      // SPEC-RB de-emphasis via color demotion (text-2 → text-3),
+                      // never opacity stacking — keeps SPEC-AX ≥4.5:1 at 9–11px.
+                      color: active ? DS.cyan : (dimmed ? DS.dim : DS.sub),
                       borderLeft: `2px solid ${active ? DS.cyan : 'transparent'}`,
                     }}
                   >
