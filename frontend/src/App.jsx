@@ -5,6 +5,7 @@ import {
   CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell,
   ComposedChart,
 } from 'recharts';
+import ExecutiveCommandCenter from './components/ExecutiveCommandCenter';
 
 // ══════════════════════════════════════════════════════════════════════
 // TRIAL GATE — 7-day free diagnostic token (lead capture)
@@ -2198,14 +2199,22 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
 
           {/* ══ S01: Executive Summary — Ops Console redesign ══════════ */}
+          {/* Full-bleed shell, content capped at a generous 1720px and centered
+              so the executive hero stays dense on laptops and elegant (not
+              stretched) on ultra-wide displays and video walls. */}
           {hasData && activeSection === 'exec' && (
-            <OpsConsoleExec
-              data={data}
-              log={log}
-              m={m}
-              ingestionNotes={ingestionNotes}
-              onDismissNotes={() => setIngestionNotes(null)}
-            />
+            <div style={{ maxWidth: 1720, margin: '0 auto' }}>
+              <div style={{ marginBottom: 28 }}>
+                <ExecutiveCommandCenter data={data} live={dataSource === 'live'} />
+              </div>
+              <OpsConsoleExec
+                data={data}
+                log={log}
+                m={m}
+                ingestionNotes={ingestionNotes}
+                onDismissNotes={() => setIngestionNotes(null)}
+              />
+            </div>
           )}
 
           {/* ══ S02: Economic Value Flow ════════════════════════════ */}
