@@ -5,19 +5,34 @@
 experience. The frontend equivalent of the certified EDA architecture. Every
 screen, component, dashboard, animation, instrument, interaction, and pixel
 must trace to this document. Deviations require a ratified amendment first.
-**Authority chain:** PLATFORM_BLUEPRINT.md → this document →
-`WORKSPACE_SPEC.md` (normative annex of SPEC-WS) → implementation.
+**Authority chain:** PLATFORM_BLUEPRINT.md → **PART 0 (Product
+Philosophy)** → Parts I–V of this document → `WORKSPACE_SPEC.md` (normative
+annex of SPEC-WS) → implementation. Part 0 is the highest authority in the
+frontend architecture; every other specification inherits from it, as
+proven by the Traceability Matrix (end of document).
 **Backend:** FROZEN. Every specification consumes existing production APIs
 only. No spec may invent endpoints or alter contracts.
-**Identity Law:** PREDAIOT is an **Economic Decision Intelligence Platform**.
-It is NOT a monitoring platform, NOT SCADA, NOT BI, NOT analytics software,
-NOT an IoT dashboard. Every screen must reinforce this identity; any surface
-that reads as monitoring/BI is non-compliant by definition.
+**Identity Law:** Constitutionalized in **SPEC-CA (Part 0)** and immutable:
+PREDAIOT is an **Economic Decision Intelligence Platform** — it is NOT
+SCADA, NOT EMS, NOT BI, NOT an IoT dashboard, NOT analytics, NOT
+monitoring, NOT predictive maintenance, NOT optimization software, NOT a
+digital twin. Every screen must reinforce this identity.
 
 ## Specification index
 
 | Part | ID | Specification | Status |
 |------|----|---------------|--------|
+| 0 — Product Philosophy | SPEC-MS | Mission | PROPOSED |
+| 0 | SPEC-VS | Vision | PROPOSED |
+| 0 | SPEC-CA | Category | PROPOSED (immutable upon ratification) |
+| 0 | SPEC-TR | Truth Model | PROPOSED |
+| 0 | SPEC-QA | Executive Questions | PROPOSED |
+| 0 | SPEC-DM | Decision Model | PROPOSED |
+| 0 | SPEC-HM | Human Model | PROPOSED |
+| 0 | SPEC-EV | Economic Value Model | PROPOSED |
+| 0 | SPEC-TM | Trust Model | PROPOSED |
+| 0 | SPEC-FM | Frontend Manifesto | PROPOSED |
+| 0 | — | The PREDAIOT Experience | PROPOSED |
 | I — Foundation | SPEC-PR | Product Principles | PROPOSED |
 | I | SPEC-ID | PREDAIOT Visual Identity | PROPOSED |
 | I | SPEC-DL | Executive Design Language | PROPOSED |
@@ -46,10 +61,576 @@ that reads as monitoring/BI is non-compliant by definition.
 | V | GOV-AC | Acceptance Process | PROPOSED |
 | V | GOV-RP | Ratification Procedure | PROPOSED |
 
-Every specification defines: **Purpose · Vision · Responsibilities ·
-Boundaries · Inputs · Outputs · Rules · Acceptance Criteria · Non-Goals ·
-Future Extensions · Dependencies · Examples · Failure Cases · Governance
-Rules.**
+Every operational specification (Parts I–IV) defines: **Purpose · Vision ·
+Responsibilities · Boundaries · Inputs · Outputs · Rules · Acceptance
+Criteria · Non-Goals · Future Extensions · Dependencies · Examples ·
+Failure Cases · Governance Rules.**
+Part 0 specifications are constitutional, not operational; they use the
+constitutional contract form: **Purpose · Declaration · Rules ·
+Inheritance · Acceptance Criteria · Governance Rules.** They define *why*;
+Parts I–V define *what and how* under their authority.
+
+---
+---
+
+# PART 0 — PRODUCT PHILOSOPHY
+
+This part is the highest authority in the frontend architecture. It is not
+a design document, not a UX document, not a marketing document. It defines
+the philosophy of the entire product — why the interface exists. Every
+specification in Parts I–V inherits from Part 0; the Traceability Matrix
+at the end of this document proves the inheritance.
+
+---
+
+# SPEC-MS — Mission 1.0
+
+**Purpose.** Fix, permanently, why PREDAIOT exists — not what it does, not
+how it works.
+
+**Declaration.**
+Industrial infrastructure loses money invisibly. Every asset — a battery,
+a plant, a grid — executes thousands of operational decisions, and the
+industrial world measures those decisions in operational terms:
+availability, output, uptime, alarms. Nobody measures whether the
+decisions captured the value that was achievable. The gap between what an
+asset earned and what it could have earned is real money — and today it is
+unmeasured, unowned, and ungoverned. It appears in no report, no meeting,
+no accountability chain.
+
+**PREDAIOT exists to end invisible economic loss** — by making the
+economic quality of operational decisions measurable, provable, and
+governable. It exists because economic accountability is missing between
+operations and finance: operations optimizes machines, finance audits
+books, and no one audits decisions. PREDAIOT is that missing auditor,
+running continuously, with evidence.
+
+**Rules.**
+1. Every surface must serve the mission: making economic leakage visible,
+   recoverable, and provable. A feature serving any other mission —
+   monitoring comfort, data exploration for its own sake, engagement — is
+   rejected regardless of quality.
+2. The mission is stated in money, and so is the product: money is the
+   product's native language (inherited by SPEC-EV, SPEC-DL).
+
+**Inheritance.** SPEC-PR's Existence Test derives from this mission; every
+Part I–V spec must be justifiable as an instrument of it.
+
+**Acceptance Criteria.** Any shipped screen can state, in one sentence, how
+it advances the mission; screens that cannot are removed.
+
+**Governance Rules.** The mission is immutable upon ratification. Rewording
+requires a constitutional amendment with full cascade review — expected
+never.
+
+---
+
+# SPEC-VS — Vision 1.0
+
+**Purpose.** Describe the long-term future the architecture must be built
+to reach.
+
+**Declaration.**
+**PREDAIOT becomes the operating system for economic decisions across
+industrial infrastructure.** Every dispatch decision, on any asset, in any
+market, is proposed, tracked, measured, and verified through governed
+economic evidence — the way financial statements move through audit
+opinions.
+
+The horizons:
+- **H1 — Certified economic audit** of a single asset (delivered: the EDA
+  audit engine, certificates, evidence chain).
+- **H2 — Live economic runtime**: continuous provisional economic state,
+  reconciled into certified truth (delivered: RT pipeline + EDA-RECON;
+  hardening).
+- **H3 — Portfolio economic command**: fleets governed as one economic
+  surface (Q8 surfaces, T4/T5 workspace zones).
+- **H4 — The EDA Standard as industry norm**: PREDAIOT's methodology as the
+  reference discipline for economic decision governance (EDA Standard v1.0
+  in preparation).
+
+**Rules.**
+1. Architectural decisions must move toward the operating-system role:
+   canonical objects, governed registries, versioned contracts,
+   asset-agnostic generalization. One-off features that cannot generalize
+   across assets and markets are rejected.
+2. The frontend must scale along the horizons without re-architecture —
+   this is why the Workspace System (SPEC-WS) tiers toward portfolio and
+   wall scale.
+
+**Inheritance.** SPEC-WS tier ladder (T4/T5 = H3 surfaces); SPEC-IA/QA
+future questions (Q8, reserved Q10); registry-based governance throughout
+Part V.
+
+**Acceptance Criteria.** Every new architectural proposal states which
+horizon it serves; none regresses an earlier horizon's guarantees.
+
+**Governance Rules.** The vision statement is amendable only by
+ratification; horizons may be appended, never deleted.
+
+---
+
+# SPEC-CA — Category 1.0
+
+**Purpose.** Define PREDAIOT's category — immutably.
+
+**Declaration.**
+PREDAIOT's category is **Economic Decision Intelligence**.
+
+PREDAIOT is **NOT**, and must never present as:
+
+| NOT | Why PREDAIOT is not it |
+|-----|------------------------|
+| SCADA | SCADA controls equipment; PREDAIOT governs the economics of decisions |
+| EMS | EMS optimizes setpoints; PREDAIOT audits and certifies economic outcomes |
+| BI | BI aggregates data for exploration; PREDAIOT produces certified economic evidence for registered questions |
+| IoT Dashboard | IoT renders telemetry; PREDAIOT renders money, decisions, and proof |
+| Analytics Platform | Analytics explores; PREDAIOT answers a closed charter of executive questions |
+| Monitoring Software | Monitoring watches state; PREDAIOT judges economic value |
+| Predictive Maintenance | PdM predicts failure; PREDAIOT measures decision economics |
+| Optimization Software | Optimizers prescribe control; PREDAIOT's MILP is a hindsight benchmark for attribution — never a controller |
+| Digital Twin | Twins simulate physics; PREDAIOT certifies economics |
+
+**Category drift tests** (any one failing = non-compliance):
+- The primary object of every screen is money, a decision, or evidence —
+  never a sensor value, a device, or a data table for its own sake.
+- No surface invites open-ended data exploration as its purpose.
+- No surface implies control authority over equipment.
+
+**Rules.**
+1. The category definition and the NOT-list are **immutable upon
+   ratification** — they may be extended (new NOT entries appended), never
+   weakened or removed.
+2. Copy, navigation, and marketing surfaces inside the product use the
+   category name and never a NOT-category's vocabulary as self-description.
+
+**Inheritance.** SPEC-PR Identity Law (operationalization); SPEC-LX
+anti-list (aesthetic enforcement); SPEC-IA taxonomy (question-driven, not
+data-driven); SPEC-CH (instruments answer questions, they do not "chart
+data").
+
+**Acceptance Criteria.** Category drift tests pass on every screen at every
+release; the blind-screenshot test (SPEC-ID) never reads as a NOT-category.
+
+**Governance Rules.** This specification is the only one in the document
+declared immutable-on-ratification in its core: no amendment may remove or
+weaken the category definition or NOT-list; append-only extension permitted.
+
+---
+
+# SPEC-TR — Truth Model 1.0
+
+**Purpose.** Define the five truths of PREDAIOT, their differences, and how
+truth propagates from the EDA backend into the frontend.
+
+**Declaration.**
+
+| Truth | What it is | Where it lives (existing) |
+|-------|-----------|----------------------------|
+| **Operational truth** | What physically happened — recorded dispatch, prices, SOC, curtailment; raw and unjudged | Ingested data; canonical events (EDA-EVENT-1.0) |
+| **Economic truth** | What that behavior was worth — gaps, EDV, attribution, judged by versioned methodology | The certified engine (EDA-AUDIT, EDA-ES-1.0); provisional live states |
+| **Decision truth** | What was proposed, accepted, executed, deferred — intent and its lifecycle | EDA-DEC-1.0, EDA-DEC-LIFE-1.0 records |
+| **Evidence truth** | Why any of the above can be believed — hashes, manifests, certificates, verdicts, reconciliations | audit_manifest, certificates, EDA-OUT/GOV/RECON chains |
+| **Visual truth** | What the user sees — a faithful rendering of the four truths above, with provenance and uncertainty visible | The frontend (this document's subject) |
+
+The differences: operational truth tells *what happened*; economic truth
+*what it was worth*; decision truth *what was chosen*; evidence truth *why
+to believe it*; visual truth *what you see* — and visual truth must equal
+the sum of the other four, exactly.
+
+**Propagation (the truth pipeline):**
+Operational → (canonical events + data-quality gate) → Economic (one
+engine; provisional when live, certified when audited) → Decision
+(proposals and lifecycle) → Evidence (append-only chains, certification,
+reconciliation) → **Visual** (the frontend renders; it never manufactures).
+
+**Rules.**
+1. The frontend consumes truth; it never creates, adjusts, extrapolates,
+   or smooths it.
+2. The provisional/certified distinction propagates unbroken from EDA-RECON
+   semantics to every pixel that shows a live-derived figure.
+3. A truth state absent upstream cannot appear downstream: no invented
+   confidence, no fabricated trends, no synthesized comparisons.
+4. INDETERMINATE and PROVISIONAL are truths, not gaps to be papered over.
+5. Where truths conflict in presentation space, evidence truth wins
+   placement (P7) and economic truth wins emphasis (P2).
+
+**Inheritance.** SPEC-PR P2/P3/P7; SPEC-DV axis truth; SPEC-AI confidence
+honesty; SPEC-SX provenance surfaces; SPEC-IX no-optimistic-economics.
+
+**Acceptance Criteria.** Every rendered figure traces to its upstream truth
+layer and state; provenance E2E checks pass; no downstream-only "truths"
+exist in any release.
+
+**Governance Rules.** The five-truth model and pipeline are amendable only
+by ratification with full cascade review; new truth layers append.
+
+---
+
+# SPEC-QA — Executive Questions 1.0
+
+**Purpose.** Define every executive question PREDAIOT is allowed to answer.
+**If a question is not registered here, the UI cannot answer it.** This
+registry is the exclusive charter; SPEC-IA (Part I) inherits it and owns
+the mapping of questions to sections and zones.
+
+**Declaration — the registered questions.**
+
+**Q1 — How much are we losing?**
+- Purpose: quantify the period's economic leakage so it becomes ownable.
+- Required evidence: certified audit + manifest hash; provenance badge.
+- Required APIs: `POST /api/v1/audit` (JSON), the file-upload audit
+  endpoint; certified-state endpoints when reconciled from live.
+- Required metrics: EDA-AUDIT (`total_gap_usd`), EDA-ES-1.0.
+- Decision owner: CFO / asset owner.
+- Output: leakage figure + period + currency + provenance state.
+- Acceptance: figure equals the API field; basis and badge verified in E2E.
+
+**Q2 — How much can we recover?**
+- Purpose: separate winnable value from unreachable benchmark.
+- Required evidence: gap attribution (Ch 8.2), audit manifest.
+- Required APIs: audit response (`recoverable_execution_gap`,
+  `gap_attribution`).
+- Required metrics: EDA-AUDIT attribution; EDA-ES-1.0.
+- Decision owner: CFO / Operations Manager.
+- Output: recoverable figure + share of leakage + basis line.
+- Acceptance: recoverable ≤ leakage; ceiling labeled non-achievable.
+
+**Q3 — How healthy are our decisions?**
+- Purpose: judge decision quality as a governed verdict, not a vibe.
+- Required evidence: ECF capture fraction; risk band; DQI/AC when computed.
+- Required APIs: audit response (`dq_score`, `risk_level`,
+  `data_quality_index`, `audit_confidence`).
+- Required metrics: EDA-DQI-1.0, EDA-AC-1.0 (INDETERMINATE honest).
+- Decision owner: CEO / asset manager.
+- Output: capture %, risk verdict, confidence grade where present.
+- Acceptance: no fabricated confidence; ECF fallback lawful and labeled.
+
+**Q4 — What should we do next?**
+- Purpose: convert leakage into one governed, evidence-bearing action.
+- Required evidence: full SPEC-AI Recommendation Block anatomy.
+- Required APIs: audit response (`opportunities[]`, `root_causes[]`);
+  decision endpoints (EDA-DEC) when decisions are issued.
+- Required metrics: EDA-DEC-1.0; ACTION_LIBRARY versioning.
+- Decision owner: Operations (governance_owner default: asset_manager).
+- Output: primary recommendation + alternatives + value at stake +
+  recorded-basis disclaimer.
+- Acceptance: never a bare recommendation; experimental gated.
+
+**Q5 — Why is value leaking?**
+- Purpose: attribute leakage to recorded causes so action targets truth.
+- Required evidence: root-cause decomposition; step ledger.
+- Required APIs: audit response (`root_causes[]`, `gap_attribution`,
+  decision ledger series).
+- Required metrics: EDA-AUDIT decomposition.
+- Decision owner: Engineer / Operations.
+- Output: causes ranked by recorded loss with derivations.
+- Acceptance: causes sum within the audited gap; no invented causes.
+
+**Q6 — Can we prove it?**
+- Purpose: make every figure auditable to evidence.
+- Required evidence: manifest hash, certificate, governance verdicts,
+  lifecycle records, outcomes, reconciliations.
+- Required APIs: `GET /api/v1/certificate`; governance / lifecycle /
+  outcome / reconciliation record endpoints.
+- Required metrics: EDA-GOV-1.0, EDA-OUT-1.0, EDA-DEC-LIFE-1.0,
+  EDA-RECON-1.0.
+- Decision owner: Auditor / Administrator.
+- Output: verifiable chain: input hash → audit → decision → outcome →
+  verdict.
+- Acceptance: every chain link renders a real, verifiable artifact.
+
+**Q7 — What is happening right now?**
+- Purpose: continuous provisional economic awareness.
+- Required evidence: live provisional state, PROVISIONAL badge, event
+  window manifest.
+- Required APIs: `/ws/live`; live-state endpoints.
+- Required metrics: EDA-EVENT-1.0; live DQ gate; EDA-RECON-1.0 for later
+  certification.
+- Decision owner: Operations.
+- Output: live leakage/health, always marked provisional until reconciled.
+- Acceptance: no live figure ever renders as certified.
+
+**Q8 — How do assets compare?**
+- Purpose: portfolio allocation of attention and capital.
+- Required evidence: certified audit history per asset.
+- Required APIs: `GET /api/v1/audits` (authenticated history).
+- Required metrics: EDA-ES-1.0 across audits.
+- Decision owner: CEO / portfolio owner.
+- Output: comparative capture/risk/leakage across assets (T4+ surfaces).
+- Acceptance: only assets with real audits appear; no synthetic peers.
+
+**Q9 — What happens if we wait?**
+- Purpose: give inaction a recorded price — honestly.
+- Required evidence: the audited period's recorded figures, re-expressed
+  as a period rate; mandatory basis disclosure.
+- Required APIs: audit response (recorded values only).
+- Required metrics: EDA-AUDIT recorded figures; no forecasting metric
+  exists and none may be implied.
+- Decision owner: CFO / Operations.
+- Output: recorded rate framing ("recorded at X per 24h this period.
+  Basis: recorded period only — no forward projection.").
+- Acceptance: the word "forecast" and forward-looking verbs absent; basis
+  line present verbatim-class.
+
+**Q10 — (RESERVED) What did our decisions earn us?** Realized-value
+aggregate from Outcome/Governance history. Activates by amendment when
+certified outcome history accumulates.
+
+**Rules.**
+1. The UI may not answer unregistered questions — any surface answering an
+   unregistered question is removed regardless of quality.
+2. Registration requires all seven fields, with APIs and metrics that
+   exist in the frozen backend.
+3. One question may have many surfaces; every surface has exactly one
+   primary question.
+
+**Inheritance.** SPEC-IA (mapping to sections/zones); SPEC-DB manifests
+(primary-question field); SPEC-CH (instruments bind to questions);
+SPEC-EX (Q1–Q4 supremacy).
+
+**Acceptance Criteria.** Registry ↔ surface audit at every release: no
+orphan questions (registered but unanswerable), no rogue surfaces
+(answering unregistered questions).
+
+**Governance Rules.** Append-only; activation of reserved questions and
+any new registration require ratified amendment with the seven fields
+complete.
+
+---
+
+# SPEC-DM — Decision Model 1.0
+
+**Purpose.** Define the lifecycle of a decision from the user's
+perspective; every dashboard must serve one or more stages.
+
+**Declaration — the seven stages.**
+
+| Stage | The user… | The platform provides (existing) |
+|-------|-----------|-----------------------------------|
+| **Observe** | sees the current economic state | S01 command center; live telemetry (Q1, Q7) |
+| **Understand** | learns why value moved | root causes, attribution, counterfactual (Q5) |
+| **Trust** | inspects the proof | DQI/AC grades, hashes, certificates (Q3, Q6) |
+| **Decide** | accepts a governed recommendation | SPEC-AI block; EDA-DEC issuance (Q4) |
+| **Execute** | tracks the action | EDA-DEC-LIFE states: PROPOSED → ACCEPTED → IN_EXECUTION → EXECUTED (or DEFERRED / REJECTED) |
+| **Verify** | measures what it earned | EDA-OUT outcomes; EDA-GOV verdicts; EDA-RECON certification |
+| **Learn** | accumulates institutional memory | audit history; governance records (the future Knowledge Layer's diet) |
+
+**Rules.**
+1. Every dashboard declares in its manifest (SPEC-DB) which stages it
+   serves; a dashboard serving zero stages cannot exist.
+2. The full loop must remain reachable in the product at all times — no
+   stage may become orphaned by a redesign.
+3. Stage transitions render as evidence (chips, records), never as mere
+   UI state.
+
+**Inheritance.** SPEC-ST beats (beats 1–3 ≈ Observe/Understand + money;
+beat 4 ≈ Decide; beat 5 ≈ Trust; beat 6 ≈ the cost of not moving to
+Execute); SPEC-DB manifest schema; SPEC-NV (loop reachability).
+
+**Acceptance Criteria.** Manifest stage declarations complete; loop
+walkthrough (Observe → Learn) passes on production data at every release.
+
+**Governance Rules.** The seven stages are amendable only by ratification;
+stage semantics align with the frozen EDA lifecycle vocabulary.
+
+---
+
+# SPEC-HM — Human Model 1.0
+
+**Purpose.** Define how executives think, so the interface optimizes
+cognitive load — not information density.
+
+**Declaration.**
+Executives do not consume dashboards. **Executives consume answers.** They
+arrive mid-thought, under time pressure, carrying accountability. The
+interface's job is to complete their thought, not to furnish them with
+data. Therefore:
+
+- **Answer-first cognition:** conclusion before support, always (the
+  pyramid principle, rendered).
+- **Recognition over recall:** one constant grammar — a user who learned
+  one instrument, badge, or block has learned them all; nothing requires
+  remembering a previous screen (the Economic Context Strip carries state).
+- **Pre-interpreted numbers:** every figure arrives with its verdict
+  (grade, risk band, class) — the user never computes judgment.
+- **Attention as scarce capital:** one primary emphasis per screen;
+  everything else waits its turn.
+- **Progressive disclosure:** detail exists on demand, never by default.
+- **Density is a tool, not a virtue:** dense evidence tables are lawful
+  when density *reduces* total effort; dense answers never are.
+
+**Rules.**
+1. The five-second answer law governs every question-bearing screen.
+2. No screen requires cross-screen memory to be understood.
+3. Jargon budget: EDA terms always accompany a plain-language answer.
+4. Cognitive load reviews are part of acceptance (GOV-AC) — measured as
+   time-to-answer, not opinions.
+
+**Inheritance.** SPEC-DL hierarchies; SPEC-EX five-second criterion;
+SPEC-MO restraint; SPEC-AX (access as cognitive equity); SPEC-RS reading
+order.
+
+**Acceptance Criteria.** Five-second tests pass; zero cross-screen memory
+dependencies found in review; verdict-adjacency audit passes (no naked
+numbers).
+
+**Governance Rules.** Amendable only by ratification; the answer-first law
+is manifesto-protected (FM-8, FM-10).
+
+---
+
+# SPEC-EV — Economic Value Model 1.0
+
+**Purpose.** Define how value is represented. Every displayed value must
+belong to exactly one class. **Nothing else may be presented as money.**
+
+**Declaration — the six value classes.**
+
+| Class | Meaning | Existing source |
+|-------|---------|-----------------|
+| **Money lost** | recorded leakage of the period | `total_gap_usd`, root-cause losses |
+| **Money recoverable** | winnable with information available at decision time | `recoverable_execution_gap`, opportunity `period_gain` |
+| **Money saved** | recorded improvement realized by an executed decision | EDA-OUT realized value vs baseline |
+| **Money protected** | value actually captured by sound decisions | `edv_actual_total` (captured value) |
+| **Money at risk** | provisional live exposure not yet reconciled | live economic state leakage (PROVISIONAL) |
+| **Money verified** | realized value confirmed by governance verdict | EDA-GOV verified outcomes |
+
+**Rules.**
+1. Every money figure on every surface declares exactly one class —
+   visually (semantic color + label) and in its manifest.
+2. Benchmark values (theoretical ceiling, `edv_optimal_total`) are **not a
+   value class**: they are context, always labeled as non-achievable
+   benchmarks, always visually subordinate (SPEC-DL economic hierarchy).
+3. A money display that fits no class is removed — the class system is the
+   Existence Test for numbers.
+4. Class semantics bind to color semantics (SPEC-DS): lost=loss,
+   recoverable/saved/verified=recover family, at-risk=provisional amber
+   context, protected=captured presentation.
+
+**Inheritance.** SPEC-DL economic hierarchy; SPEC-DS semantic palette;
+SPEC-CH instrument meanings; SPEC-DB manifest value-class declarations;
+SPEC-AI economic-impact element.
+
+**Acceptance Criteria.** Value-class audit per release: every money figure
+classified, benchmark labeling verified, zero unclassifiable money.
+
+**Governance Rules.** The six classes are amendable only by ratification;
+class additions require an existing API source — classes without recorded
+data cannot exist (P2).
+
+---
+
+# SPEC-TM — Trust Model 1.0
+
+**Purpose.** Define how trust is built. **Every screen must increase
+trust.**
+
+**Declaration — the seven trust mechanisms (the trust ladder).**
+
+| Mechanism | What it gives the user | Existing artifacts |
+|-----------|------------------------|--------------------|
+| **Transparency** | nothing is hidden: methodology, versions, basis | metric versions, Math Appendix, basis disclaimers |
+| **Evidence** | claims bind to artifacts | `input_sha256`, manifests, canonical events |
+| **Confidence** | uncertainty is quantified, honestly | EDA-DQI-1.0, EDA-AC-1.0, INDETERMINATE |
+| **Certification** | an authority signed it | EDPC certificate, signing key status, registry number |
+| **Governance** | verdicts exist above the engine | EDA-GOV records, hash-chained |
+| **Verification** | reality was re-measured | EDA-OUT outcomes; EDA-RECON reconciliation |
+| **Auditability** | anyone can re-derive it | append-only chains, ledger CSV export, re-derivable from input hash |
+
+**Rules.**
+1. Every screen carries at least one trust artifact appropriate to its
+   question — trust is shown, never asserted.
+2. Trust may never be spent: no dark patterns, no hidden states, no
+   euphemism for failure; a trust-reducing pattern is a release blocker.
+3. The ladder is cumulative: higher mechanisms never replace lower ones
+   (a certificate does not excuse a missing hash).
+4. Broken trust artifacts (failed verification, missing chain link) render
+   as explicit warnings — never silently omitted.
+
+**Inheritance.** SPEC-SX (rendering the artifacts); SPEC-ID evidence
+styling; SPEC-AI governance status; SPEC-IX honest states; P3/P4/P7.
+
+**Acceptance Criteria.** Trust-artifact inventory per screen complete;
+trust-reduction review clean; broken-artifact rendering verified in E2E.
+
+**Governance Rules.** The seven mechanisms are amendable only by
+ratification; every new surface registers its trust artifacts in GOV-DR.
+
+---
+
+# SPEC-FM — Frontend Manifesto 1.0
+
+**Purpose.** Ten immutable laws every implementation obeys.
+
+**Declaration.**
+
+1. **The interface never guesses.** No optimistic economics, no
+   extrapolation, no synthesized data. *(SPEC-TR, SPEC-IX; P2)*
+2. **The interface never exaggerates.** Axis truth, no annualization, no
+   alarm aesthetics. *(SPEC-DV, SPEC-LX; P2)*
+3. **The interface never hides uncertainty.** PROVISIONAL and
+   INDETERMINATE are first-class states, styled and named. *(SPEC-TR,
+   SPEC-ID; P3)*
+4. **The interface never decorates information.** Every element passes the
+   Existence Test; no cosmetic charts, widgets, or ornament. *(SPEC-PR,
+   SPEC-LX; P10)*
+5. **The interface always explains its recommendations.** The full
+   Recommendation Block anatomy — reasoning, evidence, confidence,
+   alternatives, assumptions, governance. *(SPEC-AI; P9)*
+6. **The interface always shows evidence.** Every economic figure within
+   reach of its proof. *(SPEC-SX, SPEC-TM; P7)*
+7. **The interface always prioritizes money.** Money first on every
+   screen; the canonical hierarchy never inverts. *(SPEC-DL; P1)*
+8. **The interface always protects executive attention.** One primary
+   emphasis; motion and color only as meaning; five-second answers.
+   *(SPEC-HM, SPEC-MO; P10)*
+9. **The interface always reflects certified economic truth — and says so
+   when truth is still provisional.** The truth pipeline renders unbroken.
+   *(SPEC-TR; P2)*
+10. **The interface exists to improve decisions.** The final test of every
+    feature: does it move a user through Observe → Learn better than
+    before? *(SPEC-DM, SPEC-MS)*
+
+**Rules.**
+1. The laws bind every implementation, review, and amendment in Parts I–V.
+2. Conflicts between a law and any downstream rule resolve in the law's
+   favor; the conflict itself is logged in GOV-AL for reconciliation.
+
+**Inheritance.** All of Parts I–V; each law names its enforcing specs
+above; P1–P10 operationalize the laws (mapping in the Traceability
+Matrix).
+
+**Acceptance Criteria.** Every acceptance pack (GOV-AC) attests all ten
+laws; a violated law is a release blocker with no severity negotiation.
+
+**Governance Rules.** The ten laws are immutable upon ratification: none
+may be removed or weakened; new laws may be appended by ratification.
+
+---
+
+# THE PREDAIOT EXPERIENCE
+
+The emotional contract. When someone opens PREDAIOT, they should feel —
+and the architecture that produces each feeling:
+
+| The user feels | Produced by |
+|----------------|-------------|
+| *"I understand my business."* | Answer-first briefings (SPEC-HM, SPEC-ST); money-first hierarchy (SPEC-DL) |
+| *"I trust these numbers."* | The truth pipeline (SPEC-TR); trust artifacts on every screen (SPEC-TM) |
+| *"I know what to do."* | The governed Recommendation Block (SPEC-AI); one primary action (SPEC-IX) |
+| *"I know why."* | Reasoning + recorded attribution (SPEC-ST beat 2, Q5) |
+| *"I know how much it is worth."* | Value classes on every figure (SPEC-EV) |
+| *"I know what happens if I wait."* | Q9's honest recorded-rate framing (SPEC-QA) |
+| *"I know the recommendation is governed."* | Lifecycle and governance chips; the evidence chain (SPEC-TM, Q6) |
+| *"I know this platform thinks economically — not technically."* | The Category Law (SPEC-CA); money as the primary object everywhere |
+
+The composite feeling is **institutional custody**: the calm of a private
+bank, the rigor of an audit firm, the immediacy of a trading floor —
+applied to the user's own infrastructure. The user leaves every session
+knowing more, trusting more, and owing fewer unanswered questions than
+when they arrived. That — not engagement, not delight, not time-on-screen
+— is the product's emotional KPI.
 
 ---
 ---
@@ -61,8 +642,10 @@ Rules.**
 # SPEC-PR — Product Principles 1.0
 
 **Purpose.** Establish the ten governing principles, the Identity Law, and
-the existence tests from which every other specification and every UI
-decision derives. This is the constitutional layer.
+the existence tests from which every Part I–V specification and every UI
+decision derives. This is the operational constitution — it inherits its
+authority from Part 0 (Product Philosophy) and translates the philosophy
+into citable, reviewable principles.
 
 **Vision.** A product where nothing is arbitrary: any pixel, at any time,
 can state why it exists, which executive question it serves, and which
@@ -128,7 +711,9 @@ Test outcomes; zero uncited elements in shipped screens.
 **Future Extensions.** Principle P11 candidate — "Portfolio Gravity" — when
 multi-asset portfolios become the primary object.
 
-**Dependencies.** None (root of the tree). All specs depend on SPEC-PR.
+**Dependencies.** PART 0 (Product Philosophy) — the principles
+operationalize SPEC-MS/CA/TR/HM/TM/FM; the P1–P10 → Part 0 mapping is
+fixed in the Traceability Matrix. All Part I–V specs depend on SPEC-PR.
 
 **Examples.**
 - A pulsing dot on a LIVE badge: passes (P10 — motion signals a real live
@@ -516,8 +1101,11 @@ and map every screen, section, and zone to exactly one primary question.
 navigation is merely choosing which question to ask next.
 
 **Responsibilities.**
-- Own the **Question Registry** (the only justification currency for
-  screens and elements):
+- Map the **Question Registry** to surfaces. (Registry *authority* resides
+  in SPEC-QA, Part 0 — the exclusive charter with the full seven-field
+  entries. SPEC-IA inherits the registered questions and owns their mapping
+  to sections and zones. The summary below restates the registry for
+  mapping purposes; SPEC-QA is authoritative on any divergence):
 
 | # | Question | Primary surface | Data (existing API) |
 |---|----------|-----------------|----------------------|
@@ -580,9 +1168,10 @@ SPEC-NV.
 - Two sections claiming the same primary question with identical surfaces —
   consolidation required before ship.
 
-**Governance Rules.** The Question Registry is append-only and amendable
-only by ratification; question-to-data bindings must cite frozen API fields
-verifiable at review.
+**Governance Rules.** Question registration is governed by SPEC-QA
+(Part 0); the section taxonomy and question-to-surface mappings here amend
+only by ratification; data bindings must cite frozen API fields verifiable
+at review.
 
 ---
 ---
@@ -1382,12 +1971,17 @@ know the screen — before it is built.
 ```
 Dashboard Manifest (required fields)
 - id, title
-- primary question (SPEC-IA registry ref)
+- primary question (SPEC-QA registry ref, mapped via SPEC-IA)
+- decision stages served (SPEC-DM: Observe / Understand / Trust /
+  Decide / Execute / Verify / Learn — at least one)
+- value classes displayed (SPEC-EV: lost / recoverable / saved /
+  protected / at-risk / verified — every money figure classified)
 - narrative beat map (SPEC-ST beats → zones)
 - hierarchy declaration (SPEC-DL bands, top to bottom)
 - zones used (WS catalog refs) + tier visibility row
 - instruments used (SPEC-CH registry refs)
 - data endpoints consumed (frozen API refs)
+- trust artifacts carried (SPEC-TM mechanisms present)
 - archetype emphasis notes (SPEC-RB, if any)
 - acceptance evidence: tier screenshots, five-second test result,
   compliance checklist outcome
@@ -1897,8 +2491,92 @@ else.
 ---
 ---
 
-*End of PREDAIOT-FE-2.0. Status: PROPOSED in every part. No implementation
-is authorized by this document until ratification. Upon ratification this
+# CONSISTENCY REVIEW & TRACEABILITY — Part 0 → Parts I–V
+
+**Method.** Every specification in Parts I–V was reviewed against Part 0
+after its authoring. Verdicts: **CONSISTENT** (inherits cleanly) or
+**HARMONIZED** (a pre-ratification edit was applied to align it; the edit
+is listed in the Harmonization Log). No specification was found in
+contradiction with Part 0.
+
+## Traceability Matrix
+
+| Spec | Inherits from (Part 0) | Manifesto laws enforced | Verdict |
+|------|------------------------|--------------------------|---------|
+| SPEC-PR Product Principles | MS (Existence Test), CA (Identity Law), FM (all laws → P1–P10) | FM-4, FM-10 | HARMONIZED (root-of-tree authority transferred to Part 0) |
+| SPEC-ID Visual Identity | CA (recognizable category), TM (evidence styling), HM (recognition over recall) | FM-3, FM-4 | CONSISTENT |
+| SPEC-DL Executive Design Language | EV (economic hierarchy), HM (answer-first), MS (money as native language) | FM-7 | CONSISTENT |
+| SPEC-DS Design System | TR (visual truth in tokens), EV (class-color binding) | FM-4 | CONSISTENT |
+| SPEC-WS Workspace System | VS (H3/H4 scaling), HM (attention), QA (zones bind questions) | FM-8 | CONSISTENT |
+| SPEC-IA Information Architecture | QA (registry authority), CA (question-driven, not data-driven) | FM-7 | HARMONIZED (registry authority moved to SPEC-QA; IA owns mapping) |
+| SPEC-EX Executive Experience | QA (Q1–Q4 supremacy), DM (Observe/Decide), HM (5-second law) | FM-7, FM-8 | CONSISTENT |
+| SPEC-RB Role-Based Experience | HM (cognitive lenses), DM (stage emphasis per archetype), TR (truth invariant across lenses) | FM-1 | CONSISTENT |
+| SPEC-ST Narrative Experience | DM (beats ≈ stages), HM (briefing cognition), QA (Q9 honesty) | FM-1, FM-2 | CONSISTENT |
+| SPEC-AI AI Interaction Language | TR (decision truth), TM (governance status), FM (explanation duty) | FM-5, FM-3 | CONSISTENT |
+| SPEC-DV Data Visualization | TR (visual truth), EV (value orientation in plots) | FM-2 | CONSISTENT |
+| SPEC-CH Decision Instrument Library | QA (instruments bind to questions), DM (instruments serve stages), CA (instruments ≠ charts) | FM-4 | CONSISTENT |
+| SPEC-MO Motion Language | HM (attention protection), TR (motion as true state change) | FM-8 | CONSISTENT |
+| SPEC-LX Industrial Luxury Language | CA (anti-drift enforcement), Experience (institutional custody feel) | FM-4 | CONSISTENT |
+| SPEC-CO Component Registry | MS (governed instruments of the mission), TM (registered provenance) | FM-4 | CONSISTENT |
+| SPEC-NV Navigation | QA (navigation = choosing the next question), DM (loop reachability) | FM-8 | CONSISTENT |
+| SPEC-DB Dashboard Manifest | DM (stage declarations), EV (value-class declarations), QA (primary question), TM (trust artifacts) | FM-10 | HARMONIZED (manifest schema extended: stages, value classes, trust artifacts) |
+| SPEC-IX Interaction Language | TR (no optimistic economics), TM (honest states), HM (no dead ends) | FM-1 | CONSISTENT |
+| SPEC-SX Security UX | TM (renders the trust ladder), TR (evidence truth surfaces) | FM-6 | CONSISTENT |
+| SPEC-AX Accessibility | HM (access as cognitive equity), TM (trust must be perceivable by all) | FM-8 | CONSISTENT |
+| SPEC-RS Responsive System | HM (Q1→Q4 reading order preserved), TR (no integrity loss on reduction) | FM-7 | CONSISTENT |
+| SPEC-PF Performance | HM (latency is cognitive load), TM (speed is trust) | FM-8 | CONSISTENT |
+| GOV-CM Compliance Matrix | MS/FM (mission-grade enforcement machinery) | all | CONSISTENT |
+| GOV-DR Design Registry | TM (auditability applied to design itself) | FM-4, FM-6 | CONSISTENT |
+| GOV-AL Amendment Log | TM (append-only trust discipline) | FM-1 | CONSISTENT |
+| GOV-AC Acceptance Process | FM (attests all ten laws per release), HM (measured cognitive tests) | all | CONSISTENT |
+| GOV-RP Ratification Procedure | MS (perpetuity beyond any engineer), CA (immutability mechanics) | all | CONSISTENT |
+
+## Principles → Philosophy mapping (P1–P10 inherit from Part 0)
+
+| Principle | Derives from |
+|-----------|--------------|
+| P1 Executive Clarity | SPEC-HM (answers, not dashboards), SPEC-QA (question charter) |
+| P2 Economic Truth | SPEC-TR (truth pipeline), SPEC-EV (value classes), FM-1/2/9 |
+| P3 Decision Confidence | SPEC-TM (confidence mechanism), SPEC-TR (INDETERMINATE as truth), FM-3 |
+| P4 Institutional Trust | SPEC-CA (category dignity), SPEC-TM (trust ladder) |
+| P5 Operational Efficiency | SPEC-HM (cognitive load), SPEC-VS (operating-system ambition) |
+| P6 Narrative Intelligence | SPEC-DM (decision journey), SPEC-HM (answer-first cognition) |
+| P7 Evidence First | SPEC-TM (evidence mechanism), SPEC-TR (evidence truth), FM-6 |
+| P8 Industrial Luxury | SPEC-CA (not consumer software), The PREDAIOT Experience (institutional custody) |
+| P9 AI Transparency | SPEC-TR (decision truth), FM-5 |
+| P10 Visual Calm | SPEC-HM (attention as capital), FM-4/8 |
+
+## Harmonization Log (pre-ratification edits applied during this review)
+
+1. **Header** — authority chain extended: PART 0 inserted above Parts I–V;
+   Identity Law now cites SPEC-CA as its constitutional source.
+2. **SPEC-PR** — no longer "root of the tree": explicitly inherits Part 0;
+   the P1–P10 → philosophy mapping fixed above.
+3. **SPEC-IA** — Question Registry authority transferred to SPEC-QA
+   (Part 0); SPEC-IA retains question-to-surface mapping and taxonomy.
+4. **SPEC-DB** — manifest schema extended with three Part 0 declarations:
+   decision stages served (SPEC-DM), value classes displayed (SPEC-EV),
+   trust artifacts carried (SPEC-TM).
+5. **Preamble** — constitutional contract form declared for Part 0 specs
+   (Purpose · Declaration · Rules · Inheritance · Acceptance · Governance),
+   distinct from the fourteen-field operational form of Parts I–IV.
+
+No other inconsistencies were found. The beats-to-stages relationship
+(SPEC-ST ↔ SPEC-DM) and the value-class-to-color binding (SPEC-EV ↔
+SPEC-DS) were verified as compatible without edits.
+
+## Eligibility statement
+
+Every specification in Parts I–V inherits from the Product Philosophy, as
+proven above. **PREDAIOT-FE-2.0 is now eligible for ratification** under
+GOV-RP.
+
+---
+---
+
+*End of PREDAIOT-FE-2.0. Status: PROPOSED in every part — eligible for
+ratification following the Part 0 consistency review. No implementation is
+authorized by this document until ratification. Upon ratification this
 specification becomes the immutable governing contract for every future
 frontend implementation of the PREDAIOT Economic Decision Intelligence
 Platform.*
