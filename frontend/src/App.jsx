@@ -1510,6 +1510,7 @@ export default function App() {
   // ── Mobile responsive state ────────────────────────────────────────
   const isMobile = useIsMobile();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [reportsOpen, setReportsOpen] = useState(false);   // header REPORTS menu (SPEC-NV rule 4)
   useEffect(() => {
     // Close the drawer if the viewport transitions back to desktop
     if (!isMobile && sidebarOpen) setSidebarOpen(false);
@@ -1989,11 +1990,22 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
     { id: 'ai',        label: 'Economic Intelligence Report™',tag: '10' },
     { id: 'govern',    label: 'Governance',                   tag: '11' },
     { id: 'appendix',  label: 'Math Appendix',                tag: '12' },
-    { id: 'live',      label: 'Live Monitor',                 tag: '⚡' },
-    { id: 'cert',      label: 'EDPC Certificate',             tag: '🏆' },
-    { id: 'history',   label: 'Audit History',                tag: '\u2630' },
-    { id: 'realtime',  label: 'Real-Time',                    tag: '◉' },
+    { id: 'live',      label: 'Live Monitor',                 tag: 'LV' },
+    { id: 'cert',      label: 'EDPC Certificate',             tag: 'CT' },
+    { id: 'history',   label: 'Audit History',                tag: 'HX' },
+    { id: 'realtime',  label: 'Real-Time',                    tag: 'RT' },
   ];
+
+  // SPEC-IA Section Taxonomy — the sidebar renders these ratified groups.
+  // Items reference navItems entries by id; glyph tags retired (SPEC-ID).
+  const NAV_GROUPS = [
+    { label: 'Command',               ids: ['exec'] },
+    { label: 'Analysis',              ids: ['flow', 'timeline', 'rootcause', 'counter', 'metrics', 'leakage', 'heatmap'] },
+    { label: 'Action',                ids: ['opps', 'ai'] },
+    { label: 'Evidence & Governance', ids: ['govern', 'cert', 'history'] },
+    { label: 'Operations',            ids: ['live', 'realtime'] },
+    { label: 'Reference',             ids: ['appendix'] },
+  ].map((g) => ({ ...g, items: g.ids.map((id) => navItems.find((n) => n.id === id)) }));
 
   // ══════════════════════════════════════════════════════════════════
   // RENDER
@@ -2065,28 +2077,51 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
         </div>
 
         <div style={{ display: 'flex', gap: isMobile ? 6 : 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          {/* Restrained hierarchy: one accent primary (RUN DEMO), everything
-              else a uniform quiet neutral — premium, never rainbow. */}
+          {/* SPEC-NV rule 4: one accent primary + quiet utilities only.
+              Report/evidence exports live in a single quiet menu. */}
           <BtnOutline color={DS.cyan} onClick={runDemo} disabled={loading || uploading}>
             {loading ? 'OPTIMIZING…' : (isMobile ? 'DEMO' : 'RUN DEMO')}
           </BtnOutline>
           <BtnOutline color={DS.sub} onClick={() => setShowUpload(!showUpload)} disabled={uploading}>
             {uploading ? 'PARSING…' : (isMobile ? 'UPLOAD' : 'UPLOAD DATA')}
           </BtnOutline>
-          {!isMobile && (
-            <BtnOutline color={DS.sub} onClick={handleShare}>SHARE REPORT</BtnOutline>
-          )}
-          <BtnOutline color={DS.sub} onClick={downloadPdf} disabled={pdfLoading || !hasData}>
-            {pdfLoading ? 'PDF…' : (isMobile ? '⬇ PDF' : '⬇ DOWNLOAD PDF')}
-          </BtnOutline>
-          {!isMobile && (
-            <BtnOutline color={DS.sub} onClick={downloadLedger} disabled={!hasData}>
-              ⬇ LEDGER CSV
+          <div style={{ position: 'relative' }}>
+            <BtnOutline color={DS.sub} onClick={() => setReportsOpen((v) => !v)}
+              aria-haspopup="menu" aria-expanded={reportsOpen}>
+              REPORTS {reportsOpen ? '▴' : '▾'}
             </BtnOutline>
-          )}
-          {!isMobile && (
-            <BtnOutline color={DS.dim} onClick={() => setShowMethodology(true)}>METHODOLOGY</BtnOutline>
-          )}
+            {reportsOpen && (
+              <>
+                <div onClick={() => setReportsOpen(false)}
+                     style={{ position: 'fixed', inset: 0, zIndex: 120 }} />
+                <div role="menu" style={{
+                  position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 121,
+                  background: DS.bgRaised, border: `1px solid ${DS.borderHi}`,
+                  borderRadius: DS.r12, boxShadow: 'var(--pds-shadow-2)',
+                  minWidth: 210, padding: 6,
+                }}>
+                  {[
+                    { label: pdfLoading ? 'Preparing PDF…' : 'Download PDF report', fn: downloadPdf, off: pdfLoading || !hasData },
+                    { label: 'Download ledger CSV', fn: downloadLedger, off: !hasData },
+                    { label: 'Share report link', fn: handleShare, off: !hasData },
+                    { label: 'Methodology', fn: () => setShowMethodology(true), off: false },
+                  ].map((m) => (
+                    <button key={m.label} role="menuitem" disabled={m.off}
+                      className="pds-menu-item"
+                      onClick={() => { setReportsOpen(false); m.fn(); }}
+                      style={{
+                        display: 'block', width: '100%', textAlign: 'left',
+                        padding: '10px 12px', background: 'none', border: 'none',
+                        borderRadius: DS.r8, cursor: m.off ? 'not-allowed' : 'pointer',
+                        color: m.off ? DS.dim : DS.text, fontSize: 12, fontFamily: DS.sans,
+                      }}>
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
           {account?.token ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               {!isMobile && (
@@ -2147,32 +2182,43 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           position: 'sticky', top: 'var(--ws-header-h)',
           height: 'calc(100vh - var(--ws-header-h))', overflowY: 'auto',
         }}>
-          {navItems.map((n) => {
-            const active = activeSection === n.id;
-            return (
-              <button
-                key={n.id}
-                onClick={() => {
-                  setActiveSection(n.id);
-                  if (isMobile) setSidebarOpen(false);
-                }}
-                style={{
-                  display: 'block', width: '100%', textAlign: 'left',
-                  padding: isMobile ? '14px 22px' : '9px 20px',
-                  minHeight: isMobile ? 44 : undefined,  // Apple HIG / Material touch target
-                  fontSize: isMobile ? 13 : 11,
-                  background: 'none', border: 'none', cursor: 'pointer',
-                  letterSpacing: '0.04em',
-                  color: active ? DS.cyan : DS.sub,
-                  borderLeft: `2px solid ${active ? DS.cyan : 'transparent'}`,
-                  transition: 'all 0.12s',
-                }}
-              >
-                <span style={{ fontFamily: DS.mono, fontSize: isMobile ? 10 : 9, color: DS.dim, marginRight: 8 }}>{n.tag}</span>
-                {n.label}
-              </button>
-            );
-          })}
+          {/* SPEC-NV: grouped instrument rail — the taxonomy is the map. */}
+          {NAV_GROUPS.map((g) => (
+            <div key={g.label} style={{ marginBottom: 14 }}>
+              <div style={{
+                padding: isMobile ? '8px 22px 5px' : '6px 20px 5px',
+                fontSize: 9, letterSpacing: '0.22em', textTransform: 'uppercase',
+                color: DS.dim, fontWeight: 700,
+              }}>{g.label}</div>
+              {g.items.map((n) => {
+                const active = activeSection === n.id;
+                return (
+                  <button
+                    key={n.id}
+                    onClick={() => {
+                      setActiveSection(n.id);
+                      if (isMobile) setSidebarOpen(false);
+                    }}
+                    style={{
+                      display: 'block', width: '100%', textAlign: 'left',
+                      padding: isMobile ? '14px 22px' : '9px 20px',
+                      minHeight: isMobile ? 44 : undefined,  // Apple HIG / Material touch target
+                      fontSize: isMobile ? 13 : 11,
+                      background: active ? `${DS.cyan}0C` : 'none',
+                      border: 'none', cursor: 'pointer',
+                      letterSpacing: '0.04em',
+                      color: active ? DS.cyan : DS.sub,
+                      borderLeft: `2px solid ${active ? DS.cyan : 'transparent'}`,
+                      transition: 'all 0.12s',
+                    }}
+                  >
+                    <span style={{ fontFamily: DS.mono, fontSize: isMobile ? 10 : 9, color: active ? DS.cyan : DS.dim, marginRight: 8 }}>{n.tag}</span>
+                    {n.label}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
         </nav>
 
         {/* ── MAIN CONTENT — the Executive Workspace (SPEC-WS §5) ── */}

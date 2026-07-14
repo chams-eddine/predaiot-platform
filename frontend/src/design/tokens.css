@@ -156,6 +156,8 @@
 }
 
 .pds-num { font-family: var(--pds-font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.pds-menu-item:hover:not(:disabled) { background: var(--pds-panel-3) !important; }
+.pds-menu-item:focus-visible { outline: 2px solid var(--pds-accent); outline-offset: -2px; }
 .pds-kicker { font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--pds-text-3); font-weight: 600; }
 
 /* — Motion primitives — */
