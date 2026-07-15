@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, lazy, Suspense } from 
 import axios from 'axios';
 import ExecutiveCommandCenter from './components/ExecutiveCommandCenter';
 import { Workspace, Zone, useWorkspaceTier, tierAtLeast } from './workspace/Workspace';
+import { fmtMoney } from './design/ds';   // PL-1.0 L2: the one money voice
 
 // SPEC-PF rule 2: recharts and every instrument travel in a code-split
 // chunk, loaded on demand — never on the initial path.
@@ -129,20 +130,9 @@ const DS = {
 };
 
 // ── Utilities ────────────────────────────────────────────────────────
-const fmtUSD = (n) => {
-  if (n == null) return '—';
-  const abs = Math.abs(n);
-  if (abs >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `$${(n / 1e3).toFixed(1)}k`;
-  return `$${n.toFixed(2)}`;
-};
-
-// Currency-aware money: "$1.2k" for USD, "1.2k OMR" for detected currencies.
-const fmtMoney = (n, cur) => {
-  const s = fmtUSD(n);
-  if (!cur || cur === 'USD' || s === '—') return s;
-  return `${s.slice(1)} ${cur}`;
-};
+// Money speaks in ONE voice product-wide (PL-1.0 L2 / M1): the institutional
+// formatter from the design system ("6.7K USD"), not the legacy "$6.7k".
+// fmtMoney(x, data.currency) legacy calls are re-pointed to fmtMoney(x, currency).
 const fmtPct = (n, decimals = 1) => n == null ? '—' : `${Number(n).toFixed(decimals)}%`;
 const riskColor = (r) => r === 'Low' ? DS.optimal : r === 'Moderate' ? DS.warning : DS.loss;
 const heatColor = (s) => ({
@@ -1643,9 +1633,9 @@ export default function App() {
 AUDIT DATA (use these exact figures — do not invent numbers):
 Asset: ${data.asset_name} (${data.asset_type})
 Audit Period: ${data.audit_period_label}
-Economic Potential: ${fmtUSD(data.edv_optimal_total)}
-Captured Value: ${fmtUSD(data.edv_actual_total)}
-Destroyed Value: ${fmtUSD(data.total_gap_usd)}
+Economic Potential: ${fmtMoney(data.edv_optimal_total, data.currency)}
+Captured Value: ${fmtMoney(data.edv_actual_total, data.currency)}
+Destroyed Value: ${fmtMoney(data.total_gap_usd, data.currency)}
 Capture Rate: ${capturePct.toFixed(1)}%
 Decision Quality Score: ${((data.dq_score || 0) * 100).toFixed(1)} / 100
 Economic Intelligence Score: ${data.eda_metrics?.economic_intelligence_score ?? 'N/A'} / 100
@@ -2173,7 +2163,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                       { label: 'Correct Decisions', v: correct,                      c: DS.optimal },
                       { label: 'Suboptimal',         v: subopt,                       c: DS.warning },
                       { label: '⚠ Critical Decisions',v: critical,                   c: DS.loss },
-                      { label: 'Revenue Destroyed',  v: fmtUSD(data.total_gap_usd), c: DS.loss },
+                      { label: 'Revenue Destroyed',  v: fmtMoney(data.total_gap_usd, data.currency), c: DS.loss },
                     ].map(f => (
                       <Card key={f.label} style={{ textAlign: 'center', borderColor: f.c === DS.loss ? `${DS.loss}25` : DS.border }}>
                         <Label style={{ fontSize: 9 }}>{f.label}</Label>
@@ -2223,7 +2213,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                             {dec.operator_override && <Pill label="Human Override" color={DS.orange} />}
                           </div>
                           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                            {gap > 0 && <span style={{ color: DS.loss, fontFamily: DS.mono, fontSize: 14, fontWeight: 700 }}>−{fmtUSD(gap)}</span>}
+                            {gap > 0 && <span style={{ color: DS.loss, fontFamily: DS.mono, fontSize: 14, fontWeight: 700 }}>−{fmtMoney(gap, data.currency)}</span>}
                             {dec.confidence && <Pill label={`${(dec.confidence*100).toFixed(0)}% conf`} color={DS.blue} />}
                           </div>
                         </div>
@@ -2254,7 +2244,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                             <Label style={{ fontSize: 9, marginBottom: 3 }}>Counterfactual — What Should Have Happened</Label>
                             <div style={{ color: DS.sub, fontSize: 11, lineHeight: 1.5 }}>
                               {gap > 0
-                                ? `Dispatching ${dec.optimal_action} MW would have recovered ${fmtUSD(gap)} with no physical constraint violation. MILP verified.`
+                                ? `Dispatching ${dec.optimal_action} MW would have recovered ${fmtMoney(gap, data.currency)} with no physical constraint violation. MILP verified.`
                                 : 'Decision was economically optimal. No improvement available.'}
                             </div>
                           </div>
@@ -2290,7 +2280,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
                           <span style={{ color: DS.text }}>{rc.category}</span>
                           <span style={{ color: [DS.loss, DS.orange, DS.warning, DS.blue, DS.cyan, DS.purple][i % 6], fontFamily: DS.mono, fontWeight: 700 }}>
-                            {rc.contribution_pct}% · {fmtUSD(rc.loss_usd)}
+                            {rc.contribution_pct}% · {fmtMoney(rc.loss_usd, data.currency)}
                           </span>
                         </div>
                         <ProgressBar pct={rc.contribution_pct} color={[DS.loss, DS.orange, DS.warning, DS.blue, DS.cyan, DS.purple][i % 6]} />
@@ -2412,7 +2402,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   <div key={i} style={{ marginBottom: 14 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                       <span style={{ color: DS.text, fontSize: 12 }}>{src.name}</span>
-                      <span style={{ color: DS.loss, fontFamily: DS.mono, fontWeight: 700, fontSize: 11 }}>{fmtUSD(src.usd)} ({src.pct}%)</span>
+                      <span style={{ color: DS.loss, fontFamily: DS.mono, fontWeight: 700, fontSize: 11 }}>{fmtMoney(src.usd, data.currency)} ({src.pct}%)</span>
                     </div>
                     <ProgressBar pct={src.pct} color={DS.loss} />
                   </div>
@@ -2981,7 +2971,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   {liveData.length > 0 && (
                     <>
                       <span style={{ color: DS.warning, fontFamily: DS.mono, fontSize: 12 }}>
-                        Cumulative Gap: −{fmtUSD(liveData[liveData.length-1]?.cumulative_gap || 0)}
+                        Cumulative Gap: −{fmtMoney(liveData[liveData.length-1]?.cumulative_gap || 0, data.currency)}
                       </span>
                       <span style={{ color: qualColor(liveData[liveData.length-1]?.dq_score_live || 0), fontFamily: DS.mono, fontSize: 12, fontWeight: 700 }}>
                         DQ Live: {(liveData[liveData.length-1]?.dq_score_live || 0).toFixed(1)}%
@@ -3014,7 +3004,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                         { l: 'Market Price', v: `$${last.price}/MWh`, c: DS.warning },
                         { l: 'Recommended Action', v: last.recommended_action, c: DS.cyan },
                         { l: 'Recommended Power', v: `${last.recommended_power} MW`, c: DS.blue },
-                        { l: 'Expected Gain', v: fmtUSD(last.expected_gain || 0), c: DS.optimal },
+                        { l: 'Expected Gain', v: fmtMoney(last.expected_gain || 0, data.currency), c: DS.optimal },
                         { l: 'Gap % of Step Optimum', v: last.gap_pct_of_optimal != null ? `${last.gap_pct_of_optimal}%` : '—', c: DS.orange },
                         { l: 'Decision Quality', v: `${last.decision_quality}%`, c: qualColor(last.decision_quality) },
                       ].map(f => (
