@@ -266,14 +266,16 @@ const COLUMN_GUIDE = [
 const FileUploadZone = ({ onFile, loading }) => {
   const [dragging, setDragging] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
+  const [fileErr, setFileErr] = useState(null);   // SPEC-IX: inline, not alert()
   const inputRef = useRef(null);
 
   const process = (file) => {
     if (!file) return;
     if (!/\.(csv|xlsx|xls)$/i.test(file.name)) {
-      alert('Please upload a CSV or Excel (.xlsx / .xls) file.');
+      setFileErr('That file type is not supported. Provide a CSV or Excel (.xlsx / .xls) export of dispatch and price data.');
       return;
     }
+    setFileErr(null);
     onFile(file);
   };
 
@@ -299,6 +301,12 @@ const FileUploadZone = ({ onFile, loading }) => {
         }}
       >
         <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls" onChange={(e) => process(e.target.files[0])} style={{ display: 'none' }} />
+        {fileErr && (
+          <div role="alert" style={{ color: DS.loss, fontSize: 12, lineHeight: 1.55, marginBottom: 14,
+                                     maxWidth: 420, marginLeft: 'auto', marginRight: 'auto' }}>
+            {fileErr}
+          </div>
+        )}
         <div style={{ color: DS.text, fontSize: 16, fontWeight: 700, marginBottom: 8 }}>
           {loading ? 'Processing your data…' : 'Drop any energy asset data file here'}
         </div>
@@ -1206,6 +1214,7 @@ export default function App() {
   const [data, setData]                   = useState(EMPTY);
   const [loading, setLoading]             = useState(false);
   const [actionError, setActionError]     = useState(null);   // SPEC-IX: no silent dead ends
+  const [notice, setNotice]               = useState(null);   // SPEC-IX: quiet confirmations, not alert()
   const [uploading, setUploading]         = useState(false);
   const [shareLink, setShareLink]         = useState('');
   const [activeSection, setActiveSection] = useState('exec');
@@ -1229,6 +1238,13 @@ export default function App() {
     // Close the drawer if the viewport transitions back to desktop
     if (!isMobile && sidebarOpen) setSidebarOpen(false);
   }, [isMobile, sidebarOpen]);
+
+  // Quiet confirmations clear themselves; errors persist until dismissed.
+  useEffect(() => {
+    if (!notice) return undefined;
+    const t = setTimeout(() => setNotice(null), 4000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   // ── Ingestion notes from the upload pipeline ───────────────────────
   const [ingestionNotes, setIngestionNotes] = useState(null);
@@ -1531,30 +1547,36 @@ export default function App() {
       setActiveSection('exec');
     } catch (err) {
       const detail = err?.response?.data?.detail || '';
-      alert(
-        'Upload failed.\n\n' +
-        (detail || 'Could not locate a price column or output column.\n\nTip: POST your file to /api/v1/audit/inspect to see the full mapping attempt.')
-      );
+      setActionError(detail
+        || 'Upload failed — no price column or output column could be located in that file. Confirm the export contains dispatch and price data and try again.');
     }
     setUploading(false);
   };
 
   // ── Share ──────────────────────────────────────────────────────────
   const handleShare = async () => {
-    if (!(data.decision_log || []).length) return alert('Run an audit first.');
+    if (!(data.decision_log || []).length) {
+      setActionError('Run an audit before sharing — there is no report to share yet.');
+      return;
+    }
     try {
       const r = await axios.post('/api/share', data);
       const url = window.location.origin + r.data.share_url;
       setShareLink(url);
       navigator.clipboard?.writeText(url);
-      alert('Link copied!\n' + url);
-    } catch (_) {}
+      setNotice('Share link copied to clipboard.');
+    } catch (_) {
+      setActionError('The share link could not be created. Check your connection and try again.');
+    }
   };
 
   // ── Download branded PDF (letterhead overlay) ──────────────────────
   const [pdfLoading, setPdfLoading] = useState(false);
   const downloadPdf = async () => {
-    if (!(data.decision_log || []).length) return alert('Run an audit first.');
+    if (!(data.decision_log || []).length) {
+      setActionError('Run an audit before downloading a report — there is nothing to export yet.');
+      return;
+    }
     if (!requireTrial()) return;
     setPdfLoading(true);
     try {
@@ -1570,7 +1592,7 @@ export default function App() {
     } catch (err) {
       // 401/402 are surfaced via the global interceptor (gate / expired modal)
       if (err?.response?.status !== 401 && err?.response?.status !== 402) {
-        alert('PDF generation failed. Try again or contact support.');
+        setActionError('The PDF report could not be generated. Try again in a moment, or contact support if it persists.');
       }
     }
     setPdfLoading(false);
@@ -1580,7 +1602,10 @@ export default function App() {
   // Step-by-step CSV where every PDF headline number is a column sum —
   // the transparency artifact that lets a customer reconcile the audit.
   const downloadLedger = async () => {
-    if (!(data.decision_log || []).length) return alert('Run an audit first.');
+    if (!(data.decision_log || []).length) {
+      setActionError('Run an audit before exporting the ledger — there is no audit to reconcile yet.');
+      return;
+    }
     if (!requireTrial()) return;
     try {
       const r = await axios.get('/api/v1/audit/ledger.csv', { responseType: 'blob' });
@@ -1591,7 +1616,7 @@ export default function App() {
       setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
     } catch (err) {
       if (err?.response?.status !== 401 && err?.response?.status !== 402) {
-        alert('Ledger export failed. Run an audit first, then try again.');
+        setActionError('The ledger export could not be generated. Try again in a moment.');
       }
     }
   };
@@ -1604,7 +1629,7 @@ export default function App() {
       const capturePct = data.edv_optimal_total > 0 ? (data.edv_actual_total / data.edv_optimal_total) * 100 : 0;
       const missedCount = (data.decision_log || []).filter(d => d.decision_type === 'Missed Arbitrage').length;
       const opsBlock = (data.opportunities || []).slice(0, 5).map((o, i) =>
-        `${i + 1}. ${o.name}${o.experimental ? ' [EXPERIMENTAL — not quantified]' : ` — Period Value: ${o.period_gain} | Annualised (linear est.): ${o.annual_gain_usd} | Ledger intervals: ${o.intervals_observed} | Derivation: ${o.derivation}`} | Evidence: ${o.evidence || '—'}`
+        `${i + 1}. ${o.name}${o.experimental ? ' [EXPERIMENTAL — not quantified]' : ` — Period Value: ${o.period_gain} | Ledger intervals: ${o.intervals_observed} | Derivation: ${o.derivation}`} | Evidence: ${o.evidence || '—'}`
       ).join('\n');
       const causesBlock = (data.root_causes || []).slice(0, 5).map(r => `${r.category}: ${r.contribution_pct}% ($${r.loss_usd?.toLocaleString()})`).join(', ');
 
@@ -1625,10 +1650,10 @@ Capture Rate: ${capturePct.toFixed(1)}%
 Decision Quality Score: ${((data.dq_score || 0) * 100).toFixed(1)} / 100
 Economic Intelligence Score: ${data.eda_metrics?.economic_intelligence_score ?? 'N/A'} / 100
 Risk Level: ${data.risk_level}
-Annual Leakage Projection: ${fmtUSD(data.total_gap_usd * 365)}
 Missed High-Value Intervals: ${missedCount}
 Dispatch Records Analysed: ${(data.decision_log || []).length}
 Forecast Utilization: ${data.eda_metrics?.forecast_utilization_index ?? 'N/A'}%
+(Report recorded-period figures only. Do not annualize, extrapolate, or state any per-year or forward-looking figure.)
 
 ROOT CAUSES: ${causesBlock || 'Not available'}
 
@@ -1651,7 +1676,7 @@ ROOT CAUSE ANALYSIS
 Two to three sentences explaining which decision logic (not equipment) caused the loss, citing the specific root cause percentages above.
 
 OPERATIONAL IMPACT
-Two sentences quantifying the annualised recoverable revenue if the top opportunities were implemented.
+Two sentences quantifying the recorded recoverable value for the audited period if the top opportunities were implemented. State it as a recorded-period figure; do not annualize.
 
 AUDITOR CONCLUSION
 One to two sentences: is the asset operationally healthy but economically under-optimized, or already near-optimal?
@@ -1660,7 +1685,7 @@ RECOMMENDED ACTIONS
 For each of the top 5 opportunities listed above, output a block in exactly this format (use the real data given, do not invent figures):
 
 Recommendation N — [opportunity name]
-  Expected Annual Gain    $[value]
+  Recorded Period Gain    $[value]
   Implementation          [difficulty]
   Operational Risk        [risk]
   Confidence              [value]%
@@ -1691,6 +1716,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
   // ── Derived ────────────────────────────────────────────────────────
   const log         = Array.isArray(data.decision_log) ? data.decision_log : [];
   const captureRate = data.edv_optimal_total > 0 ? (data.edv_actual_total / data.edv_optimal_total) * 100 : 0;
+  const m           = data.eda_metrics;   // EDA metric block; consumed by S06/S10/S05
   // "An audit is loaded" = the decision log has rows. NOT dq_score > 0 —
   // an honest DQ of 0.0 (destructive dispatch) is a real, displayable audit.
   const hasData     = log.length > 0;
@@ -1929,8 +1955,21 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
         <div role="alert" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           gap: 16, background: `${DS.loss}10`, borderBottom: `1px solid ${DS.loss}30`,
           padding: '10px 28px', fontSize: 12, color: DS.text }}>
-          <span><span style={{ color: DS.loss, fontWeight: 700, letterSpacing: '0.08em', marginRight: 10 }}>AUDIT FAILED</span>{actionError}</span>
-          <button onClick={() => setActionError(null)} aria-label="Dismiss error"
+          <span><span style={{ color: DS.loss, fontWeight: 700, letterSpacing: '0.08em', marginRight: 10 }}>UNABLE TO COMPLETE</span>{actionError}</span>
+          <button onClick={() => setActionError(null)} aria-label="Dismiss message"
+            style={{ background: 'none', border: `1px solid ${DS.border}`, color: DS.sub,
+                     borderRadius: DS.r8, padding: '4px 10px', cursor: 'pointer', fontSize: 11 }}>
+            DISMISS
+          </button>
+        </div>
+      )}
+      {/* SPEC-IX quiet confirmation — factual, dismissible, never an alert. */}
+      {notice && (
+        <div role="status" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          gap: 16, background: `${DS.optimal}10`, borderBottom: `1px solid ${DS.optimal}30`,
+          padding: '10px 28px', fontSize: 12, color: DS.text }}>
+          <span><span style={{ color: DS.optimal, fontWeight: 700, letterSpacing: '0.08em', marginRight: 10 }}>DONE</span>{notice}</span>
+          <button onClick={() => setNotice(null)} aria-label="Dismiss message"
             style={{ background: 'none', border: `1px solid ${DS.border}`, color: DS.sub,
                      borderRadius: DS.r8, padding: '4px 10px', cursor: 'pointer', fontSize: 11 }}>
             DISMISS
@@ -2460,10 +2499,12 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   .reduce((s, o) => s + (o.intervals_observed || 0), 0);
                 return (
                   <div style={{ background: `linear-gradient(135deg, rgba(0,230,118,0.06) 0%, rgba(75,191,255,0.04) 100%)`, border: `1px solid ${DS.optimal}25`, borderRadius: DS.r16, padding: 24, marginBottom: 24 }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 20 }}>
+                    {/* Recorded-period totals only. The annualized (×365) KPI
+                        was removed per PLA-1.0 C2 / SPEC-AI rule 5 — no forward
+                        projection on a decision surface. */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20 }}>
                       {[
-                        { label: 'Period Gap Attributed', v: fmtMoney(periodTotal, data.currency), c: DS.optimal, big: true, sub: 'Σ over classified ledger rows' },
-                        { label: 'Annualised (Linear Est.)', v: fmtMoney(periodTotal * 365, data.currency), c: DS.warning, sub: 'ceiling basis' },
+                        { label: 'Period Gap Attributed', v: fmtMoney(periodTotal, data.currency), c: DS.optimal, big: true, sub: 'Σ over classified ledger rows · recorded period' },
                         { label: 'Quantified Actions', v: quantified.length, c: DS.optimal, sub: 'ledger-derived' },
                         { label: 'Ledger Intervals', v: intervalsTotal, c: DS.blue, sub: 'evidence rows' },
                         { label: 'Advisory (Experimental)', v: advisory.length, c: DS.dim, sub: 'not quantified' },
@@ -2498,9 +2539,9 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                         {!op.experimental && op.period_gain != null && (
                           <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 20 }}>
                             <BigNum v={fmtMoney(op.period_gain, data.currency)} color={DS.optimal} size={22} />
-                            <div style={{ color: DS.dim, fontSize: 9, letterSpacing: '0.12em', marginTop: 2 }}>AUDITED PERIOD</div>
-                            <div style={{ color: DS.warning, fontFamily: DS.mono, fontSize: 12, marginTop: 4 }}>{fmtMoney(op.annual_gain_usd, data.currency)}</div>
-                            <div style={{ color: DS.dim, fontSize: 8.5, letterSpacing: '0.08em' }}>ANNUALISED · LINEAR EST.</div>
+                            {/* Recorded period only — annualized figure removed
+                                (PLA-1.0 C2 / SPEC-AI rule 5). */}
+                            <div style={{ color: DS.dim, fontSize: 9, letterSpacing: '0.12em', marginTop: 2 }}>RECORDED PERIOD · NO FORWARD PROJECTION</div>
                           </div>
                         )}
                       </div>
@@ -2596,16 +2637,23 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                     )}
                   </div>
 
-                  {/* Evidence summary */}
+                  {/* Evidence summary — recorded artifacts only. Fabricated
+                      constants (SCADA Completeness 99.8%, MILP Validated ✓,
+                      Evidence Level HIGH/MEDIUM) removed per PLA-1.0 C1 /
+                      P2 Economic Truth: nothing renders that the API did not
+                      report. */}
                   {hasData && m && (
                     <div style={{ display: 'flex', gap: 20, padding: '10px 14px', background: DS.bgRaised || '#080c12', borderRadius: DS.r8, marginBottom: 20, flexWrap: 'wrap' }}>
                       {[
                         { l: 'Dispatch Records Analysed', v: log.length },
-                        { l: 'SCADA Completeness', v: '99.8%' },
-                        { l: 'Forecast Availability', v: `${m.forecast_utilization_index?.toFixed(0)}%` },
-                        { l: 'MILP Validated', v: '✓ Yes' },
-                        { l: 'Evidence Level', v: log.length > 200 ? 'HIGH' : 'MEDIUM' },
-                      ].map(e => (
+                        (m.forecast_utilization_index != null) &&
+                          { l: 'Forecast Availability', v: `${m.forecast_utilization_index.toFixed(0)}%` },
+                        (data.data_quality_index?.grade) &&
+                          { l: 'Data Quality', v: `Grade ${data.data_quality_index.grade}` },
+                        (data.audit_confidence?.grade && data.audit_confidence.grade !== 'INDETERMINATE') &&
+                          { l: 'Audit Confidence', v: `Grade ${data.audit_confidence.grade}` },
+                        data.audit_period_label && { l: 'Audit Period', v: data.audit_period_label },
+                      ].filter(Boolean).map(e => (
                         <div key={e.l}>
                           <div style={{ color: DS.dim, fontSize: 9, letterSpacing: '0.1em' }}>{e.l.toUpperCase()}</div>
                           <div style={{ color: DS.cyan, fontFamily: DS.mono, fontSize: 11, fontWeight: 700, marginTop: 2 }}>{e.v}</div>
@@ -3051,7 +3099,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   try {
                     const r = await axios.get('/api/v1/certificate');
                     setCertificate(r.data);
-                  } catch (_) { alert('Generate an audit first, then request the certificate.'); }
+                  } catch (_) { setActionError('Run an audit before requesting the certificate — the EDPC certifies a completed audit.'); }
                   setCertLoading(false);
                 }} disabled={!hasData || certLoading}>
                   {certLoading ? 'GENERATING…' : 'GENERATE EDPC CERTIFICATE'}
@@ -3062,7 +3110,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                     <BtnOutline color={DS.blue} onClick={() => {
                       const shareText = `PREDAIOT Economic Decision Performance Certificate™\n\nAsset: ${certificate.asset_name}\nRating: ${certificate.rating} — ${certificate.rating_label}\nEconomic Efficiency: ${certificate.economic_efficiency}%\nCaptured Value: $${certificate.captured_value}\nAudit Date: ${new Date(certificate.issued_at).toLocaleDateString()}\n\nCertificate ID: ${certificate.certificate_id}\nCertified by PREDAIOT`;
                       navigator.clipboard?.writeText(shareText);
-                      alert('Certificate text copied — ready to paste on LinkedIn or in reports.');
+                      setNotice('Certificate text copied to clipboard.');
                     }}>SHARE CERTIFICATE</BtnOutline>
                   </>
                 )}
