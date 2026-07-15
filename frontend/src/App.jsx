@@ -5,7 +5,7 @@ import ActionPlan from './components/ActionPlan';
 import IntelligenceReport from './components/IntelligenceReport';
 import { Workspace, Zone, useWorkspaceTier, tierAtLeast } from './workspace/Workspace';
 import { fmtMoney, PDS } from './design/ds';   // PL-1.0 L2: the one money voice
-import { Panel, SectionShell } from './design/components';
+import { Panel, SectionShell, StatusDot } from './design/components';
 
 // SPEC-PF rule 2: recharts and every instrument travel in a code-split
 // chunk, loaded on demand — never on the initial path.
@@ -2150,124 +2150,114 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           })()}
 
           {/* ══ S03: Decision Audit Trail™ ══════════════════════════ */}
-          {hasData && activeSection === 'timeline' && (
-            <div>
-              <SectionHeader tag="03" title="Decision Audit Trail™ — Economic Decision Forensics" />
-
-              {/* Summary counter strip */}
-              {log.length > 0 && (() => {
-                const correct  = log.filter(d => d.decision_type?.includes('Correct')).length;
-                const critical = log.filter(d => (d.gap_step || 0) > 100).length;
-                const subopt   = log.filter(d => (d.gap_step || 0) > 0 && (d.gap_step || 0) <= 100).length;
-                return (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 24 }}>
-                    {[
-                      { label: 'Decisions Audited', v: log.length,                  c: DS.text },
-                      { label: 'Correct Decisions', v: correct,                      c: DS.optimal },
-                      { label: 'Suboptimal',         v: subopt,                       c: DS.warning },
-                      { label: '⚠ Critical Decisions',v: critical,                   c: DS.loss },
-                      { label: 'Revenue Destroyed',  v: fmtMoney(data.total_gap_usd, data.currency), c: DS.loss },
-                    ].map(f => (
-                      <Card key={f.label} style={{ textAlign: 'center', borderColor: f.c === DS.loss ? `${DS.loss}25` : DS.border }}>
-                        <Label style={{ fontSize: 9 }}>{f.label}</Label>
-                        <BigNum v={f.v} color={f.c} size={20} />
-                      </Card>
-                    ))}
-                  </div>
-                );
-              })()}
-
-              {log.length === 0 ? <EmptyMsg>Run an audit to populate the Decision Audit Trail.</EmptyMsg> : (
-                <div style={{ maxHeight: 680, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {log.filter(d => (d.gap_step || 0) > 0).slice(0, 60).map((dec, i) => {
-                    const h  = dec.hour || 0;
-                    const ts = `${Math.floor(h/12).toString().padStart(2,'0')}:${((h%12)*5).toString().padStart(2,'0')}`;
-                    const gap = dec.gap_step || 0;
-                    const isCrit = gap > 100, isMod = gap > 20 && !isCrit;
-                    const verdict = gap <= 0 ? 'correct' : isCrit ? 'critical' : isMod ? 'suboptimal' : 'minor';
-                    const vd = {
-                      correct:   { label: '✓ Correct Decision',  color: DS.optimal },
-                      critical:  { label: '✕ Revenue Destroyed',  color: DS.loss },
-                      suboptimal:{ label: '△ Suboptimal Dispatch', color: DS.warning },
-                      minor:     { label: '◎ Minor Leakage',      color: DS.orange },
-                    }[verdict];
-
-                    const rootCause = {
-                      'Missed Arbitrage':   'Static Dispatch Rule — no market-responsive trigger',
-                      'Partial Capture':    'SOC Constraint or partial execution — capacity available but under-utilised',
-                      'Over-Dispatch':      'Aggressive dispatch beyond MILP-optimal level',
-                      'Correct Dispatch':   'Decision matched optimal counterfactual',
-                      'Correct Idle':       'Idle period was economically justified',
-                    }[dec.decision_type] || 'Sub-optimal dispatch strategy';
-
-                    return (
-                      <div key={i} style={{
-                        background: DS.surface,
-                        border: `1px solid ${isCrit ? DS.loss + '40' : DS.border}`,
-                        borderRadius: DS.r12, padding: '14px 18px',
-                        borderLeft: `3px solid ${vd.color}`,
-                      }}>
-                        {/* Header */}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                            <span style={{ color: DS.dim, fontFamily: DS.mono, fontSize: 10 }}>#{i + 1}</span>
-                            <span style={{ color: DS.cyan, fontFamily: DS.mono, fontSize: 14, fontWeight: 700 }}>{ts}</span>
-                            <Pill label={vd.label} color={vd.color} />
-                            {dec.operator_override && <Pill label="Human Override" color={DS.orange} />}
-                          </div>
-                          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                            {gap > 0 && <span style={{ color: DS.loss, fontFamily: DS.mono, fontSize: 14, fontWeight: 700 }}>−{fmtMoney(gap, data.currency)}</span>}
-                            {dec.confidence && <Pill label={`${(dec.confidence*100).toFixed(0)}% conf`} color={DS.blue} />}
-                          </div>
+          {hasData && activeSection === 'timeline' && (() => {
+            const correct  = log.filter(d => d.decision_type?.includes('Correct')).length;
+            const critical = log.filter(d => (d.gap_step || 0) > 100).length;
+            const subopt   = log.filter(d => (d.gap_step || 0) > 0 && (d.gap_step || 0) <= 100).length;
+            const stats = [
+              { label: 'Decisions audited', v: log.length, c: PDS.text },
+              { label: 'Correct', v: correct, c: PDS.recover },
+              { label: 'Suboptimal', v: subopt, c: PDS.warn },
+              { label: 'Critical', v: critical, c: PDS.loss },
+              { label: 'Revenue destroyed', v: fmtMoney(data.total_gap_usd, data.currency), c: PDS.loss },
+            ];
+            const lead = log.length > 0 ? (
+              <>Of {log.length} audited decisions,{' '}
+                <span className="pds-num" style={{ color: PDS.loss, fontWeight: 800 }}>{critical + subopt}</span>{' '}
+                leaked value — destroying{' '}
+                <span className="pds-num" style={{ color: PDS.loss, fontWeight: 700 }}>{fmtMoney(data.total_gap_usd, data.currency)}</span>.
+                Each entry below is one decision, with its counterfactual and MILP-verified recovery.</>
+            ) : undefined;
+            return (
+              <SectionShell kicker="Decision Audit Trail™" title="Decision Forensics"
+                question="Which decisions cost us — and why?" lead={lead}>
+                {log.length === 0 ? (
+                  <div style={{ fontSize: 14, color: PDS.text2 }}>Run an audit to populate the Decision Audit Trail.</div>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', gap: PDS.s6, rowGap: PDS.s3, flexWrap: 'wrap', marginBottom: PDS.s5 }}>
+                      {stats.map((f) => (
+                        <div key={f.label}>
+                          <div className="pds-kicker" style={{ marginBottom: 4 }}>{f.label}</div>
+                          <div className="pds-num" style={{ fontSize: 20, fontWeight: 800, color: f.c }}>{f.v}</div>
                         </div>
-
-                        {/* Data row */}
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 12 }}>
-                          {[
-                            { label: 'Market Price', v: `$${dec.price}/MWh`, c: DS.warning },
-                            { label: 'Asset SOC', v: dec.soc != null ? `${(dec.soc*100).toFixed(0)}%` : '—', c: DS.sub },
-                            { label: 'Optimal Action', v: `Dis ${dec.optimal_action} MW`, c: DS.optimal },
-                            { label: 'Actual Action', v: (dec.actual_action||0) < 0.5 ? 'Idle' : `Dis ${dec.actual_action} MW`, c: (dec.actual_action||0) < 0.5 ? DS.loss : DS.text },
-                            { label: 'Curtailment', v: dec.curtailment_mw ? `${dec.curtailment_mw} MW` : '—', c: DS.orange },
-                          ].map(f => (
-                            <div key={f.label}>
-                              <Label style={{ fontSize: 9, marginBottom: 2 }}>{f.label}</Label>
-                              <div style={{ color: f.c, fontFamily: DS.mono, fontSize: 12, fontWeight: 600 }}>{f.v}</div>
+                      ))}
+                    </div>
+                    <div style={{ maxHeight: 720, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 'var(--ws-card-gap)' }}>
+                      {log.filter(d => (d.gap_step || 0) > 0).slice(0, 60).map((dec, i) => {
+                        const h  = dec.hour || 0;
+                        const ts = `${Math.floor(h/12).toString().padStart(2,'0')}:${((h%12)*5).toString().padStart(2,'0')}`;
+                        const gap = dec.gap_step || 0;
+                        const isCrit = gap > 100, isMod = gap > 20 && !isCrit;
+                        const vd = gap <= 0 ? { label: 'Correct decision', color: PDS.recover }
+                          : isCrit ? { label: 'Revenue destroyed', color: PDS.loss }
+                          : isMod ? { label: 'Suboptimal dispatch', color: PDS.warn }
+                          : { label: 'Minor leakage', color: '#F5945B' };
+                        const rootCause = {
+                          'Missed Arbitrage':   'Static dispatch rule — no market-responsive trigger',
+                          'Partial Capture':    'SOC constraint or partial execution — capacity available but under-utilised',
+                          'Over-Dispatch':      'Aggressive dispatch beyond MILP-optimal level',
+                          'Correct Dispatch':   'Decision matched the optimal counterfactual',
+                          'Correct Idle':       'Idle period was economically justified',
+                        }[dec.decision_type] || 'Sub-optimal dispatch strategy';
+                        return (
+                          <Panel key={i} pad={PDS.s5} accent={false}
+                                 style={{ borderLeft: `3px solid ${vd.color}` }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 10, flexWrap: 'wrap' }}>
+                              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                                <span className="pds-num" style={{ color: PDS.text3, fontSize: 10 }}>#{i + 1}</span>
+                                <span className="pds-num" style={{ color: PDS.accent, fontSize: 14, fontWeight: 700 }}>{ts}</span>
+                                <span style={{ fontSize: 11, fontWeight: 700, color: vd.color, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                  <StatusDot color={vd.color} size={6} /> {vd.label}
+                                </span>
+                                {dec.operator_override && <span style={{ fontSize: 10, color: '#F5945B', letterSpacing: '0.06em' }}>HUMAN OVERRIDE</span>}
+                              </div>
+                              {gap > 0 && <span className="pds-num" style={{ color: PDS.loss, fontSize: 14, fontWeight: 700 }}>−{fmtMoney(gap, data.currency)}</span>}
                             </div>
-                          ))}
-                        </div>
-
-                        {/* Root cause + Counterfactual */}
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                          <div style={{ padding: '8px 12px', background: `${DS.loss}06`, border: `1px solid ${DS.loss}20`, borderRadius: DS.r8 }}>
-                            <Label style={{ fontSize: 9, marginBottom: 3 }}>Root Cause</Label>
-                            <div style={{ color: DS.sub, fontSize: 11, lineHeight: 1.5 }}>{rootCause}</div>
-                          </div>
-                          <div style={{ padding: '8px 12px', background: `${DS.optimal}06`, border: `1px solid ${DS.optimal}20`, borderRadius: DS.r8 }}>
-                            <Label style={{ fontSize: 9, marginBottom: 3 }}>Counterfactual — What Should Have Happened</Label>
-                            <div style={{ color: DS.sub, fontSize: 11, lineHeight: 1.5 }}>
-                              {gap > 0
-                                ? `Dispatching ${dec.optimal_action} MW would have recovered ${fmtMoney(gap, data.currency)} with no physical constraint violation. MILP verified.`
-                                : 'Decision was economically optimal. No improvement available.'}
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 10, marginBottom: 12 }}>
+                              {[
+                                { label: 'Market price', v: `${dec.price} ${data.currency}/MWh`, c: PDS.warn },
+                                { label: 'Asset SOC', v: dec.soc != null ? `${(dec.soc*100).toFixed(0)}%` : '—', c: PDS.text2 },
+                                { label: 'Optimal action', v: `${dec.optimal_action} MW`, c: PDS.recover },
+                                { label: 'Actual action', v: (dec.actual_action||0) < 0.5 ? 'Idle' : `${dec.actual_action} MW`, c: (dec.actual_action||0) < 0.5 ? PDS.loss : PDS.text },
+                                { label: 'Curtailment', v: dec.curtailment_mw ? `${dec.curtailment_mw} MW` : '—', c: '#F5945B' },
+                              ].map((f) => (
+                                <div key={f.label}>
+                                  <div className="pds-kicker" style={{ marginBottom: 3 }}>{f.label}</div>
+                                  <div className="pds-num" style={{ color: f.c, fontSize: 12, fontWeight: 600 }}>{f.v}</div>
+                                </div>
+                              ))}
                             </div>
-                          </div>
-                        </div>
-
-                        {/* Evidence footer */}
-                        {gap > 0 && (
-                          <div style={{ marginTop: 8, display: 'flex', gap: 16, fontSize: 9, color: DS.dim }}>
-                            <span>✓ MILP Verified</span>
-                            <span>✓ Dispatch Log Verified</span>
-                            <span>Importance: {Math.min(100, Math.round((gap / (data.total_gap_usd || 1)) * 1000))}% of total loss</span>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px,100%),1fr))', gap: 10 }}>
+                              <div style={{ padding: '8px 12px', background: PDS.lossSoft, border: `1px solid ${PDS.loss}20`, borderRadius: PDS.rSm }}>
+                                <div className="pds-kicker" style={{ marginBottom: 3 }}>Root cause</div>
+                                <div style={{ color: PDS.text2, fontSize: 11, lineHeight: 1.5 }}>{rootCause}</div>
+                              </div>
+                              <div style={{ padding: '8px 12px', background: PDS.recoverSoft, border: `1px solid ${PDS.recover}20`, borderRadius: PDS.rSm }}>
+                                <div className="pds-kicker" style={{ marginBottom: 3 }}>What should have happened</div>
+                                <div style={{ color: PDS.text2, fontSize: 11, lineHeight: 1.5 }}>
+                                  {gap > 0
+                                    ? `Dispatching ${dec.optimal_action} MW would have recovered ${fmtMoney(gap, data.currency)} with no constraint violation. MILP-verified.`
+                                    : 'Decision was economically optimal. No improvement available.'}
+                                </div>
+                              </div>
+                            </div>
+                            {gap > 0 && (
+                              <div style={{ marginTop: 8, display: 'flex', gap: 16, fontSize: 10, color: PDS.text3 }}>
+                                <span>MILP-verified</span>
+                                <span>Dispatch-log verified</span>
+                                <span>{Math.min(100, Math.round((gap / (data.total_gap_usd || 1)) * 1000))}% of total loss</span>
+                              </div>
+                            )}
+                          </Panel>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </SectionShell>
+            );
+          })()}
 
           {/* ══ S04: Root Cause Analysis ════════════════════════════ */}
           {hasData && activeSection === 'rootcause' && (() => {
@@ -2501,37 +2491,50 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           })()}
 
           {/* ══ S08: Decision Heat Map ══════════════════════════════ */}
-          {hasData && activeSection === 'heatmap' && (
-            <div>
-              <SectionHeader tag="08" title="Decision Heat Map — 24 Hours" />
-              <div style={{ display: 'flex', gap: 16, marginBottom: 20, flexWrap: 'wrap' }}>
-                {[['optimal', DS.optimal, 'Optimal Decision'], ['acceptable', DS.warning, 'Acceptable'], ['poor', DS.orange, 'Poor Decision'], ['critical', DS.loss, 'Critical Loss']].map(([s, c, l]) => (
-                  <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <div style={{ width: 12, height: 12, borderRadius: 3, background: c }} />
-                    <span style={{ color: DS.sub, fontSize: 11 }}>{l}</span>
-                  </div>
-                ))}
-              </div>
-              {(data.heat_map || []).length > 0 ? (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12,1fr)', gap: 5 }}>
-                  {(data.heat_map || []).slice(0, 288).map((cell, i) => {
-                    const c = heatColor(cell.status);
-                    return (
-                      <div key={i} title={`${cell.label} | ${cell.action_taken} | Gap: $${cell.gap_usd}`} style={{
-                        height: 46, borderRadius: DS.r8,
-                        background: `${c}18`, border: `1px solid ${c}50`,
-                        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                        cursor: 'default',
-                      }}>
-                        <div style={{ color: c, fontSize: 8, fontFamily: DS.mono }}>{cell.label}</div>
-                        {cell.gap_usd > 0 && <div style={{ color: DS.loss, fontSize: 7, marginTop: 1 }}>−${cell.gap_usd.toFixed(0)}</div>}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : <EmptyMsg>Run an audit to generate the decision heat map.</EmptyMsg>}
-            </div>
-          )}
+          {hasData && activeSection === 'heatmap' && (() => {
+            const cells = (data.heat_map || []);
+            const degraded = cells.filter((c) => c.status === 'poor' || c.status === 'critical').length;
+            const lead = cells.length > 0 ? (
+              <>Across {cells.length} audited intervals,{' '}
+                <span className="pds-num" style={{ color: PDS.loss, fontWeight: 800 }}>{degraded}</span>{' '}
+                fell to poor or critical decision quality, leaking{' '}
+                <span className="pds-num" style={{ color: PDS.loss, fontWeight: 700 }}>{fmtMoney(data.total_gap_usd, data.currency)}</span>{' '}
+                in total. Each cell is one recorded decision.</>
+            ) : undefined;
+            return (
+              <SectionShell kicker="Decision Heat Map" title="When Decisions Degraded"
+                question="When did our decisions degrade?" lead={lead}>
+                {cells.length === 0 ? (
+                  <div style={{ fontSize: 14, color: PDS.text2 }}>Run an audit to generate the decision heat map.</div>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', gap: 16, marginBottom: 18, flexWrap: 'wrap' }}>
+                      {[['optimal', PDS.recover, 'Optimal'], ['acceptable', PDS.warn, 'Acceptable'], ['poor', '#F5945B', 'Poor'], ['critical', PDS.loss, 'Critical loss']].map(([s, c, l]) => (
+                        <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ width: 12, height: 12, borderRadius: 3, background: c }} />
+                          <span style={{ color: PDS.text3, fontSize: 11 }}>{l}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12,1fr)', gap: 5 }}>
+                      {cells.slice(0, 288).map((cell, i) => {
+                        const c = heatColor(cell.status);
+                        return (
+                          <div key={i} title={`${cell.label} · ${cell.action_taken} · gap ${fmtMoney(cell.gap_usd, data.currency)}`} style={{
+                            height: 46, borderRadius: PDS.rSm, background: `${c}18`, border: `1px solid ${c}50`,
+                            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: 'default',
+                          }}>
+                            <div className="pds-num" style={{ color: c, fontSize: 8 }}>{cell.label}</div>
+                            {cell.gap_usd > 0 && <div className="pds-num" style={{ color: PDS.loss, fontSize: 7, marginTop: 1 }}>−{cell.gap_usd.toFixed(0)}</div>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </SectionShell>
+            );
+          })()}
 
           {/* ══ S09: Economic Action Plan™ ══════════════════════════ */}
           {hasData && activeSection === 'opps' && (
