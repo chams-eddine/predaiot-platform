@@ -258,9 +258,21 @@ context strip (Money-First). Then N1–N3 (title/loading/empty voice) and K1–K
 (SPEC-ID): every screen must read as PREDAIOT without the logo.
 
 **Governance:** each wave that changes ratified behavior lands with a GOV-AL
-amendment; each screen passes the GOV-AC checklist and the Five-Question test
-before commit; the Product Language Matrix (§2) is re-scored per wave until
-every row reads ✅.
+amendment; each screen passes the GOV-AC checklist, the **Language Gate**
+(PL-1.0 §2), and the Five-Question test before commit; the Product Language
+Matrix (§2) is re-scored per wave until every row reads ✅.
+
+**Contract layer (ratify before Wave 1).** The dialects of §4 are elevated to
+a governed contract so the waves are mechanical application, not per-screen
+taste:
+- **`PRODUCT_LANGUAGE_SPEC.md` (PL-1.0)** — the language contract: 19 dialect
+  clauses (PL-xx), the One-Language Law, the Language Gate.
+- **`LANGUAGE_REGISTRY.md` (LR-1.0)** — the lexicon: canonical terms, API
+  bindings, value classes, and the forbidden-synonym grep set.
+- **`EDITORIAL_SYSTEM.md` (ED-1.0)** — the style manual: voice, sentence,
+  number, unit, order, and per-surface copy templates.
+Waves 1–6 implement PL-1.0 / LR-1.0 / ED-1.0; every screen cites the PL-xx,
+LR-§, and ED-§ it satisfies.
 
 ---
 
