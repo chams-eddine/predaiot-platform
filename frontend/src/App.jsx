@@ -4,7 +4,8 @@ import ExecutiveCommandCenter from './components/ExecutiveCommandCenter';
 import ActionPlan from './components/ActionPlan';
 import IntelligenceReport from './components/IntelligenceReport';
 import { Workspace, Zone, useWorkspaceTier, tierAtLeast } from './workspace/Workspace';
-import { fmtMoney } from './design/ds';   // PL-1.0 L2: the one money voice
+import { fmtMoney, PDS } from './design/ds';   // PL-1.0 L2: the one money voice
+import { Panel, SectionShell } from './design/components';
 
 // SPEC-PF rule 2: recharts and every instrument travel in a code-split
 // chunk, loaded on demand — never on the initial path.
@@ -2336,105 +2337,137 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
 
           {/* ══ S06: EDA Metrics ════════════════════════════════════ */}
-          {hasData && activeSection === 'metrics' && (
-            <div>
-              <SectionHeader tag="06" title="Economic Decision Quality Metrics" />
-              <DataQualityPanel dqi={data.data_quality_index} ac={data.audit_confidence} fr={data.forecast_reliability} />
-              {!m ? <EmptyMsg>Run an audit to generate metrics.</EmptyMsg> : (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 16 }}>
-                  {/* Ledger-derived ratios only. EIS composite, Decision Delay
-                      Index, Revenue Stacking Index and Battery Opportunity
-                      Capture were withdrawn under the No-Fabrication rule —
-                      see docs/REMOVED_HEURISTICS.md. */}
-                  {[
-                    { label: 'Economic Decision Efficiency (EDE)', value: fmtPct(m.economic_decision_efficiency), note: 'EDV_actual ÷ EDV_ceiling × 100 (Ch 4.2 domain rules)', color: qualColor(m.economic_decision_efficiency), pct: m.economic_decision_efficiency },
-                    { label: 'Economic Leakage Ratio (ELR)', value: fmtPct(m.economic_leakage_ratio), note: '100 − EDE', color: m.economic_leakage_ratio <= 30 ? DS.optimal : m.economic_leakage_ratio <= 60 ? DS.warning : DS.loss, pct: m.economic_leakage_ratio },
-                    { label: 'Dispatch Accuracy', value: fmtPct(m.dispatch_accuracy), note: 'Steps classified Correct ÷ Total × 100', color: qualColor(m.dispatch_accuracy), pct: m.dispatch_accuracy },
-                    { label: 'Forecast Utilization Index', value: fmtPct(m.forecast_utilization_index), note: 'Steps with a forecast value ÷ Total × 100', color: qualColor(m.forecast_utilization_index), pct: m.forecast_utilization_index },
-                    ...(m.override_rate_pct != null
-                      ? [{ label: 'Override Rate', value: fmtPct(m.override_rate_pct), note: 'Override-flagged steps ÷ Total × 100', color: DS.blue, pct: m.override_rate_pct }]
-                      : []),
-                    ...(m.curtailed_energy_mwh != null
-                      ? [{ label: 'Curtailed Energy', value: `${m.curtailed_energy_mwh} MWh`, note: 'Σ curtailment_mw × Δt (descriptive; not a gap attribution)', color: DS.cyan, pct: null }]
-                      : []),
-                  ].map((metric) => (
-                    <Card key={metric.label}>
-                      <Label>{metric.label}</Label>
-                      <BigNum v={metric.value} color={metric.color} size={28} />
-                      <div style={{ color: DS.dim, fontSize: 10, marginTop: 4 }}>{metric.note}</div>
-                      {metric.pct != null && <ProgressBar pct={metric.pct} color={metric.color} />}
-                    </Card>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ══ S07: Financial Leakage ══════════════════════════════ */}
-          {hasData && activeSection === 'leakage' && (
-            <div>
-              <SectionHeader tag="07" title="Financial Value Leakage" />
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 16, marginBottom: 8 }}>
-                {[
-                  ...(data.gap_attribution
-                    ? [{ label: 'Recoverable Execution Gap — Audit Period', value: fmtMoney(data.gap_attribution.execution_gap, data.currency), color: DS.loss }]
-                    : []),
-                  { label: 'Ceiling Gap — Audit Period', value: fmtMoney(data.total_gap_usd, data.currency), color: data.gap_attribution ? DS.orange : DS.loss },
-                  { label: '7-Day (Linear Est., Ceiling Basis)', value: data.total_gap_usd > 0 ? fmtMoney(data.total_gap_usd * 7, data.currency) : '—', color: DS.orange },
-                  { label: '30-Day (Linear Est., Ceiling Basis)', value: data.total_gap_usd > 0 ? fmtMoney(data.total_gap_usd * 30, data.currency) : '—', color: DS.warning },
-                  { label: '12-Month (Linear Est., Ceiling Basis)', value: data.total_gap_usd > 0 ? fmtMoney(data.total_gap_usd * 365, data.currency) : '—', color: DS.loss },
-                ].map((f) => (
-                  <Card key={f.label} style={{ textAlign: 'center', borderColor: `${f.color}25` }}>
-                    <Label>{f.label}</Label>
-                    <BigNum v={f.value} color={f.color} />
-                  </Card>
-                ))}
-              </div>
-              <div style={{ color: DS.dim, fontSize: 10, lineHeight: 1.5, marginBottom: 20 }}>
-                Ceiling basis = gap vs the Theoretical Economic Ceiling (perfect-foresight upper-bound
-                benchmark). Multi-period figures are linear extrapolations of the audited period, not
-                statistical forecasts.
-                {data.gap_attribution
-                  ? ' The Recoverable Execution Gap is the portion achievable with information available at decision time (Ch 8.2).'
-                  : ' A day-ahead forecast column is required to isolate the operationally recoverable portion.'}
-              </div>
-              <Card>
-                <Label style={{ marginBottom: 16 }}>Top Leakage Sources</Label>
-                {(data.financial_leakage?.top_sources || []).map((src, i) => (
-                  <div key={i} style={{ marginBottom: 14 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                      <span style={{ color: DS.text, fontSize: 12 }}>{src.name}</span>
-                      <span style={{ color: DS.loss, fontFamily: DS.mono, fontWeight: 700, fontSize: 11 }}>{fmtMoney(src.usd, data.currency)} ({src.pct}%)</span>
-                    </div>
-                    <ProgressBar pct={src.pct} color={DS.loss} />
-                  </div>
-                ))}
-                {(data.financial_leakage?.top_sources || []).length === 0 && <EmptyMsg>Run an audit to populate leakage sources.</EmptyMsg>}
-              </Card>
-
-              {/* 30-day history */}
-              <Card style={{ marginTop: 20 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                  <Label>30-Day Trend</Label>
-                  <BtnOutline color={DS.loss} onClick={async () => {
-                    setHistLoading(true);
-                    try { const r = await axios.get('/api/historical'); if (r.data?.history_log) setHistData(r.data.history_log); } catch (_) {}
-                    setHistLoading(false);
-                  }}>
-                    {histLoading ? 'QUERYING…' : 'SYNC HISTORY'}
-                  </BtnOutline>
-                </div>
-                <Suspense fallback={<ChartSkeleton h={200} />}>
-                  <LeakageHistory histData={histData} />
-                </Suspense>
-                {histData.length === 0 && !histLoading && (
-                  <div style={{ textAlign: 'center', color: DS.dim, marginTop: 10, fontSize: 11 }}>
-                    Connect to a production database to display historical trend data.
+          {hasData && activeSection === 'metrics' && (() => {
+            const metrics = m ? [
+              { label: 'Economic Decision Efficiency (EDE)', value: fmtPct(m.economic_decision_efficiency), note: 'EDV captured ÷ EDV ceiling × 100 (Ch 4.2 domain rules)', color: qualColor(m.economic_decision_efficiency), pct: m.economic_decision_efficiency },
+              { label: 'Economic Leakage Ratio (ELR)', value: fmtPct(m.economic_leakage_ratio), note: '100 − EDE', color: m.economic_leakage_ratio <= 30 ? DS.optimal : m.economic_leakage_ratio <= 60 ? DS.warning : DS.loss, pct: m.economic_leakage_ratio },
+              { label: 'Dispatch Accuracy', value: fmtPct(m.dispatch_accuracy), note: 'Steps classified correct ÷ total × 100', color: qualColor(m.dispatch_accuracy), pct: m.dispatch_accuracy },
+              { label: 'Forecast Utilization Index', value: fmtPct(m.forecast_utilization_index), note: 'Steps with a forecast value ÷ total × 100', color: qualColor(m.forecast_utilization_index), pct: m.forecast_utilization_index },
+              ...(m.override_rate_pct != null ? [{ label: 'Override Rate', value: fmtPct(m.override_rate_pct), note: 'Override-flagged steps ÷ total × 100', color: DS.blue, pct: m.override_rate_pct }] : []),
+              ...(m.curtailed_energy_mwh != null ? [{ label: 'Curtailed Energy', value: `${m.curtailed_energy_mwh} MWh`, note: 'Σ curtailment_mw × Δt (descriptive; not a gap attribution)', color: DS.cyan, pct: null }] : []),
+            ] : [];
+            const lead = m ? (
+              <>Decisions captured{' '}
+                <span className="pds-num" style={{ color: qualColor(m.economic_decision_efficiency), fontWeight: 800 }}>{fmtPct(m.economic_decision_efficiency)}</span>{' '}
+                of achievable economic value this period — {fmtPct(m.economic_leakage_ratio, 0)} leaked. Each metric below is a ledger-derived ratio, reproducible from the audit.</>
+            ) : undefined;
+            return (
+              <SectionShell kicker="EDA Metrics" title="Decision Quality Metrics"
+                question="How healthy are our decisions, measured?" lead={lead}>
+                {!m ? (
+                  <div style={{ fontSize: 14, color: PDS.text2 }}>Run an audit to compute the decision-quality metrics.</div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px,100%), 1fr))', gap: 'var(--ws-card-gap)' }}>
+                    {metrics.map((metric) => (
+                      <Panel key={metric.label} pad={PDS.s5}>
+                        <div className="pds-kicker" style={{ marginBottom: 8 }}>{metric.label}</div>
+                        <div className="pds-num" style={{ fontSize: 30, fontWeight: 800, color: metric.color, lineHeight: 1 }}>{metric.value}</div>
+                        <div style={{ color: PDS.text3, fontSize: 10, marginTop: 8, lineHeight: 1.5 }}>{metric.note}</div>
+                        {metric.pct != null && (
+                          <div style={{ height: 4, background: PDS.hairline, borderRadius: 2, overflow: 'hidden', marginTop: 12 }}>
+                            <div style={{ width: '100%', height: '100%', background: metric.color, borderRadius: 2, opacity: 0.85,
+                                          transform: `scaleX(${Math.min(100, metric.pct || 0) / 100})`, transformOrigin: 'left',
+                                          transition: 'transform var(--pds-dur-slow) var(--pds-ease)' }} />
+                          </div>
+                        )}
+                      </Panel>
+                    ))}
                   </div>
                 )}
-              </Card>
-            </div>
-          )}
+                <div style={{ marginTop: 'var(--ws-zone-gap)' }}>
+                  <DataQualityPanel dqi={data.data_quality_index} ac={data.audit_confidence} fr={data.forecast_reliability} />
+                </div>
+              </SectionShell>
+            );
+          })()}
+
+          {/* ══ S07: Financial Leakage ══════════════════════════════ */}
+          {hasData && activeSection === 'leakage' && (() => {
+            const exec = data.gap_attribution ? data.gap_attribution.execution_gap : null;
+            const sources = data.financial_leakage?.top_sources || [];
+            const maxSrc = sources.reduce((mx, s) => Math.max(mx, s.pct || 0), 0) || 1;
+            const lead = (
+              <>This asset leaked{' '}
+                <span className="pds-num" style={{ color: PDS.loss, fontWeight: 800 }}>{fmtMoney(data.total_gap_usd, data.currency)}</span>{' '}
+                against the perfect-foresight ceiling this period
+                {exec != null && <>, of which <span className="pds-num" style={{ color: PDS.recover, fontWeight: 700 }}>{fmtMoney(Math.abs(exec), data.currency)}</span> was recoverable with information available at decision time</>}.
+                Basis: recorded period only — no forward projection.</>
+            );
+            return (
+              <SectionShell kicker="Financial Leakage" title="Value Leakage"
+                question="How much are we losing — and where?" lead={lead}>
+                {/* Recorded-period money only. The 7/30/365-day linear
+                    extrapolations were removed (PL-1.0 LR §5 / SPEC-QA Q9). */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 420px))', justifyContent: 'start', gap: 'var(--ws-card-gap)' }}>
+                  {exec != null && (
+                    <Panel pad={PDS.s5}>
+                      <div className="pds-kicker" style={{ marginBottom: 8 }}>Recoverable Execution Gap</div>
+                      <div className="pds-num" style={{ fontSize: 34, fontWeight: 800, color: PDS.loss, lineHeight: 1 }}>{fmtMoney(Math.abs(exec), data.currency)}</div>
+                      <div style={{ fontSize: 11, color: PDS.text3, marginTop: 8 }}>achievable with the day-ahead forecast (Ch 8.2)</div>
+                    </Panel>
+                  )}
+                  <Panel pad={PDS.s5}>
+                    <div className="pds-kicker" style={{ marginBottom: 8 }}>Ceiling Gap</div>
+                    <div className="pds-num" style={{ fontSize: 34, fontWeight: 800, color: exec != null ? PDS.warn : PDS.loss, lineHeight: 1 }}>{fmtMoney(data.total_gap_usd, data.currency)}</div>
+                    <div style={{ fontSize: 11, color: PDS.text3, marginTop: 8 }}>vs the perfect-foresight upper bound{data.gap_attribution ? '' : ' — a forecast column isolates the recoverable portion'}</div>
+                  </Panel>
+                </div>
+
+                {/* Top leakage sources — ranked exhibit. */}
+                <div style={{ marginTop: 'var(--ws-zone-gap)' }}>
+                  <div className="pds-kicker" style={{ marginBottom: 14 }}>Where it leaked — top sources</div>
+                  {sources.length === 0 ? (
+                    <div style={{ fontSize: 12, color: PDS.text3 }}>No leakage-source decomposition recorded for this audit.</div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 860 }}>
+                      {sources.map((src, i) => (
+                        <div key={src.name} style={{ display: 'flex', gap: 18, alignItems: 'baseline' }}>
+                          <span className="pds-num" style={{ fontSize: 12, color: PDS.text3, width: 22, flexShrink: 0 }}>{String(i + 1).padStart(2, '0')}</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, marginBottom: 7 }}>
+                              <span style={{ fontSize: 14, color: PDS.text, fontWeight: i === 0 ? 700 : 500 }}>{src.name}</span>
+                              <span className="pds-num" style={{ fontSize: 13, color: PDS.loss, fontWeight: 700, flexShrink: 0 }}>
+                                {fmtMoney(src.usd, data.currency)}<span style={{ color: PDS.text3, fontWeight: 400 }}> · {fmtPct(src.pct, 0)}</span>
+                              </span>
+                            </div>
+                            <div style={{ height: 3, background: PDS.hairline, borderRadius: 2, overflow: 'hidden' }}>
+                              <div style={{ width: '100%', height: '100%', background: PDS.loss, borderRadius: 2, opacity: i === 0 ? 0.9 : 0.55,
+                                            transform: `scaleX(${Math.min(100, (src.pct || 0) / maxSrc)})`, transformOrigin: 'left',
+                                            transition: 'transform var(--pds-dur-slow) var(--pds-ease)' }} />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Recorded leakage history (real periods, not a projection). */}
+                <div style={{ marginTop: 'var(--ws-zone-gap)' }}>
+                  <Panel pad={PDS.s5}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 12, flexWrap: 'wrap' }}>
+                      <div className="pds-kicker">Recorded leakage history</div>
+                      <button onClick={async () => {
+                        setHistLoading(true);
+                        try { const r = await axios.get('/api/historical'); if (r.data?.history_log) setHistData(r.data.history_log); } catch (_) {}
+                        setHistLoading(false);
+                      }} style={{ background: 'none', border: `1px solid ${PDS.border}`, color: PDS.text2, borderRadius: PDS.rSm, padding: '5px 12px', cursor: 'pointer', fontSize: 10, letterSpacing: '0.1em', fontWeight: 700 }}>
+                        {histLoading ? 'QUERYING…' : 'SYNC HISTORY'}
+                      </button>
+                    </div>
+                    <Suspense fallback={<ChartSkeleton h={200} />}>
+                      <LeakageHistory histData={histData} />
+                    </Suspense>
+                    {histData.length === 0 && !histLoading && (
+                      <div style={{ fontSize: 11, color: PDS.text3, marginTop: 10 }}>
+                        Connect a production database to display recorded historical periods.
+                      </div>
+                    )}
+                  </Panel>
+                </div>
+              </SectionShell>
+            );
+          })()}
 
           {/* ══ S08: Decision Heat Map ══════════════════════════════ */}
           {hasData && activeSection === 'heatmap' && (
