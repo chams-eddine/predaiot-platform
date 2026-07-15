@@ -1,10 +1,23 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import axios from 'axios';
-import {
-  BarChart, Bar, AreaChart, Area, XAxis, YAxis,
-  CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell,
-  ComposedChart,
-} from 'recharts';
+import ExecutiveCommandCenter from './components/ExecutiveCommandCenter';
+import ActionPlan from './components/ActionPlan';
+import IntelligenceReport from './components/IntelligenceReport';
+import { Workspace, Zone, useWorkspaceTier, tierAtLeast } from './workspace/Workspace';
+import { fmtMoney, PDS } from './design/ds';   // PL-1.0 L2: the one money voice
+import { Panel, SectionShell, StatusDot } from './design/components';
+
+// SPEC-PF rule 2: recharts and every instrument travel in a code-split
+// chunk, loaded on demand — never on the initial path.
+const chartsModule = () => import('./instruments/charts');
+const FinancialTimeline = lazy(() => chartsModule().then((m) => ({ default: m.FinancialTimeline })));
+const LeakageFlow       = lazy(() => chartsModule().then((m) => ({ default: m.LeakageFlow })));
+const DispatchCurve     = lazy(() => chartsModule().then((m) => ({ default: m.DispatchCurve })));
+const LeakageHistory    = lazy(() => chartsModule().then((m) => ({ default: m.LeakageHistory })));
+const LiveGapFlow       = lazy(() => chartsModule().then((m) => ({ default: m.LiveGapFlow })));
+const LiveCaptureScore  = lazy(() => chartsModule().then((m) => ({ default: m.LiveCaptureScore })));
+
+import { ChartSkeleton } from './instruments/theme';
 
 // ══════════════════════════════════════════════════════════════════════
 // TRIAL GATE — 7-day free diagnostic token (lead capture)
@@ -88,49 +101,43 @@ function useIsMobile() {
 // ══════════════════════════════════════════════════════════════════════
 // DESIGN SYSTEM — PREDAIOT Economic Decision Audit™
 // ══════════════════════════════════════════════════════════════════════
+// Legacy inline-style token object. Its hex VALUES now mirror the PREDAIOT
+// design system (design/tokens.css) so every section that styles via `DS`
+// inherits the quiet, premium palette at once — while `${DS.color}30` alpha
+// concatenation keeps working (raw hex, not var() refs). Semantic source of
+// truth remains tokens.css / PDS; this is the bridge for legacy inline styles.
 const DS = {
-  bg:           '#030508',
-  bgRaised:     '#080c12',
+  bg:           '#06090F',   // --pds-bg-0 (matches index.css canvas)
+  bgRaised:     '#0E1420',   // --pds-panel
   surface:      'rgba(255,255,255,0.025)',
   surfaceHi:    'rgba(255,255,255,0.05)',
-  border:       'rgba(255,255,255,0.06)',
-  borderHi:     'rgba(255,255,255,0.14)',
+  border:       'rgba(255,255,255,0.07)',
+  borderHi:     'rgba(255,255,255,0.15)',
 
-  optimal:  '#00E676',
-  warning:  '#FFD600',
-  loss:     '#FF1744',
-  blue:     '#4BBFFF',
-  cyan:     '#00E5FF',
-  orange:   '#FF6D00',
-  purple:   '#BB86FC',
+  optimal:  '#2FD69B',   // --pds-recover  (was neon #00E676)
+  warning:  '#F3B24C',   // --pds-warn     (was pure #FFD600)
+  loss:     '#FF5C7A',   // --pds-loss     (was neon #FF1744)
+  blue:     '#5AA9FF',   // --pds-info
+  cyan:     '#34E0C8',   // --pds-accent   (signature teal, was #00E5FF)
+  orange:   '#F5945B',   // --pds-grade-d
+  purple:   '#7C9CFF',   // --pds-dec-recovery
 
-  text:    '#E8EAF0',
-  sub:     '#8A94A6',
-  dim:     '#4A5468',
+  text:    '#EAF1F8',    // --pds-text
+  sub:     '#97A6BC',    // --pds-text-2
+  dim:     '#7A89A3',    // --pds-text-3
+  seal:    '#E4C674',    // --pds-seal (certificate gold)
 
   mono: "'JetBrains Mono','Fira Code','Courier New',monospace",
   sans: "'Inter','Segoe UI',sans-serif",
-  r8: '8px', r12: '12px', r16: '16px', r20: '20px',
+  r8: '10px', r12: '14px', r16: '18px', r20: '24px',   // --pds radii
 };
 
 // ── Utilities ────────────────────────────────────────────────────────
-const fmtUSD = (n) => {
-  if (n == null) return '—';
-  const abs = Math.abs(n);
-  if (abs >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `$${(n / 1e3).toFixed(1)}k`;
-  return `$${n.toFixed(2)}`;
-};
-
-// Currency-aware money: "$1.2k" for USD, "1.2k OMR" for detected currencies.
-const fmtMoney = (n, cur) => {
-  const s = fmtUSD(n);
-  if (!cur || cur === 'USD' || s === '—') return s;
-  return `${s.slice(1)} ${cur}`;
-};
+// Money speaks in ONE voice product-wide (PL-1.0 L2 / M1): the institutional
+// formatter from the design system ("6.7K USD"), not the legacy "$6.7k".
+// fmtMoney(x, data.currency) legacy calls are re-pointed to fmtMoney(x, currency).
 const fmtPct = (n, decimals = 1) => n == null ? '—' : `${Number(n).toFixed(decimals)}%`;
 const riskColor = (r) => r === 'Low' ? DS.optimal : r === 'Moderate' ? DS.warning : DS.loss;
-const riskEmoji = (r) => r === 'Low' ? '🟢' : r === 'Moderate' ? '🟡' : '🔴';
 const heatColor = (s) => ({
   optimal: DS.optimal, acceptable: DS.warning, poor: DS.orange, critical: DS.loss,
 }[s] || DS.dim);
@@ -153,13 +160,6 @@ const Label = ({ children, style }) => (
   }}>{children}</div>
 );
 
-const BigNum = ({ v, color, size = 26 }) => (
-  <div style={{
-    color: color || DS.text, fontSize: size, fontWeight: 700, fontFamily: DS.mono,
-    lineHeight: 1.1, whiteSpace: 'nowrap',
-  }}>{v}</div>
-);
-
 const Pill = ({ label, color }) => (
   <span style={{
     display: 'inline-block', padding: '3px 10px', borderRadius: 20,
@@ -168,18 +168,11 @@ const Pill = ({ label, color }) => (
   }}>{label}</span>
 );
 
-const Divider = ({ style }) => <div style={{ height: 1, background: DS.border, margin: '16px 0', ...style }} />;
-
-const SectionHeader = ({ tag, title }) => (
-  <div style={{ display: 'flex', alignItems: 'baseline', gap: 14, marginBottom: 24 }}>
-    {tag && <span style={{ color: DS.dim, fontFamily: DS.mono, fontSize: 10, letterSpacing: '0.25em' }}>EDA-{tag}</span>}
-    <h2 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: DS.text, letterSpacing: '0.12em', textTransform: 'uppercase' }}>{title}</h2>
-  </div>
-);
-
 const EmptyMsg = ({ children }) => (
   <div style={{ textAlign: 'center', color: DS.dim, padding: '48px 0', fontSize: 12 }}>{children}</div>
 );
+
+const Divider = ({ style }) => <div style={{ height: 1, background: DS.border, margin: '16px 0', ...style }} />;
 
 const BtnOutline = ({ color, children, onClick, disabled, style }) => (
   <button onClick={onClick} disabled={disabled} style={{
@@ -187,15 +180,8 @@ const BtnOutline = ({ color, children, onClick, disabled, style }) => (
     color: disabled ? DS.dim : color, border: `1px solid ${disabled ? DS.dim : color}`,
     borderRadius: DS.r8, cursor: disabled ? 'not-allowed' : 'pointer',
     fontSize: 11, letterSpacing: '0.1em', fontWeight: 700,
-    fontFamily: DS.sans, transition: 'all 0.15s', ...style,
+    fontFamily: DS.sans, ...style,
   }}>{children}</button>
-);
-
-// ── Progress Bar ─────────────────────────────────────────────────────
-const ProgressBar = ({ pct, color }) => (
-  <div style={{ height: 5, background: DS.border, borderRadius: 3, marginTop: 8, overflow: 'hidden' }}>
-    <div style={{ width: `${Math.min(100, pct || 0)}%`, height: '100%', background: color, borderRadius: 3, transition: 'width 0.6s ease' }} />
-  </div>
 );
 
 // ══════════════════════════════════════════════════════════════════════
@@ -244,14 +230,16 @@ const COLUMN_GUIDE = [
 const FileUploadZone = ({ onFile, loading }) => {
   const [dragging, setDragging] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
+  const [fileErr, setFileErr] = useState(null);   // SPEC-IX: inline, not alert()
   const inputRef = useRef(null);
 
   const process = (file) => {
     if (!file) return;
     if (!/\.(csv|xlsx|xls)$/i.test(file.name)) {
-      alert('Please upload a CSV or Excel (.xlsx / .xls) file.');
+      setFileErr('That file type is not supported. Provide a CSV or Excel (.xlsx / .xls) export of dispatch and price data.');
       return;
     }
+    setFileErr(null);
     onFile(file);
   };
 
@@ -274,11 +262,15 @@ const FileUploadZone = ({ onFile, loading }) => {
           borderRadius: DS.r16, padding: '52px 40px', textAlign: 'center',
           background: dragging ? `${DS.cyan}08` : DS.surface,
           cursor: loading ? 'wait' : 'pointer',
-          transition: 'all 0.2s ease',
         }}
       >
         <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls" onChange={(e) => process(e.target.files[0])} style={{ display: 'none' }} />
-        <div style={{ fontSize: 36, marginBottom: 14 }}>📊</div>
+        {fileErr && (
+          <div role="alert" style={{ color: DS.loss, fontSize: 12, lineHeight: 1.55, marginBottom: 14,
+                                     maxWidth: 420, marginLeft: 'auto', marginRight: 'auto' }}>
+            {fileErr}
+          </div>
+        )}
         <div style={{ color: DS.text, fontSize: 16, fontWeight: 700, marginBottom: 8 }}>
           {loading ? 'Processing your data…' : 'Drop any energy asset data file here'}
         </div>
@@ -545,70 +537,65 @@ function RealTimePanel({ isSignedIn, onSignIn }) {
 
   if (!isSignedIn) {
     return (
-      <div style={{ padding: 40, textAlign: 'center' }}>
-        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Real-Time Economic Intelligence</div>
-        <div style={{ fontSize: 12, color: DS.sub, marginBottom: 18, lineHeight: 1.6 }}>
-          Sign in to stream live events and watch the economic leakage update every few seconds &mdash;
-          computed by the same certified audit engine, marked provisional until a certified audit confirms it.
-        </div>
-        <button onClick={onSignIn} style={primaryBtn}>Sign in &rarr;</button>
-      </div>
+      <SectionShell kicker="Real-Time" title="Live Economic Intelligence"
+        question="What is happening right now?"
+        lead="Sign in to stream live events and watch economic leakage update every few seconds — computed by the same certified audit engine, marked provisional until a certified audit confirms it.">
+        <button onClick={onSignIn} style={{ ...primaryBtn, width: 'auto', padding: '10px 22px' }}>Sign in</button>
+      </SectionShell>
     );
   }
-  const money = (v) => (v == null ? '—' : `${Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${state?.currency || 'OMR'}`);
+  const money = (v) => (v == null ? '—' : `${Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${state?.currency || 'OMR'}`);
   const tile = (label, value, color) => (
-    <div style={{ background: DS.panel, border: `1px solid ${DS.border}`, borderRadius: DS.r8, padding: '16px 20px', minWidth: 190, flex: 1 }}>
-      <div style={{ fontSize: 9, letterSpacing: '0.16em', color: DS.dim, marginBottom: 8 }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 800, color: color || DS.text, fontFamily: DS.mono }}>{value}</div>
-    </div>
+    <Panel pad={PDS.s5} style={{ minWidth: 190, flex: 1 }}>
+      <div className="pds-kicker" style={{ marginBottom: 8 }}>{label}</div>
+      <div className="pds-num" style={{ fontSize: 26, fontWeight: 800, color: color || PDS.text }}>{value}</div>
+    </Panel>
   );
   const s = state || {};
   const insufficient = s.status === 'INSUFFICIENT_EVIDENCE' || s.status === 'NO_STREAM';
   return (
-    <div>
-      <SectionHeader tag="RT" title="REAL-TIME ECONOMIC INTELLIGENCE (PROVISIONAL)" />
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', margin: '10px 0 18px' }}>
+    <SectionShell kicker="Real-Time" title="Live Economic Intelligence"
+      question="What is happening right now?"
+      right={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 11, fontWeight: 700, color: PDS.provisional, letterSpacing: '0.1em' }}>
+        <StatusDot color={PDS.provisional} pulse={running} size={7} /> PROVISIONAL
+      </span>}
+      lead={<>Live economic state, computed by the same certified engine as batch audits and evidence-hashed — provisional until a certified audit confirms it.</>}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: PDS.s5 }}>
         {!running
-          ? <button onClick={start} style={{ ...primaryBtn, width: 'auto', padding: '10px 22px' }}>&#9654; Start live stream</button>
-          : <button onClick={stop} style={{ ...primaryBtn, width: 'auto', padding: '10px 22px', background: DS.loss }}>&#9632; Stop</button>}
-        <span style={{ fontSize: 11, color: running ? DS.optimal : DS.sub }}>
+          ? <button onClick={start} style={{ ...primaryBtn, width: 'auto', padding: '10px 22px' }}>Start live stream</button>
+          : <button onClick={stop} style={{ ...primaryBtn, width: 'auto', padding: '10px 22px', background: PDS.loss }}>Stop</button>}
+        <span style={{ fontSize: 11, color: running ? PDS.recover : PDS.text3 }}>
           {running ? `streaming · ${s.n_events || 0} events in window · updates every 3s` : 'idle'}
         </span>
       </div>
-      {err && <EmptyMsg>{err}</EmptyMsg>}
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        {tile('LIVE LEAKAGE', insufficient ? '—' : money(s.live_leakage), DS.loss)}
-        {tile('LIVE RECOVERABLE', insufficient ? '—' : money(s.live_recoverable), DS.optimal)}
-        {tile('CONFIDENCE', s.confidence_grade ? `${s.confidence_grade}` : '—', _gradeColor(s.confidence_grade))}
+      {err && <div role="alert" style={{ fontSize: 12, color: PDS.loss, marginBottom: PDS.s4 }}>{err}</div>}
+      <div style={{ display: 'flex', gap: 'var(--ws-card-gap)', flexWrap: 'wrap' }}>
+        {tile('Live leakage', insufficient ? '—' : money(s.live_leakage), PDS.loss)}
+        {tile('Live recoverable', insufficient ? '—' : money(s.live_recoverable), PDS.recover)}
+        {tile('Confidence', s.confidence_grade ? `${s.confidence_grade}` : '—', _gradeColor(s.confidence_grade))}
       </div>
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 12 }}>
-        <div style={{ background: DS.panel, border: `1px solid ${DS.border}`, borderRadius: DS.r8, padding: '14px 18px', flex: 2, minWidth: 260 }}>
-          <div style={{ fontSize: 9, letterSpacing: '0.16em', color: DS.dim, marginBottom: 8 }}>TOP ACTION</div>
-          <div style={{ fontSize: 13, color: DS.text }}>
+      <div style={{ display: 'flex', gap: 'var(--ws-card-gap)', flexWrap: 'wrap', marginTop: 'var(--ws-card-gap)' }}>
+        <Panel pad={PDS.s5} style={{ flex: 2, minWidth: 260 }}>
+          <div className="pds-kicker" style={{ marginBottom: 8 }}>Top action</div>
+          <div style={{ fontSize: 13, color: PDS.text }}>
             {s.top_action
-              ? <><b style={{ color: DS.cyan }}>{s.top_action.decision_type}</b> &mdash; {s.top_action.statement}</>
+              ? <><b style={{ color: PDS.accent }}>{s.top_action.decision_type}</b> — {s.top_action.statement}</>
               : (insufficient ? 'Awaiting sufficient events…' : 'No material action in the current window.')}
           </div>
-        </div>
-        <div style={{ background: DS.panel, border: `1px solid ${DS.border}`, borderRadius: DS.r8, padding: '14px 18px', flex: 1, minWidth: 220 }}>
-          <div style={{ fontSize: 9, letterSpacing: '0.16em', color: DS.dim, marginBottom: 8 }}>EVIDENCE STATUS</div>
-          <div style={{ fontSize: 11, color: DS.warning, fontWeight: 700 }}>PROVISIONAL</div>
-          <div style={{ fontSize: 10, color: DS.sub, marginTop: 4 }}>not yet certified by a batch audit</div>
-          {s.evidence_sha256 && <div style={{ fontSize: 10, color: DS.dim, marginTop: 6, fontFamily: DS.mono }}>evidence {String(s.evidence_sha256).slice(0, 16)}…</div>}
-          {s.dqi != null && <div style={{ fontSize: 10, color: DS.dim, marginTop: 2 }}>DQI {(s.dqi * 100).toFixed(1)}% · AC {(s.audit_confidence * 100).toFixed(1)}%</div>}
-        </div>
+        </Panel>
+        <Panel pad={PDS.s5} style={{ flex: 1, minWidth: 220 }}>
+          <div className="pds-kicker" style={{ marginBottom: 8 }}>Evidence status</div>
+          <div style={{ fontSize: 11, color: PDS.provisional, fontWeight: 700 }}>PROVISIONAL</div>
+          <div style={{ fontSize: 10, color: PDS.text2, marginTop: 4 }}>not yet certified by a batch audit</div>
+          {s.evidence_sha256 && <div className="pds-num" style={{ fontSize: 10, color: PDS.text3, marginTop: 6 }}>evidence {String(s.evidence_sha256).slice(0, 16)}…</div>}
+          {s.dqi != null && <div className="pds-num" style={{ fontSize: 10, color: PDS.text3, marginTop: 2 }}>DQI {(s.dqi * 100).toFixed(1)}% · AC {(s.audit_confidence * 100).toFixed(1)}%</div>}
+        </Panel>
       </div>
-      {hist.length > 1 && (
-        <div style={{ marginTop: 14, fontSize: 10, color: DS.dim }}>
-          leakage trace ({hist.length}): {hist.slice(-12).map((x) => Number(x).toFixed(0)).join('  →  ')}
-        </div>
-      )}
-      <div style={{ marginTop: 16, fontSize: 10, color: DS.dim, lineHeight: 1.6 }}>
-        Live states are computed by the SAME certified Layer-2 audit engine used for CSV audits &mdash;
-        no parallel logic. Every value is provisional and evidence-hashed until a certified batch audit confirms it.
-        Raw telemetry is a drill-down only; the surface shows economic meaning.
+      <div style={{ marginTop: PDS.s5, fontSize: 10, color: PDS.text3, lineHeight: 1.6, maxWidth: 'var(--pds-prose-max)' }}>
+        Live states are computed by the same certified Layer-2 audit engine used for CSV audits — no parallel logic.
+        Every value is provisional and evidence-hashed until a certified batch audit confirms it.
       </div>
-    </div>
+    </SectionShell>
   );
 }
 
@@ -624,41 +611,41 @@ function AuditHistoryPanel({ isSignedIn, onLoad, onSignIn, busyId }) {
   }, [isSignedIn]);
   if (!isSignedIn) {
     return (
-      <div style={{ padding: 40, textAlign: 'center' }}>
-        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Your audits, remembered</div>
-        <div style={{ fontSize: 12, color: DS.sub, marginBottom: 18, lineHeight: 1.6 }}>
-          Sign in and every Economic Decision Audit you run is stored under your organization &mdash;
-          reload any past audit bit-for-bit, and see what your assets keep leaking.
-        </div>
-        <button onClick={onSignIn} style={primaryBtn}>Sign in &rarr;</button>
-      </div>
+      <SectionShell kicker="Audit History" title="Economic Memory"
+        question="How do audits compare over time?"
+        lead="Sign in and every Economic Decision Audit you run is stored under your organization \u2014 reload any past audit bit-for-bit, and see what your assets keep leaking.">
+        <button onClick={onSignIn} style={{ ...primaryBtn, width: 'auto', padding: '10px 22px' }}>Sign in</button>
+      </SectionShell>
     );
   }
-  const money = (v, ccy) => (v == null ? '\u2014' : `${Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${ccy || ''}`);
-  const th = { textAlign: 'left', padding: '8px 10px', fontSize: 9, letterSpacing: '0.14em', color: DS.dim, borderBottom: `1px solid ${DS.border}` };
-  const td = { padding: '9px 10px', fontSize: 11, borderBottom: `1px solid ${DS.border}22`, whiteSpace: 'nowrap' };
+  const money = (v, ccy) => (v == null ? '\u2014' : `${Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${ccy || ''}`);
+  const th = { textAlign: 'left', padding: '8px 10px', fontSize: 9, letterSpacing: '0.14em', color: PDS.text3, borderBottom: `1px solid ${PDS.border}` };
+  const td = { padding: '9px 10px', fontSize: 11, borderBottom: `1px solid ${PDS.hairline}`, whiteSpace: 'nowrap' };
+  const memLead = (memory && memory.audits > 0) ? (
+    <>Across{' '}<span className="pds-num" style={{ color: PDS.text, fontWeight: 700 }}>{memory.audits}</span> stored audits, PREDAIOT has identified{' '}
+      <span className="pds-num" style={{ color: PDS.loss, fontWeight: 800 }}>{money(memory.total_gap_identified, memory.currency)}</span> of leakage \u2014{' '}
+      <span className="pds-num" style={{ color: PDS.recover, fontWeight: 700 }}>{money(memory.total_recoverable_identified, memory.currency)}</span> recoverable.</>
+  ) : undefined;
   return (
-    <div>
-      <SectionHeader tag="EDA-15" title="AUDIT HISTORY \u2014 ECONOMIC MEMORY" />
-      {err && <EmptyMsg>{err}</EmptyMsg>}
+    <SectionShell kicker="Audit History" title="Economic Memory"
+      question="How do assets compare over time?" lead={memLead}>
+      {err && <div role="alert" style={{ fontSize: 12, color: PDS.loss, marginBottom: PDS.s4 }}>{err}</div>}
       {memory && memory.audits > 0 && (
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', margin: '14px 0 18px' }}>
+        <div style={{ display: 'flex', gap: PDS.s6, rowGap: PDS.s3, flexWrap: 'wrap', marginBottom: PDS.s5 }}>
           {[
-            ['AUDITS ON RECORD', memory.audits],
-            ['LEAKAGE IDENTIFIED', money(memory.total_gap_identified, memory.currency)],
-            ['RECOVERABLE IDENTIFIED', money(memory.total_recoverable_identified, memory.currency)],
-            ['MEAN DQI', memory.mean_dqi != null ? `${(memory.mean_dqi * 100).toFixed(1)}%` : '\u2014'],
-            ['RECURRING ROOT CAUSE', memory.recurring_top_root_cause ? `${memory.recurring_top_root_cause.cause} (${memory.recurring_top_root_cause.audits}\u00d7)` : '\u2014'],
+            ['Audits on record', memory.audits],
+            ['Mean DQI', memory.mean_dqi != null ? `${(memory.mean_dqi * 100).toFixed(1)}%` : '\u2014'],
+            ['Recurring root cause', memory.recurring_top_root_cause ? `${memory.recurring_top_root_cause.cause} (${memory.recurring_top_root_cause.audits}\u00d7)` : '\u2014'],
           ].map(([label, val]) => (
-            <div key={label} style={{ background: DS.panel, border: `1px solid ${DS.border}`, borderRadius: DS.r8, padding: '12px 16px', minWidth: 150 }}>
-              <div style={{ fontSize: 9, letterSpacing: '0.14em', color: DS.dim, marginBottom: 6 }}>{label}</div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: DS.cyan }}>{String(val)}</div>
+            <div key={label}>
+              <div className="pds-kicker" style={{ marginBottom: 4 }}>{label}</div>
+              <div className="pds-num" style={{ fontSize: 16, fontWeight: 800, color: PDS.text }}>{String(val)}</div>
             </div>
           ))}
         </div>
       )}
       {memory && memory.audits > 0 && (
-        <div style={{ fontSize: 10, color: DS.dim, marginBottom: 14 }}>{memory.method_note}</div>
+        <div style={{ fontSize: 10, color: PDS.text3, marginBottom: 14 }}>{memory.method_note}</div>
       )}
       {rows === null && !err && <EmptyMsg>Loading history&hellip;</EmptyMsg>}
       {rows && rows.length === 0 && <EmptyMsg>No audits stored yet &mdash; run an audit while signed in and it will appear here.</EmptyMsg>}
@@ -694,7 +681,7 @@ function AuditHistoryPanel({ isSignedIn, onLoad, onSignIn, busyId }) {
           </table>
         </div>
       )}
-    </div>
+    </SectionShell>
   );
 }
 
@@ -719,7 +706,8 @@ function TrialGate({ busy, error, onSubmit, onDismiss, onSignIn, onRegister, ini
   );
   if (mode === 'signin' || mode === 'register') {
     return (
-      <div style={overlayStyle} role="dialog" aria-modal="true">
+      <div style={overlayStyle} role="dialog" aria-modal="true"
+           aria-label={mode === 'signin' ? 'Sign in to PREDAIOT' : 'Create a PREDAIOT organization account'}>
         <div style={cardStyle}>
           <div style={{ fontSize: 10, letterSpacing: '0.2em', color: DS.cyan, marginBottom: 6 }}>
             {mode === 'signin' ? 'SIGN IN' : 'CREATE ORGANIZATION ACCOUNT'}
@@ -764,7 +752,8 @@ function TrialGate({ busy, error, onSubmit, onDismiss, onSignIn, onRegister, ini
     );
   }
   return (
-    <div style={overlayStyle} role="dialog" aria-modal="true">
+    <div style={overlayStyle} role="dialog" aria-modal="true"
+         aria-label="Start your free PREDAIOT economic diagnostic">
       <div style={cardStyle}>
         <div style={{ fontSize: 10, letterSpacing: '0.2em', color: DS.cyan, marginBottom: 6 }}>
           FREE 7-DAY DIAGNOSTIC
@@ -823,7 +812,8 @@ function TrialGate({ busy, error, onSubmit, onDismiss, onSignIn, onRegister, ini
 function TrialExpired({ info, onStartNew, onClose }) {
   const bookingUrl = info?.booking_url || 'mailto:chams@preda-iot.com';
   return (
-    <div style={overlayStyle} role="dialog" aria-modal="true">
+    <div style={overlayStyle} role="dialog" aria-modal="true"
+         aria-label="Your free diagnostic period has ended">
       <div style={cardStyle}>
         <div style={{ fontSize: 10, letterSpacing: '0.2em', color: DS.warning, marginBottom: 6 }}>
           FREE DIAGNOSTIC ENDED
@@ -1027,7 +1017,7 @@ function IngestionNotesBanner({ notes, onDismiss }) {
         ✕
       </button>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <span style={{ fontSize: 14 }}>🧭</span>
+        
         <div style={{ color: DS.cyan, fontSize: 10, fontWeight: 700, letterSpacing: '0.15em' }}>
           INGESTION AUTO-CORRECTIONS APPLIED
         </div>
@@ -1155,332 +1145,26 @@ function IngestionNotesBanner({ notes, onDismiss }) {
 // glow; ComposedChart for the market-vs-action audit; live-telemetry
 // strip; discrepancy timeline; asset performance tiles.
 // ══════════════════════════════════════════════════════════════════════
+// Ops-console palette bridge — values mirror the PREDAIOT tokens (SPEC-DS),
+// exactly like the DS bridge: raw hex so ${color}NN alpha-concat keeps
+// working. The neon set (#00FF9D/#FF3366/#FFD600/#38BDF8) is retired.
 const OPS = {
-  bg:      '#0b1015',
-  card:    '#121820',
-  border:  '#1e2835',
-  green:   '#00FF9D',
-  red:     '#FF3366',
-  amber:   '#FFB020',
-  yellow:  '#FFD600',
-  blue:    '#38BDF8',
-  text:    '#E2E8F0',
-  sub:     '#8B9BB4',
-  dim:     '#4A5568',
+  bg:      '#0A0E16',   // --pds-bg-1
+  card:    '#0E1420',   // --pds-panel
+  border:  '#1B2536',   // --pds-border
+  green:   '#2FD69B',   // --pds-recover
+  red:     '#FF5C7A',   // --pds-loss
+  amber:   '#F3B24C',   // --pds-warn
+  yellow:  '#F3B24C',   // --pds-warn (single caution hue — no second yellow)
+  blue:    '#5AA9FF',   // --pds-info
+  text:    '#EAF1F8',   // --pds-text
+  sub:     '#97A6BC',   // --pds-text-2
+  dim:     '#7A89A3',   // --pds-text-3 (AA)
 };
 
-function OpsFinancialCard({ label, value, color, sub, arrow, glow }) {
-  return (
-    <div style={{
-      background: OPS.card,
-      border: `1px solid ${glow ? OPS.green : OPS.border}`,
-      borderRadius: 10, padding: '18px 20px', marginBottom: 14,
-      boxShadow: glow ? `0 0 30px ${OPS.green}30, inset 0 0 20px ${OPS.green}08` : '0 4px 6px rgba(0,0,0,0.3)',
-      position: 'relative', overflow: 'hidden',
-    }}>
-      {glow && <div style={{
-        position: 'absolute', inset: 0, pointerEvents: 'none',
-        background: `radial-gradient(circle at top left, ${OPS.green}10, transparent 60%)`,
-      }} />}
-      <div style={{
-        color: OPS.sub, fontSize: 10, letterSpacing: '0.12em',
-        textTransform: 'uppercase', marginBottom: 6,
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-      }}>
-        <span>{label}</span>
-        {arrow && <span style={{ color, fontSize: 14 }}>{arrow}</span>}
-      </div>
-      <div style={{
-        color, fontSize: glow ? 34 : 30, fontWeight: 800,
-        fontFamily: DS.mono, letterSpacing: '-0.02em',
-        textShadow: `0 0 12px ${color}30`,
-        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-      }}>{value}</div>
-      {sub && <div style={{ color: OPS.sub, fontSize: 10, marginTop: 4 }}>{sub}</div>}
-    </div>
-  );
-}
+// (S01 ops-console widget cluster removed — the Executive Experience is a
+//  six-act decision narrative in components/ExecutiveCommandCenter.jsx.)
 
-function DQScoreGauge({ value, count }) {
-  const R = 110, CX = 150, CY = 130;
-  const semiLen = Math.PI * R;
-  const clamped = Math.max(0, Math.min(100, value));
-  const dashLen = (clamped / 100) * semiLen;
-  const pathD   = `M ${CX - R},${CY} A ${R},${R} 0 0,1 ${CX + R},${CY}`;
-  const label   =
-    clamped < 40 ? { text: 'Needs Optimization', color: OPS.amber } :
-    clamped < 70 ? { text: 'Room for Growth',    color: OPS.yellow } :
-                   { text: 'Optimal Performance', color: OPS.green };
-  return (
-    <div style={{ position: 'relative', width: '100%', maxWidth: 340, margin: '0 auto', textAlign: 'center' }}>
-      <svg width="100%" viewBox="0 0 300 175" style={{ display: 'block' }}>
-        <defs>
-          <filter id="dqGlow" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="4" result="b" />
-            <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
-          </filter>
-        </defs>
-        {/* Track */}
-        <path d={pathD} fill="none" stroke="#1a2532" strokeWidth={14} strokeLinecap="round" />
-        {/* Value arc */}
-        <path
-          d={pathD}
-          fill="none"
-          stroke={OPS.green}
-          strokeWidth={14}
-          strokeLinecap="round"
-          strokeDasharray={`${dashLen} ${semiLen}`}
-          filter="url(#dqGlow)"
-        />
-      </svg>
-      <div style={{ position: 'absolute', top: 26, left: 0, right: 0, textAlign: 'center' }}>
-        <div style={{ color: OPS.sub, fontSize: 11, letterSpacing: '0.2em', fontWeight: 600, lineHeight: 1.4 }}>
-          DECISION<br />QUALITY SCORE
-        </div>
-      </div>
-      <div style={{ position: 'absolute', top: 78, left: 0, right: 0, textAlign: 'center' }}>
-        <div style={{
-          fontSize: 60, color: OPS.green, fontWeight: 900,
-          fontFamily: DS.mono, textShadow: `0 0 24px ${OPS.green}70`, lineHeight: 1,
-        }}>
-          {clamped.toFixed(0)}<span style={{ fontSize: 32 }}>%</span>
-        </div>
-      </div>
-      <div style={{ marginTop: 12, color: label.color, fontWeight: 700, fontSize: 15, letterSpacing: '0.03em' }}>
-        {label.text}
-      </div>
-      <div style={{ color: OPS.sub, fontSize: 11, marginTop: 4 }}>
-        Based on {(count || 0).toLocaleString()} decisions (24h)
-      </div>
-    </div>
-  );
-}
-
-function MarketOptimizationChart({ log }) {
-  // Bar sign is derived from edv_actual_step — positive (green) = value captured,
-  // negative (red) = destroyed value at this step.
-  if (!log || log.length === 0) return null;
-  return (
-    <ResponsiveContainer width="100%" height={230}>
-      <ComposedChart data={log} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-        <defs>
-          <linearGradient id="opsPriceFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%"   stopColor={OPS.sub} stopOpacity={0.28} />
-            <stop offset="100%" stopColor={OPS.sub} stopOpacity={0} />
-          </linearGradient>
-        </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke={OPS.border} vertical={false} />
-        <XAxis dataKey="hour" stroke={OPS.sub} tick={{ fill: OPS.sub, fontSize: 9 }} />
-        <YAxis yAxisId="L" stroke={OPS.sub} tick={{ fill: OPS.sub, fontSize: 9 }} tickFormatter={(v) => `$${v}`} />
-        <YAxis yAxisId="R" orientation="right" stroke={OPS.sub} tick={{ fill: OPS.sub, fontSize: 9 }} />
-        <Tooltip
-          contentStyle={{ background: '#0f1318', border: `1px solid ${OPS.border}`, borderRadius: 8, fontSize: 11 }}
-          formatter={(v, name) => [typeof v === 'number' ? `$${v.toFixed(2)}` : v, name]}
-          labelFormatter={(h) => `Step ${h}`}
-        />
-        <Area yAxisId="L" type="monotone" dataKey="price" name="Market Price"
-              stroke={OPS.sub} strokeWidth={2} fill="url(#opsPriceFill)" dot={false} />
-        <Bar yAxisId="R" dataKey="edv_actual_step" name="AI Action">
-          {log.map((entry, i) => (
-            <Cell key={i} fill={(entry.edv_actual_step || 0) >= 0 ? OPS.green : OPS.red} />
-          ))}
-        </Bar>
-      </ComposedChart>
-    </ResponsiveContainer>
-  );
-}
-
-function LiveTelemetryStrip({ assetName, soc, power, temp }) {
-  const cell = (label, val, color) => (
-    <div style={{ textAlign: 'center', minWidth: 62 }}>
-      <div style={{ color: OPS.sub, fontSize: 10, letterSpacing: '0.1em' }}>{label}</div>
-      <div style={{ color, fontFamily: DS.mono, fontSize: 16, fontWeight: 800, textShadow: `0 0 10px ${color}40` }}>{val}</div>
-    </div>
-  );
-  return (
-    <div style={{
-      background: OPS.card, border: `1px solid ${OPS.border}`, borderRadius: 12,
-      padding: '14px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    }}>
-      <div>
-        <div style={{ color: OPS.text, fontSize: 13, fontWeight: 700 }}>{assetName || 'Asset'}</div>
-        <div style={{ color: OPS.sub, fontSize: 10, letterSpacing: '0.05em', marginTop: 2 }}>Live Telemetry</div>
-      </div>
-      <div style={{ display: 'flex', gap: 22 }}>
-        {cell('SoC',   soc   != null ? `${soc.toFixed(0)}%`    : '—', soc   != null ? OPS.green : OPS.sub)}
-        {cell('Power', power != null ? `${power.toFixed(0)} MW` : '—', power != null ? OPS.green : OPS.sub)}
-        {cell('Temp',  temp  != null ? `${temp.toFixed(0)}°C`  : '—', temp  != null ? OPS.green : OPS.sub)}
-      </div>
-    </div>
-  );
-}
-
-function DecisionDiscrepancyStrip({ log }) {
-  if (!log || log.length === 0) {
-    return <div style={{ color: OPS.sub, fontSize: 11 }}>—</div>;
-  }
-  return (
-    <div>
-      <div style={{ display: 'flex', width: '100%', height: 26, borderRadius: 4, overflow: 'hidden', border: `1px solid ${OPS.border}` }}>
-        {log.map((r, i) => {
-          const gap = r.gap_step || 0;
-          const opt = r.edv_optimal_step || 0;
-          const color = gap <= 0 ? OPS.green
-                      : (opt > 0 && gap / opt > 0.7) ? OPS.red
-                      : OPS.yellow;
-          return <div key={i} title={`Step ${r.hour} · gap $${gap.toFixed(2)}`}
-                      style={{ flex: 1, background: color, opacity: 0.9 }} />;
-        })}
-      </div>
-      <div style={{ display: 'flex', gap: 14, fontSize: 10, color: OPS.sub, marginTop: 8 }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ width: 10, height: 10, background: OPS.green, borderRadius: 2 }} />Optimal Dispatch
-        </span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ width: 10, height: 10, background: OPS.yellow, borderRadius: 2 }} />Inefficient Charging
-        </span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ width: 10, height: 10, background: OPS.red, borderRadius: 2 }} />Missed Opportunity
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function AssetPerformanceTiles({ data, log, m }) {
-  // Ledger-derived tiles only. The former "Availability" (max(85, 100 −
-  // override%)) and "MTD Revenue" (period × 30) were fabricated constructs;
-  // the discharge/charge ratio was structurally meaningless for file audits
-  // (actual_action carries discharge only). Removed — docs/REMOVED_HEURISTICS.md.
-  const opsEff = m?.economic_decision_efficiency ?? ((data.dq_score || 0) * 100);
-  const overrideRate = m?.override_rate_pct;
-  const curtailedMwh = m?.curtailed_energy_mwh;
-  const captured = data.edv_actual_total;
-
-  const tile = (label, value, color) => (
-    <div style={{
-      background: OPS.card, border: `1px solid ${OPS.border}`, borderRadius: 10,
-      padding: '14px 16px',
-    }}>
-      <div style={{ color: OPS.sub, fontSize: 10, letterSpacing: '0.12em' }}>{label}</div>
-      <div style={{ color, fontFamily: DS.mono, fontSize: 22, fontWeight: 800, marginTop: 4 }}>
-        {value}
-      </div>
-    </div>
-  );
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-      {tile('Capture Efficiency (EDE)', `${(opsEff || 0).toFixed(1)}%`, OPS.green)}
-      {tile('Override Rate', overrideRate != null ? `${overrideRate.toFixed(1)}%` : '—', OPS.blue)}
-      {tile('Curtailed Energy', curtailedMwh != null ? `${curtailedMwh.toFixed(1)} MWh` : '—', OPS.sub)}
-      {tile('Captured Value (Period)', captured != null ? fmtMoney(captured, data.currency) : '—', captured >= 0 ? OPS.green : OPS.red)}
-    </div>
-  );
-}
-
-function OpsConsoleExec({ data, log, m, ingestionNotes, onDismissNotes }) {
-  // Benchmark hierarchy (Scientific Hardening item 2): the optimum is the
-  // Theoretical Economic Ceiling — a perfect-foresight UPPER BOUND, not an
-  // achievable target. Only the execution gap (Ch 8.2 split, present when the
-  // source data carried a forecast column) is presented as recoverable.
-  const potential  = data.edv_optimal_total || 0;
-  const captured   = data.edv_actual_total || 0;
-  const destroyed  = data.total_gap_usd || 0;
-  const execGap    = data.gap_attribution?.execution_gap ?? null;
-  const cur        = data.currency;
-  const dqPct      = (data.dq_score || 0) * 100;
-  const count      = (log || []).length;
-  const last       = (log || [])[log.length - 1] || {};
-  // SoC arrives as 0–1 fraction from some feeds and 0–100 percent from
-  // others (real SCADA exports use percent) — normalise by magnitude.
-  // Absent telemetry renders '—': the former placeholders (68% SoC, 120 MW,
-  // 24 °C) were fabricated readings (docs/REMOVED_HEURISTICS.md).
-  const liveSoc    = last.soc != null ? (last.soc > 1.5 ? last.soc : last.soc * 100) : null;
-  const livePower  = last.actual_action != null ? Math.abs(last.actual_action) : null;
-  const liveTemp   = null; // no temperature channel in the audit ledger
-  const isMobile   = useIsMobile();
-  return (
-    <div>
-      <div style={{ color: OPS.sub, fontSize: 11, marginBottom: 8, letterSpacing: '0.04em' }}>
-        <span style={{ color: OPS.green }}>▪</span> {data.asset_name || 'Energy Asset'} —{' '}
-        {data.asset_type || 'Generic'} · {data.audit_period_label || '—'}
-      </div>
-      {ingestionNotes && (
-        <IngestionNotesBanner notes={ingestionNotes} onDismiss={onDismissNotes} />
-      )}
-      {data.data_quality_index && (
-        <DataQualityPanel dqi={data.data_quality_index} ac={data.audit_confidence} fr={data.forecast_reliability} compact />
-      )}
-
-      {/* Row 1 — Financial Impact | DQ Gauge | Market Audit + Telemetry */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: isMobile ? '1fr' : 'minmax(240px, 1fr) minmax(320px, 1.1fr) minmax(360px, 1.6fr)',
-        gap: 20, marginBottom: 22,
-      }}>
-        <div>
-          <div style={{ color: OPS.text, fontSize: 12, fontWeight: 700, letterSpacing: '0.15em', marginBottom: 14 }}>
-            FINANCIAL IMPACT
-          </div>
-          {execGap != null ? (
-            <OpsFinancialCard label="Recoverable Execution Gap" value={fmtMoney(execGap, cur)} color={OPS.red} glow arrow="↓" />
-          ) : (
-            <OpsFinancialCard label="Ceiling Gap (Upper Bound)" value={fmtMoney(destroyed, cur)} color={OPS.red} glow arrow="↓" />
-          )}
-          <OpsFinancialCard label="Theoretical Ceiling (Benchmark)" value={fmtMoney(potential, cur)} color={OPS.sub} />
-          <OpsFinancialCard label="Captured Value" value={fmtMoney(captured, cur)} color={captured >= 0 ? OPS.green : OPS.red} />
-          <div style={{ color: OPS.sub, fontSize: 9.5, lineHeight: 1.5, marginTop: 6 }}>
-            {execGap != null
-              ? 'Recoverable = achievable with information available at decision time (Ch 8.2). Ceiling = perfect-foresight upper bound.'
-              : 'Ceiling gap is an upper bound vs a perfect-foresight benchmark; a forecast column is required to isolate the recoverable portion.'}
-          </div>
-        </div>
-
-        <div style={{
-          background: OPS.card, border: `1px solid ${OPS.border}`, borderRadius: 14,
-          padding: '24px 12px 20px', display: 'flex', flexDirection: 'column', justifyContent: 'center',
-        }}>
-          <DQScoreGauge value={dqPct} count={count} />
-        </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div style={{ background: OPS.card, border: `1px solid ${OPS.border}`, borderRadius: 12, padding: '14px 16px 4px' }}>
-            <div style={{ color: OPS.text, fontSize: 12, fontWeight: 700, letterSpacing: '0.12em', marginBottom: 8 }}>
-              MARKET OPTIMIZATION AUDIT (24h)
-            </div>
-            <MarketOptimizationChart log={log} />
-          </div>
-          <LiveTelemetryStrip
-            assetName={`${data.asset_name || 'Asset'} — ${data.asset_type || 'BESS'}`}
-            soc={liveSoc} power={livePower} temp={liveTemp}
-          />
-        </div>
-      </div>
-
-      {/* Row 2 — Discrepancy Timeline | Asset Performance tiles */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: isMobile ? '1fr' : '1.4fr 1fr',
-        gap: 20,
-      }}>
-        <div style={{
-          background: OPS.card, border: `1px solid ${OPS.border}`, borderRadius: 12, padding: '16px 18px',
-        }}>
-          <div style={{ color: OPS.text, fontSize: 12, fontWeight: 700, letterSpacing: '0.12em', marginBottom: 12 }}>
-            DECISION DISCREPANCY TIMELINE
-          </div>
-          <DecisionDiscrepancyStrip log={log} />
-        </div>
-        <div>
-          <div style={{ color: OPS.text, fontSize: 12, fontWeight: 700, letterSpacing: '0.12em', marginBottom: 12 }}>
-            ASSET PERFORMANCE SUMMARY
-          </div>
-          <AssetPerformanceTiles data={data} log={log} m={m} />
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ══════════════════════════════════════════════════════════════════════
 // MAIN APP
@@ -1488,6 +1172,8 @@ function OpsConsoleExec({ data, log, m, ingestionNotes, onDismissNotes }) {
 export default function App() {
   const [data, setData]                   = useState(EMPTY);
   const [loading, setLoading]             = useState(false);
+  const [actionError, setActionError]     = useState(null);   // SPEC-IX: no silent dead ends
+  const [notice, setNotice]               = useState(null);   // SPEC-IX: quiet confirmations, not alert()
   const [uploading, setUploading]         = useState(false);
   const [shareLink, setShareLink]         = useState('');
   const [activeSection, setActiveSection] = useState('exec');
@@ -1496,10 +1182,28 @@ export default function App() {
   // ── Mobile responsive state ────────────────────────────────────────
   const isMobile = useIsMobile();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [reportsOpen, setReportsOpen] = useState(false);   // header REPORTS menu (SPEC-NV rule 4)
+  const [lensOpen, setLensOpen] = useState(false);         // archetype lens menu (SPEC-RB)
+  // SPEC-RB: presentation lens — emphasis only, never truth. CFO is the
+  // native grip (the moat is economic truth). Explicit choice persists.
+  const [archetype, setArchetype] = useState(() => {
+    try { return localStorage.getItem('predaiot.archetype.v1') || 'CFO'; } catch { return 'CFO'; }
+  });
+  const chooseLens = (a) => {
+    setArchetype(a); setLensOpen(false);
+    try { localStorage.setItem('predaiot.archetype.v1', a); } catch { /* private mode */ }
+  };
   useEffect(() => {
     // Close the drawer if the viewport transitions back to desktop
     if (!isMobile && sidebarOpen) setSidebarOpen(false);
   }, [isMobile, sidebarOpen]);
+
+  // Quiet confirmations clear themselves; errors persist until dismissed.
+  useEffect(() => {
+    if (!notice) return undefined;
+    const t = setTimeout(() => setNotice(null), 4000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   // ── Ingestion notes from the upload pipeline ───────────────────────
   const [ingestionNotes, setIngestionNotes] = useState(null);
@@ -1774,7 +1478,12 @@ export default function App() {
       setAiText('');
       setIngestionNotes(null);  // demo data is synthetic; no ingestion notes
       setActiveSection('exec');
-    } catch (e) { console.error(e); }
+      setActionError(null);
+    } catch (e) {
+      console.error(e);
+      // SPEC-IX rule 4: errors state impact + recovery path, in place.
+      setActionError('The demo audit could not be completed — the audit engine did not respond. Check your connection and run the demo again.');
+    }
     setLoading(false);
   };
 
@@ -1797,30 +1506,36 @@ export default function App() {
       setActiveSection('exec');
     } catch (err) {
       const detail = err?.response?.data?.detail || '';
-      alert(
-        'Upload failed.\n\n' +
-        (detail || 'Could not locate a price column or output column.\n\nTip: POST your file to /api/v1/audit/inspect to see the full mapping attempt.')
-      );
+      setActionError(detail
+        || 'Upload failed — no price column or output column could be located in that file. Confirm the export contains dispatch and price data and try again.');
     }
     setUploading(false);
   };
 
   // ── Share ──────────────────────────────────────────────────────────
   const handleShare = async () => {
-    if (!(data.decision_log || []).length) return alert('Run an audit first.');
+    if (!(data.decision_log || []).length) {
+      setActionError('Run an audit before sharing — there is no report to share yet.');
+      return;
+    }
     try {
       const r = await axios.post('/api/share', data);
       const url = window.location.origin + r.data.share_url;
       setShareLink(url);
       navigator.clipboard?.writeText(url);
-      alert('Link copied!\n' + url);
-    } catch (_) {}
+      setNotice('Share link copied to clipboard.');
+    } catch (_) {
+      setActionError('The share link could not be created. Check your connection and try again.');
+    }
   };
 
   // ── Download branded PDF (letterhead overlay) ──────────────────────
   const [pdfLoading, setPdfLoading] = useState(false);
   const downloadPdf = async () => {
-    if (!(data.decision_log || []).length) return alert('Run an audit first.');
+    if (!(data.decision_log || []).length) {
+      setActionError('Run an audit before downloading a report — there is nothing to export yet.');
+      return;
+    }
     if (!requireTrial()) return;
     setPdfLoading(true);
     try {
@@ -1836,7 +1551,7 @@ export default function App() {
     } catch (err) {
       // 401/402 are surfaced via the global interceptor (gate / expired modal)
       if (err?.response?.status !== 401 && err?.response?.status !== 402) {
-        alert('PDF generation failed. Try again or contact support.');
+        setActionError('The PDF report could not be generated. Try again in a moment, or contact support if it persists.');
       }
     }
     setPdfLoading(false);
@@ -1846,7 +1561,10 @@ export default function App() {
   // Step-by-step CSV where every PDF headline number is a column sum —
   // the transparency artifact that lets a customer reconcile the audit.
   const downloadLedger = async () => {
-    if (!(data.decision_log || []).length) return alert('Run an audit first.');
+    if (!(data.decision_log || []).length) {
+      setActionError('Run an audit before exporting the ledger — there is no audit to reconcile yet.');
+      return;
+    }
     if (!requireTrial()) return;
     try {
       const r = await axios.get('/api/v1/audit/ledger.csv', { responseType: 'blob' });
@@ -1857,7 +1575,7 @@ export default function App() {
       setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
     } catch (err) {
       if (err?.response?.status !== 401 && err?.response?.status !== 402) {
-        alert('Ledger export failed. Run an audit first, then try again.');
+        setActionError('The ledger export could not be generated. Try again in a moment.');
       }
     }
   };
@@ -1870,7 +1588,7 @@ export default function App() {
       const capturePct = data.edv_optimal_total > 0 ? (data.edv_actual_total / data.edv_optimal_total) * 100 : 0;
       const missedCount = (data.decision_log || []).filter(d => d.decision_type === 'Missed Arbitrage').length;
       const opsBlock = (data.opportunities || []).slice(0, 5).map((o, i) =>
-        `${i + 1}. ${o.name}${o.experimental ? ' [EXPERIMENTAL — not quantified]' : ` — Period Value: ${o.period_gain} | Annualised (linear est.): ${o.annual_gain_usd} | Ledger intervals: ${o.intervals_observed} | Derivation: ${o.derivation}`} | Evidence: ${o.evidence || '—'}`
+        `${i + 1}. ${o.name}${o.experimental ? ' [EXPERIMENTAL — not quantified]' : ` — Period Value: ${o.period_gain} | Ledger intervals: ${o.intervals_observed} | Derivation: ${o.derivation}`} | Evidence: ${o.evidence || '—'}`
       ).join('\n');
       const causesBlock = (data.root_causes || []).slice(0, 5).map(r => `${r.category}: ${r.contribution_pct}% ($${r.loss_usd?.toLocaleString()})`).join(', ');
 
@@ -1884,17 +1602,17 @@ export default function App() {
 AUDIT DATA (use these exact figures — do not invent numbers):
 Asset: ${data.asset_name} (${data.asset_type})
 Audit Period: ${data.audit_period_label}
-Economic Potential: ${fmtUSD(data.edv_optimal_total)}
-Captured Value: ${fmtUSD(data.edv_actual_total)}
-Destroyed Value: ${fmtUSD(data.total_gap_usd)}
+Economic Potential: ${fmtMoney(data.edv_optimal_total, data.currency)}
+Captured Value: ${fmtMoney(data.edv_actual_total, data.currency)}
+Destroyed Value: ${fmtMoney(data.total_gap_usd, data.currency)}
 Capture Rate: ${capturePct.toFixed(1)}%
 Decision Quality Score: ${((data.dq_score || 0) * 100).toFixed(1)} / 100
 Economic Intelligence Score: ${data.eda_metrics?.economic_intelligence_score ?? 'N/A'} / 100
 Risk Level: ${data.risk_level}
-Annual Leakage Projection: ${fmtUSD(data.total_gap_usd * 365)}
 Missed High-Value Intervals: ${missedCount}
 Dispatch Records Analysed: ${(data.decision_log || []).length}
 Forecast Utilization: ${data.eda_metrics?.forecast_utilization_index ?? 'N/A'}%
+(Report recorded-period figures only. Do not annualize, extrapolate, or state any per-year or forward-looking figure.)
 
 ROOT CAUSES: ${causesBlock || 'Not available'}
 
@@ -1908,16 +1626,16 @@ Two to three sentences. State the capture percentage and resulting rating plainl
 
 KEY FINDINGS
 List four lines exactly in this format:
-✔ Economic Intelligence Score    [value] / 100
-✔ Economic Leakage               $[value]
-✔ Missed High-Value Intervals    [value]
-✔ Largest Opportunity            [name of #1 ranked opportunity]
+· Economic Intelligence Score    [value] / 100
+· Economic Leakage               $[value]
+· Missed High-Value Intervals    [value]
+· Largest Opportunity            [name of #1 ranked opportunity]
 
 ROOT CAUSE ANALYSIS
 Two to three sentences explaining which decision logic (not equipment) caused the loss, citing the specific root cause percentages above.
 
 OPERATIONAL IMPACT
-Two sentences quantifying the annualised recoverable revenue if the top opportunities were implemented.
+Two sentences quantifying the recorded recoverable value for the audited period if the top opportunities were implemented. State it as a recorded-period figure; do not annualize.
 
 AUDITOR CONCLUSION
 One to two sentences: is the asset operationally healthy but economically under-optimized, or already near-optimal?
@@ -1926,7 +1644,7 @@ RECOMMENDED ACTIONS
 For each of the top 5 opportunities listed above, output a block in exactly this format (use the real data given, do not invent figures):
 
 Recommendation N — [opportunity name]
-  Expected Annual Gain    $[value]
+  Recorded Period Gain    $[value]
   Implementation          [difficulty]
   Operational Risk        [risk]
   Confidence              [value]%
@@ -1957,7 +1675,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
   // ── Derived ────────────────────────────────────────────────────────
   const log         = Array.isArray(data.decision_log) ? data.decision_log : [];
   const captureRate = data.edv_optimal_total > 0 ? (data.edv_actual_total / data.edv_optimal_total) * 100 : 0;
-  const m           = data.eda_metrics;
+  const m           = data.eda_metrics;   // EDA metric block; consumed by S06/S10/S05
   // "An audit is loaded" = the decision log has rows. NOT dq_score > 0 —
   // an honest DQ of 0.0 (destructive dispatch) is a real, displayable audit.
   const hasData     = log.length > 0;
@@ -1975,11 +1693,41 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
     { id: 'ai',        label: 'Economic Intelligence Report™',tag: '10' },
     { id: 'govern',    label: 'Governance',                   tag: '11' },
     { id: 'appendix',  label: 'Math Appendix',                tag: '12' },
-    { id: 'live',      label: 'Live Monitor',                 tag: '⚡' },
-    { id: 'cert',      label: 'EDPC Certificate',             tag: '🏆' },
-    { id: 'history',   label: 'Audit History',                tag: '\u2630' },
-    { id: 'realtime',  label: 'Real-Time',                    tag: '◉' },
+    { id: 'live',      label: 'Live Monitor',                 tag: 'LV' },
+    { id: 'cert',      label: 'EDPC Certificate',             tag: 'CT' },
+    { id: 'history',   label: 'Audit History',                tag: 'HX' },
+    { id: 'realtime',  label: 'Real-Time',                    tag: 'RT' },
   ];
+
+  // SPEC-IA Section Taxonomy — the sidebar renders these ratified groups.
+  // Items reference navItems entries by id; glyph tags retired (SPEC-ID).
+  const NAV_GROUPS = [
+    { label: 'Command',               ids: ['exec'] },
+    { label: 'Analysis',              ids: ['flow', 'timeline', 'rootcause', 'counter', 'metrics', 'leakage', 'heatmap'] },
+    { label: 'Action',                ids: ['opps', 'ai'] },
+    { label: 'Evidence & Governance', ids: ['govern', 'cert', 'history'] },
+    { label: 'Operations',            ids: ['live', 'realtime'] },
+    { label: 'Reference',             ids: ['appendix'] },
+  ].map((g) => ({ ...g, items: g.ids.map((id) => navItems.find((n) => n.id === id)) }));
+
+  // SPEC-RB emphasis matrix — group order + elevated/de-emphasized sections
+  // per archetype. Same data, same evidence, different reading order.
+  const ARCHETYPE_EMPHASIS = {
+    CFO:           { order: ['Command', 'Analysis', 'Action', 'Evidence & Governance', 'Operations', 'Reference'],
+                     up: ['flow', 'leakage', 'cert'], down: ['live', 'realtime'] },
+    CEO:           { order: ['Command', 'Evidence & Governance', 'Action', 'Analysis', 'Operations', 'Reference'],
+                     up: ['govern', 'history'], down: ['appendix', 'metrics'] },
+    Operations:    { order: ['Command', 'Action', 'Operations', 'Analysis', 'Evidence & Governance', 'Reference'],
+                     up: ['opps', 'live'], down: ['appendix'] },
+    Engineer:      { order: ['Command', 'Analysis', 'Reference', 'Action', 'Evidence & Governance', 'Operations'],
+                     up: ['rootcause', 'counter', 'metrics', 'appendix'], down: [] },
+    Administrator: { order: ['Command', 'Evidence & Governance', 'Operations', 'Analysis', 'Action', 'Reference'],
+                     up: ['history'], down: [] },
+  };
+  const ARCHETYPES = Object.keys(ARCHETYPE_EMPHASIS);
+  const lens = ARCHETYPE_EMPHASIS[archetype] || ARCHETYPE_EMPHASIS.CFO;
+  const orderedGroups = lens.order
+    .map((label) => NAV_GROUPS.find((g) => g.label === label)).filter(Boolean);
 
   // ══════════════════════════════════════════════════════════════════
   // RENDER
@@ -2012,7 +1760,8 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
       {/* ── TOP BAR ──────────────────────────────────────────────── */}
       <header style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        padding: isMobile ? '11px 14px' : '13px 28px',
+        minHeight: 'var(--ws-header-h)',
+        padding: isMobile ? '8px 14px' : '10px 28px',
         borderBottom: `1px solid ${DS.border}`,
         position: 'sticky', top: 0, backgroundColor: `${DS.bg}f0`, backdropFilter: 'blur(12px)',
         zIndex: 100, gap: 8,
@@ -2050,25 +1799,88 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
         </div>
 
         <div style={{ display: 'flex', gap: isMobile ? 6 : 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {/* SPEC-NV rule 4: one accent primary + quiet utilities only.
+              Report/evidence exports live in a single quiet menu. */}
           <BtnOutline color={DS.cyan} onClick={runDemo} disabled={loading || uploading}>
             {loading ? 'OPTIMIZING…' : (isMobile ? 'DEMO' : 'RUN DEMO')}
           </BtnOutline>
-          <BtnOutline color={DS.optimal} onClick={() => setShowUpload(!showUpload)} disabled={uploading}>
+          <BtnOutline color={DS.sub} onClick={() => setShowUpload(!showUpload)} disabled={uploading}>
             {uploading ? 'PARSING…' : (isMobile ? 'UPLOAD' : 'UPLOAD DATA')}
           </BtnOutline>
-          {!isMobile && (
-            <BtnOutline color={DS.warning} onClick={handleShare}>SHARE REPORT</BtnOutline>
-          )}
-          <BtnOutline color={DS.purple} onClick={downloadPdf} disabled={pdfLoading || !hasData}>
-            {pdfLoading ? 'PDF…' : (isMobile ? '⬇ PDF' : '⬇ DOWNLOAD PDF')}
-          </BtnOutline>
-          {!isMobile && (
-            <BtnOutline color={DS.cyan} onClick={downloadLedger} disabled={!hasData}>
-              ⬇ LEDGER CSV
+          <div style={{ position: 'relative' }}>
+            <BtnOutline color={DS.sub} onClick={() => setReportsOpen((v) => !v)}
+              aria-haspopup="menu" aria-expanded={reportsOpen}>
+              REPORTS {reportsOpen ? '▴' : '▾'}
             </BtnOutline>
-          )}
+            {reportsOpen && (
+              <>
+                <div onClick={() => setReportsOpen(false)}
+                     style={{ position: 'fixed', inset: 0, zIndex: 120 }} />
+                <div role="menu" style={{
+                  position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 121,
+                  background: DS.bgRaised, border: `1px solid ${DS.borderHi}`,
+                  borderRadius: DS.r12, boxShadow: 'var(--pds-shadow-2)',
+                  minWidth: 210, padding: 6,
+                }}>
+                  {[
+                    { label: pdfLoading ? 'Preparing PDF…' : 'Download PDF report', fn: downloadPdf, off: pdfLoading || !hasData },
+                    { label: 'Download ledger CSV', fn: downloadLedger, off: !hasData },
+                    { label: 'Share report link', fn: handleShare, off: !hasData },
+                    { label: 'Methodology', fn: () => setShowMethodology(true), off: false },
+                  ].map((m) => (
+                    <button key={m.label} role="menuitem" disabled={m.off}
+                      className="pds-menu-item"
+                      onClick={() => { setReportsOpen(false); m.fn(); }}
+                      style={{
+                        display: 'block', width: '100%', textAlign: 'left',
+                        padding: '10px 12px', background: 'none', border: 'none',
+                        borderRadius: DS.r8, cursor: m.off ? 'not-allowed' : 'pointer',
+                        color: m.off ? DS.dim : DS.text, fontSize: 12, fontFamily: DS.sans,
+                      }}>
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+          {/* SPEC-RB archetype lens — one interaction, always visible,
+              instantly reversible. Emphasis only; figures never change. */}
           {!isMobile && (
-            <BtnOutline color={DS.dim} onClick={() => setShowMethodology(true)}>METHODOLOGY</BtnOutline>
+            <div style={{ position: 'relative' }}>
+              <BtnOutline color={DS.sub} onClick={() => setLensOpen((v) => !v)}
+                aria-haspopup="menu" aria-expanded={lensOpen}>
+                LENS · {archetype.toUpperCase()} {lensOpen ? '▴' : '▾'}
+              </BtnOutline>
+              {lensOpen && (
+                <>
+                  <div onClick={() => setLensOpen(false)}
+                       style={{ position: 'fixed', inset: 0, zIndex: 120 }} />
+                  <div role="menu" style={{
+                    position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 121,
+                    background: DS.bgRaised, border: `1px solid ${DS.borderHi}`,
+                    borderRadius: DS.r12, boxShadow: 'var(--pds-shadow-2)',
+                    minWidth: 190, padding: 6,
+                  }}>
+                    {ARCHETYPES.map((a) => (
+                      <button key={a} role="menuitemradio" aria-checked={a === archetype}
+                        className="pds-menu-item"
+                        onClick={() => chooseLens(a)}
+                        style={{
+                          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                          width: '100%', textAlign: 'left', padding: '10px 12px',
+                          background: 'none', border: 'none', borderRadius: DS.r8,
+                          cursor: 'pointer', fontSize: 12, fontFamily: DS.sans,
+                          color: a === archetype ? DS.cyan : DS.text,
+                        }}>
+                        {a}
+                        {a === archetype && <span aria-hidden style={{ fontSize: 10 }}>●</span>}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
           )}
           {account?.token ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -2079,11 +1891,11 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   {account.organization?.name || account.email}
                 </span>
               )}
-              <BtnOutline color={DS.dim} onClick={signOut}>{isMobile ? '⎋' : 'SIGN OUT'}</BtnOutline>
+              <BtnOutline color={DS.dim} onClick={signOut}>SIGN OUT</BtnOutline>
             </div>
           ) : (
-            <BtnOutline color={DS.cyan} onClick={() => { setGateMode('signin'); setGateError(''); setGateOpen(true); }}>
-              {isMobile ? '⎆' : 'SIGN IN'}
+            <BtnOutline color={DS.sub} onClick={() => { setGateMode('signin'); setGateError(''); setGateOpen(true); }}>
+              SIGN IN
             </BtnOutline>
           )}
           <SessionBadge liveMode={liveMode} simRunning={simRunning} dataSource={dataSource} />
@@ -2092,7 +1904,35 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
 
       {shareLink && (
         <div style={{ background: `${DS.warning}10`, borderBottom: `1px solid ${DS.warning}30`, padding: '8px 28px', fontSize: 11, color: DS.warning }}>
-          🔗 {shareLink}
+          <span style={{ letterSpacing: '0.1em', fontWeight: 700, marginRight: 8 }}>SHARE LINK</span>
+          <span className="pds-num">{shareLink}</span>
+        </div>
+      )}
+      {/* SPEC-IX error surface — institutional candor: what failed + the
+          recovery path, recoverable in place, dismissible. */}
+      {actionError && (
+        <div role="alert" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          gap: 16, background: `${DS.loss}10`, borderBottom: `1px solid ${DS.loss}30`,
+          padding: '10px 28px', fontSize: 12, color: DS.text }}>
+          <span><span style={{ color: DS.loss, fontWeight: 700, letterSpacing: '0.08em', marginRight: 10 }}>UNABLE TO COMPLETE</span>{actionError}</span>
+          <button onClick={() => setActionError(null)} aria-label="Dismiss message"
+            style={{ background: 'none', border: `1px solid ${DS.border}`, color: DS.sub,
+                     borderRadius: DS.r8, padding: '4px 10px', cursor: 'pointer', fontSize: 11 }}>
+            DISMISS
+          </button>
+        </div>
+      )}
+      {/* SPEC-IX quiet confirmation — factual, dismissible, never an alert. */}
+      {notice && (
+        <div role="status" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          gap: 16, background: `${DS.optimal}10`, borderBottom: `1px solid ${DS.optimal}30`,
+          padding: '10px 28px', fontSize: 12, color: DS.text }}>
+          <span><span style={{ color: DS.optimal, fontWeight: 700, letterSpacing: '0.08em', marginRight: 10 }}>DONE</span>{notice}</span>
+          <button onClick={() => setNotice(null)} aria-label="Dismiss message"
+            style={{ background: 'none', border: `1px solid ${DS.border}`, color: DS.sub,
+                     borderRadius: DS.r8, padding: '4px 10px', cursor: 'pointer', fontSize: 11 }}>
+            DISMISS
+          </button>
         </div>
       )}
 
@@ -2116,48 +1956,73 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           />
         )}
         <nav style={isMobile ? {
-          position: 'fixed', left: sidebarOpen ? 0 : -272, top: 0, bottom: 0,
+          /* SPEC-MO compositor law: drawer slides via transform, never left. */
+          position: 'fixed', left: 0, top: 0, bottom: 0,
+          transform: sidebarOpen ? 'translateX(0)' : 'translateX(-272px)',
           width: 272, padding: '76px 0 20px 0', background: DS.bgRaised,
           borderRight: `1px solid ${DS.borderHi}`,
-          transition: 'left 0.24s ease', overflowY: 'auto',
+          transition: 'transform var(--pds-dur) var(--pds-ease)', overflowY: 'auto',
           zIndex: 100, boxShadow: sidebarOpen ? '4px 0 30px rgba(0,0,0,0.5)' : 'none',
         } : {
-          width: 210, minWidth: 210, padding: '20px 0',
+          /* SPEC-WS §4: sidebar = clamp(248px, 18vw, 400px); 18–20% share on
+             1440–2200px displays, capped beyond so surplus canvas feeds
+             intelligence zones, never navigation. */
+          width: 'var(--ws-sidebar-w)', minWidth: 248, flexShrink: 0, padding: '20px 0',
           borderRight: `1px solid ${DS.border}`,
-          position: 'sticky', top: 67, height: 'calc(100vh - 67px)', overflowY: 'auto',
+          position: 'sticky', top: 'var(--ws-header-h)',
+          height: 'calc(100vh - var(--ws-header-h))', overflowY: 'auto',
         }}>
-          {navItems.map((n) => {
-            const active = activeSection === n.id;
-            return (
-              <button
-                key={n.id}
-                onClick={() => {
-                  setActiveSection(n.id);
-                  if (isMobile) setSidebarOpen(false);
-                }}
-                style={{
-                  display: 'block', width: '100%', textAlign: 'left',
-                  padding: isMobile ? '14px 22px' : '9px 20px',
-                  minHeight: isMobile ? 44 : undefined,  // Apple HIG / Material touch target
-                  fontSize: isMobile ? 13 : 11,
-                  background: 'none', border: 'none', cursor: 'pointer',
-                  letterSpacing: '0.04em',
-                  color: active ? DS.cyan : DS.sub,
-                  borderLeft: `2px solid ${active ? DS.cyan : 'transparent'}`,
-                  transition: 'all 0.12s',
-                }}
-              >
-                <span style={{ fontFamily: DS.mono, fontSize: isMobile ? 10 : 9, color: DS.dim, marginRight: 8 }}>{n.tag}</span>
-                {n.label}
-              </button>
-            );
-          })}
+          {/* SPEC-NV: grouped instrument rail — the taxonomy is the map,
+              ordered by the active SPEC-RB lens (emphasis, never truth). */}
+          {orderedGroups.map((g) => (
+            <div key={g.label} style={{ marginBottom: 14 }}>
+              <div style={{
+                padding: isMobile ? '8px 22px 5px' : '6px 20px 5px',
+                fontSize: 9, letterSpacing: '0.22em', textTransform: 'uppercase',
+                color: DS.dim, fontWeight: 700,
+              }}>{g.label}</div>
+              {g.items.map((n) => {
+                const active = activeSection === n.id;
+                const elevated = lens.up.includes(n.id);
+                const dimmed = lens.down.includes(n.id) && !active;
+                return (
+                  <button
+                    key={n.id}
+                    onClick={() => {
+                      setActiveSection(n.id);
+                      if (isMobile) setSidebarOpen(false);
+                    }}
+                    style={{
+                      display: 'block', width: '100%', textAlign: 'left',
+                      padding: isMobile ? '14px 22px' : '9px 20px',
+                      minHeight: isMobile ? 44 : undefined,  // Apple HIG / Material touch target
+                      fontSize: isMobile ? 13 : 11,
+                      background: active ? `${DS.cyan}0C` : 'none',
+                      border: 'none', cursor: 'pointer',
+                      letterSpacing: '0.04em',
+                      // SPEC-RB de-emphasis via color demotion (text-2 → text-3),
+                      // never opacity stacking — keeps SPEC-AX ≥4.5:1 at 9–11px.
+                      color: active ? DS.cyan : (dimmed ? DS.dim : DS.sub),
+                      borderLeft: `2px solid ${active ? DS.cyan : 'transparent'}`,
+                    }}
+                  >
+                    <span style={{ fontFamily: DS.mono, fontSize: isMobile ? 10 : 9, color: active ? DS.cyan : DS.dim, marginRight: 8 }}>{n.tag}</span>
+                    {n.label}
+                    {elevated && !active && (
+                      <span aria-hidden style={{ display: 'inline-block', width: 4, height: 4, borderRadius: '50%',
+                        background: DS.cyan, marginLeft: 7, verticalAlign: 'middle', opacity: 0.8 }} />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
         </nav>
 
-        {/* ── MAIN CONTENT ──────────────────────────────────────── */}
+        {/* ── MAIN CONTENT — the Executive Workspace (SPEC-WS §5) ── */}
         <main style={{
           flex: 1, minWidth: 0,
-          padding: isMobile ? '18px 14px' : '28px 32px',
+          padding: 'var(--ws-pad)',
           overflowX: 'hidden',
         }}>
 
@@ -2166,7 +2031,6 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
               independently of audit data. */}
           {!hasData && !showUpload && !['live', 'appendix', 'govern', 'history', 'realtime'].includes(activeSection) && (
             <div style={{ textAlign: 'center', padding: '70px 40px' }}>
-              <div style={{ fontSize: 48, marginBottom: 16 }}>⚡</div>
               <div style={{ color: DS.text, fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Economic Decision Audit™</div>
               <div style={{ color: DS.dim, fontSize: 11, letterSpacing: '0.1em', marginBottom: 20 }}>
                 THE UNIVERSAL ECONOMIC DECISION ENGINE FOR ENERGY INFRASTRUCTURE
@@ -2185,10 +2049,10 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   UPLOAD MY DATA
                 </BtnOutline>
                 <BtnOutline color={DS.warning} onClick={() => setActiveSection('live')}>
-                  ⚡ LIVE MONITOR
+                  LIVE MONITOR
                 </BtnOutline>
                 <BtnOutline color={DS.purple} onClick={() => setActiveSection('appendix')}>
-                  📐 SEE THE MATH
+                  SEE THE MATH
                 </BtnOutline>
               </div>
               <div style={{ color: DS.dim, fontSize: 10, marginTop: 24 }}>
@@ -2197,723 +2061,544 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
             </div>
           )}
 
-          {/* ══ S01: Executive Summary — Ops Console redesign ══════════ */}
+          {/* ══ S01: Executive Summary — SPEC-EX on the Workspace ══════ */}
+          {/* SPEC-WS §1: no max-width container, no centered column — the
+              1720px interim cap is removed per the ratified contract. Extra
+              canvas is absorbed by the zone system, not stretched cards. */}
           {hasData && activeSection === 'exec' && (
-            <OpsConsoleExec
-              data={data}
-              log={log}
-              m={m}
-              ingestionNotes={ingestionNotes}
-              onDismissNotes={() => setIngestionNotes(null)}
-            />
+            <Workspace>
+              {ingestionNotes && (
+                <IngestionNotesBanner notes={ingestionNotes} onDismiss={() => setIngestionNotes(null)} />
+              )}
+              <ExecutiveCommandCenter data={data} log={log} live={dataSource === 'live'}
+                onOpenLive={() => setActiveSection('live')} />
+            </Workspace>
           )}
 
           {/* ══ S02: Economic Value Flow ════════════════════════════ */}
-          {hasData && activeSection === 'flow' && (
-            <div>
-              <SectionHeader tag="02" title="Economic Value Flow" />
-              {!hasData ? <EmptyMsg>Run an audit to populate the economic flow.</EmptyMsg> : (
-                <div style={{ maxWidth: 560, margin: '0 auto' }}>
-                  {/* Every stage below is a COMPUTED quantity from the audit
-                      engine. The former intermediate stages (×0.92 grid,
-                      ×0.87 SOC, ×0.97 settlement, ×0.12 unrecoverable) were
-                      fabricated multipliers — removed (docs/REMOVED_HEURISTICS.md). */}
-                  {[
-                    { label: 'Theoretical Ceiling (Upper Bound)', value: fmtMoney(data.edv_optimal_total, data.currency), color: DS.warning, desc: 'Perfect-foresight MILP benchmark — not an achievable operating target' },
-                    ...(data.gap_attribution ? [
-                      { label: 'Forecast-Unreachable Gap', value: `−${fmtMoney(data.gap_attribution.forecast_gap, data.currency)}`, color: DS.dim, desc: 'Reachable only with perfect price foresight (Ch 8.2) — not operator-attributable' },
-                      { label: 'Recoverable Execution Gap', value: `−${fmtMoney(data.gap_attribution.execution_gap, data.currency)}`, color: DS.loss, desc: 'Achievable with the day-ahead forecast available at decision time' },
-                    ] : [
-                      { label: 'Ceiling Gap (Upper Bound)', value: `−${fmtMoney(data.total_gap_usd, data.currency)}`, color: DS.loss, desc: 'Includes forecast-unreachable value; forecast column required to split' },
-                    ]),
-                    { label: 'Captured Value', value: fmtMoney(data.edv_actual_total, data.currency), color: DS.optimal, desc: 'EDV of the dispatch actually executed (Σ edv_actual_step from the ledger)' },
-                  ].map((step, i, arr) => (
-                    <div key={step.label}>
-                      <div style={{
-                        display: 'flex', alignItems: 'center', gap: 16, padding: '14px 18px',
-                        background: DS.surface, border: `1px solid ${step.color}25`, borderRadius: DS.r12,
-                      }}>
-                        <div style={{ width: 4, height: 44, backgroundColor: step.color, borderRadius: 2, flexShrink: 0 }} />
-                        <div style={{ flex: 1 }}>
-                          <Label style={{ marginBottom: 2 }}>{step.label}</Label>
-                          <BigNum v={step.value} color={step.color} size={18} />
-                          <div style={{ color: DS.dim, fontSize: 10, marginTop: 3 }}>{step.desc}</div>
-                        </div>
+          {hasData && activeSection === 'flow' && (() => {
+            const stages = [
+              { label: 'Theoretical Ceiling', value: fmtMoney(data.edv_optimal_total, data.currency), color: PDS.warn, desc: 'Perfect-foresight MILP benchmark — not an achievable operating target' },
+              ...(data.gap_attribution ? [
+                { label: 'Forecast-Unreachable Gap', value: `−${fmtMoney(data.gap_attribution.forecast_gap, data.currency)}`, color: PDS.text3, desc: 'Reachable only with perfect price foresight (Ch 8.2) — not operator-attributable' },
+                { label: 'Recoverable Execution Gap', value: `−${fmtMoney(data.gap_attribution.execution_gap, data.currency)}`, color: PDS.loss, desc: 'Achievable with the day-ahead forecast available at decision time' },
+              ] : [
+                { label: 'Ceiling Gap', value: `−${fmtMoney(data.total_gap_usd, data.currency)}`, color: PDS.loss, desc: 'Includes forecast-unreachable value; a forecast column is required to split it' },
+              ]),
+              { label: 'Captured Value', value: fmtMoney(data.edv_actual_total, data.currency), color: PDS.recover, desc: 'EDV of the dispatch actually executed (Σ edv_actual_step from the ledger)' },
+            ];
+            const lead = (
+              <>Of a{' '}<span className="pds-num" style={{ color: PDS.warn, fontWeight: 700 }}>{fmtMoney(data.edv_optimal_total, data.currency)}</span>{' '}
+                perfect-foresight ceiling, this asset captured{' '}
+                <span className="pds-num" style={{ color: PDS.recover, fontWeight: 800 }}>{fmtMoney(data.edv_actual_total, data.currency)}</span>{' '}
+                — the remainder leaked as the gaps below.</>
+            );
+            return (
+              <SectionShell kicker="Economic Value Flow" title="Where the Value Went"
+                question="Where did the value go?" lead={lead}>
+                {/* Every stage is a computed quantity from the audit engine;
+                    fabricated intermediate multipliers were removed long ago
+                    (docs/REMOVED_HEURISTICS.md). */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 640 }}>
+                  {stages.map((step) => (
+                    <Panel key={step.label} pad={PDS.s5} accent={false}
+                           style={{ display: 'flex', alignItems: 'center', gap: 16, borderLeft: `3px solid ${step.color}` }}>
+                      <div style={{ flex: 1 }}>
+                        <div className="pds-kicker" style={{ marginBottom: 4 }}>{step.label}</div>
+                        <div style={{ fontSize: 11, color: PDS.text3, lineHeight: 1.5, maxWidth: 'var(--pds-prose-max)' }}>{step.desc}</div>
                       </div>
-                      {i < arr.length - 1 && <div style={{ textAlign: 'center', color: DS.dim, lineHeight: '22px', fontSize: 18 }}>↓</div>}
-                    </div>
+                      <div className="pds-num" style={{ fontSize: 22, fontWeight: 800, color: step.color, whiteSpace: 'nowrap', flexShrink: 0 }}>{step.value}</div>
+                    </Panel>
                   ))}
                 </div>
-              )}
-            </div>
-          )}
+              </SectionShell>
+            );
+          })()}
 
           {/* ══ S03: Decision Audit Trail™ ══════════════════════════ */}
-          {hasData && activeSection === 'timeline' && (
-            <div>
-              <SectionHeader tag="03" title="Decision Audit Trail™ — Economic Decision Forensics" />
-
-              {/* Summary counter strip */}
-              {log.length > 0 && (() => {
-                const correct  = log.filter(d => d.decision_type?.includes('Correct')).length;
-                const critical = log.filter(d => (d.gap_step || 0) > 100).length;
-                const subopt   = log.filter(d => (d.gap_step || 0) > 0 && (d.gap_step || 0) <= 100).length;
-                return (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 24 }}>
-                    {[
-                      { label: 'Decisions Audited', v: log.length,                  c: DS.text },
-                      { label: 'Correct Decisions', v: correct,                      c: DS.optimal },
-                      { label: 'Suboptimal',         v: subopt,                       c: DS.warning },
-                      { label: '⚠ Critical Decisions',v: critical,                   c: DS.loss },
-                      { label: 'Revenue Destroyed',  v: fmtUSD(data.total_gap_usd), c: DS.loss },
-                    ].map(f => (
-                      <Card key={f.label} style={{ textAlign: 'center', borderColor: f.c === DS.loss ? `${DS.loss}25` : DS.border }}>
-                        <Label style={{ fontSize: 9 }}>{f.label}</Label>
-                        <BigNum v={f.v} color={f.c} size={20} />
-                      </Card>
-                    ))}
-                  </div>
-                );
-              })()}
-
-              {log.length === 0 ? <EmptyMsg>Run an audit to populate the Decision Audit Trail.</EmptyMsg> : (
-                <div style={{ maxHeight: 680, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {log.filter(d => (d.gap_step || 0) > 0).slice(0, 60).map((dec, i) => {
-                    const h  = dec.hour || 0;
-                    const ts = `${Math.floor(h/12).toString().padStart(2,'0')}:${((h%12)*5).toString().padStart(2,'0')}`;
-                    const gap = dec.gap_step || 0;
-                    const isCrit = gap > 100, isMod = gap > 20 && !isCrit;
-                    const verdict = gap <= 0 ? 'correct' : isCrit ? 'critical' : isMod ? 'suboptimal' : 'minor';
-                    const vd = {
-                      correct:   { label: '✓ Correct Decision',  color: DS.optimal },
-                      critical:  { label: '✕ Revenue Destroyed',  color: DS.loss },
-                      suboptimal:{ label: '△ Suboptimal Dispatch', color: DS.warning },
-                      minor:     { label: '◎ Minor Leakage',      color: DS.orange },
-                    }[verdict];
-
-                    const rootCause = {
-                      'Missed Arbitrage':   'Static Dispatch Rule — no market-responsive trigger',
-                      'Partial Capture':    'SOC Constraint or partial execution — capacity available but under-utilised',
-                      'Over-Dispatch':      'Aggressive dispatch beyond MILP-optimal level',
-                      'Correct Dispatch':   'Decision matched optimal counterfactual',
-                      'Correct Idle':       'Idle period was economically justified',
-                    }[dec.decision_type] || 'Sub-optimal dispatch strategy';
-
-                    return (
-                      <div key={i} style={{
-                        background: DS.surface,
-                        border: `1px solid ${isCrit ? DS.loss + '40' : DS.border}`,
-                        borderRadius: DS.r12, padding: '14px 18px',
-                        borderLeft: `3px solid ${vd.color}`,
-                      }}>
-                        {/* Header */}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                            <span style={{ color: DS.dim, fontFamily: DS.mono, fontSize: 10 }}>#{i + 1}</span>
-                            <span style={{ color: DS.cyan, fontFamily: DS.mono, fontSize: 14, fontWeight: 700 }}>{ts}</span>
-                            <Pill label={vd.label} color={vd.color} />
-                            {dec.operator_override && <Pill label="Human Override" color={DS.orange} />}
-                          </div>
-                          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                            {gap > 0 && <span style={{ color: DS.loss, fontFamily: DS.mono, fontSize: 14, fontWeight: 700 }}>−{fmtUSD(gap)}</span>}
-                            {dec.confidence && <Pill label={`${(dec.confidence*100).toFixed(0)}% conf`} color={DS.blue} />}
-                          </div>
-                        </div>
-
-                        {/* Data row */}
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 12 }}>
-                          {[
-                            { label: 'Market Price', v: `$${dec.price}/MWh`, c: DS.warning },
-                            { label: 'Asset SOC', v: dec.soc != null ? `${(dec.soc*100).toFixed(0)}%` : '—', c: DS.sub },
-                            { label: 'Optimal Action', v: `Dis ${dec.optimal_action} MW`, c: DS.optimal },
-                            { label: 'Actual Action', v: (dec.actual_action||0) < 0.5 ? 'Idle' : `Dis ${dec.actual_action} MW`, c: (dec.actual_action||0) < 0.5 ? DS.loss : DS.text },
-                            { label: 'Curtailment', v: dec.curtailment_mw ? `${dec.curtailment_mw} MW` : '—', c: DS.orange },
-                          ].map(f => (
-                            <div key={f.label}>
-                              <Label style={{ fontSize: 9, marginBottom: 2 }}>{f.label}</Label>
-                              <div style={{ color: f.c, fontFamily: DS.mono, fontSize: 12, fontWeight: 600 }}>{f.v}</div>
-                            </div>
-                          ))}
-                        </div>
-
-                        {/* Root cause + Counterfactual */}
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                          <div style={{ padding: '8px 12px', background: `${DS.loss}06`, border: `1px solid ${DS.loss}20`, borderRadius: DS.r8 }}>
-                            <Label style={{ fontSize: 9, marginBottom: 3 }}>Root Cause</Label>
-                            <div style={{ color: DS.sub, fontSize: 11, lineHeight: 1.5 }}>{rootCause}</div>
-                          </div>
-                          <div style={{ padding: '8px 12px', background: `${DS.optimal}06`, border: `1px solid ${DS.optimal}20`, borderRadius: DS.r8 }}>
-                            <Label style={{ fontSize: 9, marginBottom: 3 }}>Counterfactual — What Should Have Happened</Label>
-                            <div style={{ color: DS.sub, fontSize: 11, lineHeight: 1.5 }}>
-                              {gap > 0
-                                ? `Dispatching ${dec.optimal_action} MW would have recovered ${fmtUSD(gap)} with no physical constraint violation. MILP verified.`
-                                : 'Decision was economically optimal. No improvement available.'}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Evidence footer */}
-                        {gap > 0 && (
-                          <div style={{ marginTop: 8, display: 'flex', gap: 16, fontSize: 9, color: DS.dim }}>
-                            <span>✓ MILP Verified</span>
-                            <span>✓ Dispatch Log Verified</span>
-                            <span>Importance: {Math.min(100, Math.round((gap / (data.total_gap_usd || 1)) * 1000))}% of total loss</span>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ══ S04: Root Cause Analysis ════════════════════════════ */}
-          {hasData && activeSection === 'rootcause' && (
-            <div>
-              <SectionHeader tag="04" title="Root Cause Analysis — Pareto" />
-              {(data.root_causes || []).length === 0 ? <EmptyMsg>Run an audit to generate the root cause analysis.</EmptyMsg> : (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-                  <Card>
-                    <Label style={{ marginBottom: 16 }}>Failure Category Breakdown</Label>
-                    {(data.root_causes || []).map((rc, i) => (
-                      <div key={i} style={{ marginBottom: 14 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
-                          <span style={{ color: DS.text }}>{rc.category}</span>
-                          <span style={{ color: [DS.loss, DS.orange, DS.warning, DS.blue, DS.cyan, DS.purple][i % 6], fontFamily: DS.mono, fontWeight: 700 }}>
-                            {rc.contribution_pct}% · {fmtUSD(rc.loss_usd)}
-                          </span>
-                        </div>
-                        <ProgressBar pct={rc.contribution_pct} color={[DS.loss, DS.orange, DS.warning, DS.blue, DS.cyan, DS.purple][i % 6]} />
-                      </div>
-                    ))}
-                  </Card>
-                  <Card>
-                    <Label style={{ marginBottom: 12 }}>Pareto Chart</Label>
-                    <ResponsiveContainer width="100%" height={260}>
-                      <BarChart data={data.root_causes || []} layout="vertical" margin={{ top: 0, right: 20, left: 0, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={DS.border} />
-                        <XAxis type="number" stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} tickFormatter={(v) => `${v}%`} />
-                        <YAxis type="category" dataKey="category" stroke={DS.dim} tick={{ fill: DS.sub, fontSize: 9 }} width={140} />
-                        <Tooltip contentStyle={{ background: '#0f1318', border: `1px solid ${DS.border}`, borderRadius: 8, fontSize: 11 }} formatter={(v) => [`${v}%`, 'Contribution']} />
-                        <Bar dataKey="contribution_pct" radius={[0, 4, 4, 0]}>
-                          {(data.root_causes || []).map((_, i) => (
-                            <Cell key={i} fill={[DS.loss, DS.orange, DS.warning, DS.blue, DS.cyan, DS.purple][i % 6]} />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </Card>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ══ S05: Counterfactual Simulation ══════════════════════ */}
-          {hasData && activeSection === 'counter' && (
-            <div>
-              <SectionHeader tag="05" title='Counterfactual Simulation — "What Would Have Happened?"' />
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16, marginBottom: 20 }}>
-                {[
-                  { label: 'Actual Revenue', value: fmtMoney(data.edv_actual_total, data.currency), color: DS.blue },
-                  { label: 'Theoretical Ceiling (Upper Bound)', value: fmtMoney(data.edv_optimal_total, data.currency), color: DS.optimal },
-                  ...(data.gap_attribution
-                    ? [{ label: 'Recoverable Execution Gap', value: `−${fmtMoney(data.gap_attribution.execution_gap, data.currency)}`, color: DS.loss }]
-                    : [{ label: 'Ceiling Gap (Upper Bound)', value: `−${fmtMoney(data.total_gap_usd, data.currency)}`, color: DS.loss }]),
-                ].map((f) => (
-                  <Card key={f.label} style={{ textAlign: 'center' }}>
-                    <Label>{f.label}</Label>
-                    <BigNum v={f.value} color={f.color} size={26} />
-                  </Card>
-                ))}
-              </div>
-              {log.length > 0 && (
-                <Card style={{ marginBottom: 16 }}>
-                  <Label style={{ marginBottom: 14 }}>Optimal vs Actual Dispatch Curve</Label>
-                  <ResponsiveContainer width="100%" height={260}>
-                    <AreaChart data={log.slice(0, 120)} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="gOpt" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={DS.optimal} stopOpacity={0.3} /><stop offset="95%" stopColor={DS.optimal} stopOpacity={0} />
-                        </linearGradient>
-                        <linearGradient id="gAct" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor={DS.blue} stopOpacity={0.25} /><stop offset="95%" stopColor={DS.blue} stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke={DS.border} />
-                      <XAxis dataKey="hour" stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} />
-                      <YAxis stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} />
-                      <Tooltip contentStyle={{ background: '#0f1318', border: `1px solid ${DS.border}`, borderRadius: 8, fontSize: 11 }} />
-                      <Legend wrapperStyle={{ fontSize: 11, color: DS.sub }} />
-                      <Area type="monotone" dataKey="optimal_action" name="Optimal Dispatch (MW)" stroke={DS.optimal} fill="url(#gOpt)" strokeWidth={2} dot={false} />
-                      <Area type="monotone" dataKey="actual_action" name="Actual Dispatch (MW)" stroke={DS.blue} fill="url(#gAct)" strokeWidth={2} dot={false} />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </Card>
-              )}
-              {data.counterfactual_summary && (
-                <Card glow={DS.cyan}>
-                  <div style={{ color: DS.cyan, fontSize: 12, lineHeight: 1.8, fontStyle: 'italic' }}>"{data.counterfactual_summary}"</div>
-                </Card>
-              )}
-            </div>
-          )}
-
-          {/* ══ S06: EDA Metrics ════════════════════════════════════ */}
-          {hasData && activeSection === 'metrics' && (
-            <div>
-              <SectionHeader tag="06" title="Economic Decision Quality Metrics" />
-              <DataQualityPanel dqi={data.data_quality_index} ac={data.audit_confidence} fr={data.forecast_reliability} />
-              {!m ? <EmptyMsg>Run an audit to generate metrics.</EmptyMsg> : (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 16 }}>
-                  {/* Ledger-derived ratios only. EIS composite, Decision Delay
-                      Index, Revenue Stacking Index and Battery Opportunity
-                      Capture were withdrawn under the No-Fabrication rule —
-                      see docs/REMOVED_HEURISTICS.md. */}
-                  {[
-                    { label: 'Economic Decision Efficiency (EDE)', value: fmtPct(m.economic_decision_efficiency), note: 'EDV_actual ÷ EDV_ceiling × 100 (Ch 4.2 domain rules)', color: qualColor(m.economic_decision_efficiency), pct: m.economic_decision_efficiency },
-                    { label: 'Economic Leakage Ratio (ELR)', value: fmtPct(m.economic_leakage_ratio), note: '100 − EDE', color: m.economic_leakage_ratio <= 30 ? DS.optimal : m.economic_leakage_ratio <= 60 ? DS.warning : DS.loss, pct: m.economic_leakage_ratio },
-                    { label: 'Dispatch Accuracy', value: fmtPct(m.dispatch_accuracy), note: 'Steps classified Correct ÷ Total × 100', color: qualColor(m.dispatch_accuracy), pct: m.dispatch_accuracy },
-                    { label: 'Forecast Utilization Index', value: fmtPct(m.forecast_utilization_index), note: 'Steps with a forecast value ÷ Total × 100', color: qualColor(m.forecast_utilization_index), pct: m.forecast_utilization_index },
-                    ...(m.override_rate_pct != null
-                      ? [{ label: 'Override Rate', value: fmtPct(m.override_rate_pct), note: 'Override-flagged steps ÷ Total × 100', color: DS.blue, pct: m.override_rate_pct }]
-                      : []),
-                    ...(m.curtailed_energy_mwh != null
-                      ? [{ label: 'Curtailed Energy', value: `${m.curtailed_energy_mwh} MWh`, note: 'Σ curtailment_mw × Δt (descriptive; not a gap attribution)', color: DS.cyan, pct: null }]
-                      : []),
-                  ].map((metric) => (
-                    <Card key={metric.label}>
-                      <Label>{metric.label}</Label>
-                      <BigNum v={metric.value} color={metric.color} size={28} />
-                      <div style={{ color: DS.dim, fontSize: 10, marginTop: 4 }}>{metric.note}</div>
-                      {metric.pct != null && <ProgressBar pct={metric.pct} color={metric.color} />}
-                    </Card>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ══ S07: Financial Leakage ══════════════════════════════ */}
-          {hasData && activeSection === 'leakage' && (
-            <div>
-              <SectionHeader tag="07" title="Financial Value Leakage" />
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 16, marginBottom: 8 }}>
-                {[
-                  ...(data.gap_attribution
-                    ? [{ label: 'Recoverable Execution Gap — Audit Period', value: fmtMoney(data.gap_attribution.execution_gap, data.currency), color: DS.loss }]
-                    : []),
-                  { label: 'Ceiling Gap — Audit Period', value: fmtMoney(data.total_gap_usd, data.currency), color: data.gap_attribution ? DS.orange : DS.loss },
-                  { label: '7-Day (Linear Est., Ceiling Basis)', value: data.total_gap_usd > 0 ? fmtMoney(data.total_gap_usd * 7, data.currency) : '—', color: DS.orange },
-                  { label: '30-Day (Linear Est., Ceiling Basis)', value: data.total_gap_usd > 0 ? fmtMoney(data.total_gap_usd * 30, data.currency) : '—', color: DS.warning },
-                  { label: '12-Month (Linear Est., Ceiling Basis)', value: data.total_gap_usd > 0 ? fmtMoney(data.total_gap_usd * 365, data.currency) : '—', color: DS.loss },
-                ].map((f) => (
-                  <Card key={f.label} style={{ textAlign: 'center', borderColor: `${f.color}25` }}>
-                    <Label>{f.label}</Label>
-                    <BigNum v={f.value} color={f.color} />
-                  </Card>
-                ))}
-              </div>
-              <div style={{ color: DS.dim, fontSize: 10, lineHeight: 1.5, marginBottom: 20 }}>
-                Ceiling basis = gap vs the Theoretical Economic Ceiling (perfect-foresight upper-bound
-                benchmark). Multi-period figures are linear extrapolations of the audited period, not
-                statistical forecasts.
-                {data.gap_attribution
-                  ? ' The Recoverable Execution Gap is the portion achievable with information available at decision time (Ch 8.2).'
-                  : ' A day-ahead forecast column is required to isolate the operationally recoverable portion.'}
-              </div>
-              <Card>
-                <Label style={{ marginBottom: 16 }}>Top Leakage Sources</Label>
-                {(data.financial_leakage?.top_sources || []).map((src, i) => (
-                  <div key={i} style={{ marginBottom: 14 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                      <span style={{ color: DS.text, fontSize: 12 }}>{src.name}</span>
-                      <span style={{ color: DS.loss, fontFamily: DS.mono, fontWeight: 700, fontSize: 11 }}>{fmtUSD(src.usd)} ({src.pct}%)</span>
-                    </div>
-                    <ProgressBar pct={src.pct} color={DS.loss} />
-                  </div>
-                ))}
-                {(data.financial_leakage?.top_sources || []).length === 0 && <EmptyMsg>Run an audit to populate leakage sources.</EmptyMsg>}
-              </Card>
-
-              {/* 30-day history */}
-              <Card style={{ marginTop: 20 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                  <Label>30-Day Trend</Label>
-                  <BtnOutline color={DS.loss} onClick={async () => {
-                    setHistLoading(true);
-                    try { const r = await axios.get('/api/historical'); if (r.data?.history_log) setHistData(r.data.history_log); } catch (_) {}
-                    setHistLoading(false);
-                  }}>
-                    {histLoading ? 'QUERYING…' : 'SYNC HISTORY'}
-                  </BtnOutline>
-                </div>
-                <ResponsiveContainer width="100%" height={200}>
-                  <BarChart data={histData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={DS.border} />
-                    <XAxis dataKey="day" stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} />
-                    <YAxis stroke={DS.dim} tickFormatter={(v) => `$${v}`} tick={{ fill: DS.dim, fontSize: 9 }} />
-                    <Tooltip contentStyle={{ background: '#0f1318', border: `1px solid ${DS.border}`, borderRadius: 8, fontSize: 11 }} formatter={(v) => [`$${v} lost`, 'Daily Leakage']} />
-                    <Bar dataKey="daily_gap" fill={DS.loss} radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-                {histData.length === 0 && !histLoading && (
-                  <div style={{ textAlign: 'center', color: DS.dim, marginTop: 10, fontSize: 11 }}>
-                    Connect to a production database to display historical trend data.
-                  </div>
-                )}
-              </Card>
-            </div>
-          )}
-
-          {/* ══ S08: Decision Heat Map ══════════════════════════════ */}
-          {hasData && activeSection === 'heatmap' && (
-            <div>
-              <SectionHeader tag="08" title="Decision Heat Map — 24 Hours" />
-              <div style={{ display: 'flex', gap: 16, marginBottom: 20, flexWrap: 'wrap' }}>
-                {[['optimal', DS.optimal, 'Optimal Decision'], ['acceptable', DS.warning, 'Acceptable'], ['poor', DS.orange, 'Poor Decision'], ['critical', DS.loss, 'Critical Loss']].map(([s, c, l]) => (
-                  <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <div style={{ width: 12, height: 12, borderRadius: 3, background: c }} />
-                    <span style={{ color: DS.sub, fontSize: 11 }}>{l}</span>
-                  </div>
-                ))}
-              </div>
-              {(data.heat_map || []).length > 0 ? (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12,1fr)', gap: 5 }}>
-                  {(data.heat_map || []).slice(0, 288).map((cell, i) => {
-                    const c = heatColor(cell.status);
-                    return (
-                      <div key={i} title={`${cell.label} | ${cell.action_taken} | Gap: $${cell.gap_usd}`} style={{
-                        height: 46, borderRadius: DS.r8,
-                        background: `${c}18`, border: `1px solid ${c}50`,
-                        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                        cursor: 'default',
-                      }}>
-                        <div style={{ color: c, fontSize: 8, fontFamily: DS.mono }}>{cell.label}</div>
-                        {cell.gap_usd > 0 && <div style={{ color: DS.loss, fontSize: 7, marginTop: 1 }}>−${cell.gap_usd.toFixed(0)}</div>}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : <EmptyMsg>Run an audit to generate the decision heat map.</EmptyMsg>}
-            </div>
-          )}
-
-          {/* ══ S09: Economic Action Plan™ ══════════════════════════ */}
-          {hasData && activeSection === 'opps' && (
-            <div>
-              <SectionHeader tag="09" title="Economic Action Plan™ — Value Recovery Roadmap" />
-
-              {/* Portfolio header */}
-              {(data.opportunities || []).length > 0 && (() => {
-                const ops   = data.opportunities || [];
-                const total = ops.reduce((s, o) => s + (o.annual_gain_usd || 0), 0);
-                // Header stats derived strictly from the ledger-backed items.
-                // Former "Portfolio Confidence" (mean of fabricated per-item
-                // confidences) and difficulty timeline claims removed.
-                const quantified = ops.filter(o => !o.experimental && o.period_gain != null);
-                const advisory   = ops.filter(o => o.experimental);
-                const periodTotal = quantified
-                  .filter(o => o.name !== 'Operator override governance') // cross-cut, excluded from sum
-                  .reduce((s, o) => s + (o.period_gain || 0), 0);
-                const intervalsTotal = quantified
-                  .filter(o => o.name !== 'Operator override governance')
-                  .reduce((s, o) => s + (o.intervals_observed || 0), 0);
-                return (
-                  <div style={{ background: `linear-gradient(135deg, rgba(0,230,118,0.06) 0%, rgba(75,191,255,0.04) 100%)`, border: `1px solid ${DS.optimal}25`, borderRadius: DS.r16, padding: 24, marginBottom: 24 }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 20 }}>
-                      {[
-                        { label: 'Period Gap Attributed', v: fmtMoney(periodTotal, data.currency), c: DS.optimal, big: true, sub: 'Σ over classified ledger rows' },
-                        { label: 'Annualised (Linear Est.)', v: fmtMoney(periodTotal * 365, data.currency), c: DS.warning, sub: 'ceiling basis' },
-                        { label: 'Quantified Actions', v: quantified.length, c: DS.optimal, sub: 'ledger-derived' },
-                        { label: 'Ledger Intervals', v: intervalsTotal, c: DS.blue, sub: 'evidence rows' },
-                        { label: 'Advisory (Experimental)', v: advisory.length, c: DS.dim, sub: 'not quantified' },
-                      ].map(f => (
+          {hasData && activeSection === 'timeline' && (() => {
+            const correct  = log.filter(d => d.decision_type?.includes('Correct')).length;
+            const critical = log.filter(d => (d.gap_step || 0) > 100).length;
+            const subopt   = log.filter(d => (d.gap_step || 0) > 0 && (d.gap_step || 0) <= 100).length;
+            const stats = [
+              { label: 'Decisions audited', v: log.length, c: PDS.text },
+              { label: 'Correct', v: correct, c: PDS.recover },
+              { label: 'Suboptimal', v: subopt, c: PDS.warn },
+              { label: 'Critical', v: critical, c: PDS.loss },
+              { label: 'Revenue destroyed', v: fmtMoney(data.total_gap_usd, data.currency), c: PDS.loss },
+            ];
+            const lead = log.length > 0 ? (
+              <>Of {log.length} audited decisions,{' '}
+                <span className="pds-num" style={{ color: PDS.loss, fontWeight: 800 }}>{critical + subopt}</span>{' '}
+                leaked value — destroying{' '}
+                <span className="pds-num" style={{ color: PDS.loss, fontWeight: 700 }}>{fmtMoney(data.total_gap_usd, data.currency)}</span>.
+                Each entry below is one decision, with its counterfactual and MILP-verified recovery.</>
+            ) : undefined;
+            return (
+              <SectionShell kicker="Decision Audit Trail™" title="Decision Forensics"
+                question="Which decisions cost us — and why?" lead={lead}>
+                {log.length === 0 ? (
+                  <div style={{ fontSize: 14, color: PDS.text2 }}>Run an audit to populate the Decision Audit Trail.</div>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', gap: PDS.s6, rowGap: PDS.s3, flexWrap: 'wrap', marginBottom: PDS.s5 }}>
+                      {stats.map((f) => (
                         <div key={f.label}>
-                          <Label style={{ fontSize: 9, marginBottom: 4 }}>{f.label}</Label>
-                          <BigNum v={f.v} color={f.c} size={f.big ? 24 : 20} />
-                          {f.sub && <div style={{ color: DS.dim, fontSize: 9, marginTop: 3 }}>{f.sub}</div>}
+                          <div className="pds-kicker" style={{ marginBottom: 4 }}>{f.label}</div>
+                          <div className="pds-num" style={{ fontSize: 20, fontWeight: 800, color: f.c }}>{f.v}</div>
                         </div>
                       ))}
                     </div>
-                  </div>
-                );
-              })()}
-
-              {(data.opportunities || []).length === 0 ? <EmptyMsg>Run an audit to generate the Economic Action Plan.</EmptyMsg> : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  {(data.opportunities || []).map((op, i) => (
-                    <div key={i} style={{ background: DS.surface, border: `1px solid ${op.experimental ? DS.dim : DS.border}`, borderRadius: DS.r12, overflow: 'hidden', opacity: op.experimental ? 0.85 : 1 }}>
-                      {/* Card header */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '18px 22px 14px', borderBottom: `1px solid ${DS.border}` }}>
-                        <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-                          <div style={{ color: DS.dim, fontFamily: DS.mono, fontSize: 20, fontWeight: 800, lineHeight: 1, minWidth: 30 }}>#{i+1}</div>
-                          <div>
-                            <div style={{ color: DS.text, fontWeight: 700, fontSize: 14, marginBottom: 5 }}>
-                              {op.name}
-                              {op.experimental && <Pill label="EXPERIMENTAL — NOT PART OF EDA STANDARD v1.0" color={DS.dim} style={{ marginLeft: 10 }} />}
+                    <div style={{ maxHeight: 720, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 'var(--ws-card-gap)' }}>
+                      {log.filter(d => (d.gap_step || 0) > 0).slice(0, 60).map((dec, i) => {
+                        const h  = dec.hour || 0;
+                        const ts = `${Math.floor(h/12).toString().padStart(2,'0')}:${((h%12)*5).toString().padStart(2,'0')}`;
+                        const gap = dec.gap_step || 0;
+                        const isCrit = gap > 100, isMod = gap > 20 && !isCrit;
+                        const vd = gap <= 0 ? { label: 'Correct decision', color: PDS.recover }
+                          : isCrit ? { label: 'Revenue destroyed', color: PDS.loss }
+                          : isMod ? { label: 'Suboptimal dispatch', color: PDS.warn }
+                          : { label: 'Minor leakage', color: '#F5945B' };
+                        const rootCause = {
+                          'Missed Arbitrage':   'Static dispatch rule — no market-responsive trigger',
+                          'Partial Capture':    'SOC constraint or partial execution — capacity available but under-utilised',
+                          'Over-Dispatch':      'Aggressive dispatch beyond MILP-optimal level',
+                          'Correct Dispatch':   'Decision matched the optimal counterfactual',
+                          'Correct Idle':       'Idle period was economically justified',
+                        }[dec.decision_type] || 'Sub-optimal dispatch strategy';
+                        return (
+                          <Panel key={i} pad={PDS.s5} accent={false}
+                                 style={{ borderLeft: `3px solid ${vd.color}` }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 10, flexWrap: 'wrap' }}>
+                              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                                <span className="pds-num" style={{ color: PDS.text3, fontSize: 10 }}>#{i + 1}</span>
+                                <span className="pds-num" style={{ color: PDS.accent, fontSize: 14, fontWeight: 700 }}>{ts}</span>
+                                <span style={{ fontSize: 11, fontWeight: 700, color: vd.color, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                  <StatusDot color={vd.color} size={6} /> {vd.label}
+                                </span>
+                                {dec.operator_override && <span style={{ fontSize: 10, color: '#F5945B', letterSpacing: '0.06em' }}>HUMAN OVERRIDE</span>}
+                              </div>
+                              {gap > 0 && <span className="pds-num" style={{ color: PDS.loss, fontSize: 14, fontWeight: 700 }}>−{fmtMoney(gap, data.currency)}</span>}
                             </div>
-                            <div style={{ color: DS.sub, fontSize: 11, lineHeight: 1.6, maxWidth: 520 }}>{op.description}</div>
-                          </div>
-                        </div>
-                        {!op.experimental && op.period_gain != null && (
-                          <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 20 }}>
-                            <BigNum v={fmtMoney(op.period_gain, data.currency)} color={DS.optimal} size={22} />
-                            <div style={{ color: DS.dim, fontSize: 9, letterSpacing: '0.12em', marginTop: 2 }}>AUDITED PERIOD</div>
-                            <div style={{ color: DS.warning, fontFamily: DS.mono, fontSize: 12, marginTop: 4 }}>{fmtMoney(op.annual_gain_usd, data.currency)}</div>
-                            <div style={{ color: DS.dim, fontSize: 8.5, letterSpacing: '0.08em' }}>ANNUALISED · LINEAR EST.</div>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Derived metrics (quantified items only) */}
-                      {!op.experimental && op.period_gain != null && (
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 0, padding: '12px 22px' }}>
-                          {[
-                            { label: 'Ledger Intervals', v: op.intervals_observed, c: DS.blue },
-                            { label: 'Share of Positive Gap', v: op.share_of_positive_gap_pct != null ? `${op.share_of_positive_gap_pct}%` : '—', c: DS.cyan },
-                            { label: 'Reproducible From', v: 'Ledger CSV (decision_type filter)', c: DS.sub },
-                          ].map(f => (
-                            <div key={f.label} style={{ borderRight: `1px solid ${DS.border}`, padding: '4px 12px 4px 0', marginRight: 12 }}>
-                              <Label style={{ fontSize: 9, marginBottom: 3 }}>{f.label}</Label>
-                              <div style={{ color: f.c, fontSize: 12, fontWeight: 600 }}>{f.v}</div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 10, marginBottom: 12 }}>
+                              {[
+                                { label: 'Market price', v: `${dec.price} ${data.currency}/MWh`, c: PDS.warn },
+                                { label: 'Asset SOC', v: dec.soc != null ? `${(dec.soc*100).toFixed(0)}%` : '—', c: PDS.text2 },
+                                { label: 'Optimal action', v: `${dec.optimal_action} MW`, c: PDS.recover },
+                                { label: 'Actual action', v: (dec.actual_action||0) < 0.5 ? 'Idle' : `${dec.actual_action} MW`, c: (dec.actual_action||0) < 0.5 ? PDS.loss : PDS.text },
+                                { label: 'Curtailment', v: dec.curtailment_mw ? `${dec.curtailment_mw} MW` : '—', c: '#F5945B' },
+                              ].map((f) => (
+                                <div key={f.label}>
+                                  <div className="pds-kicker" style={{ marginBottom: 3 }}>{f.label}</div>
+                                  <div className="pds-num" style={{ color: f.c, fontSize: 12, fontWeight: 600 }}>{f.v}</div>
+                                </div>
+                              ))}
                             </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Evidence + derivation footer */}
-                      <div style={{ padding: '10px 22px', background: `rgba(255,255,255,0.015)`, borderTop: `1px solid ${DS.border}` }}>
-                        {op.evidence && (
-                          <div style={{ color: DS.dim, fontSize: 11, marginBottom: op.derivation ? 4 : 0 }}>
-                            <span style={{ color: DS.sub }}>Evidence:</span> {op.evidence}
-                          </div>
-                        )}
-                        {op.derivation && (
-                          <div style={{ color: DS.dim, fontSize: 10, fontFamily: DS.mono }}>
-                            <span style={{ color: DS.sub, fontFamily: 'inherit' }}>Derivation:</span> {op.derivation}
-                          </div>
-                        )}
-                        {op.experimental && (
-                          <div style={{ color: DS.dim, fontSize: 10 }}>{op.experimental_note}</div>
-                        )}
-                      </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px,100%),1fr))', gap: 10 }}>
+                              <div style={{ padding: '8px 12px', background: PDS.lossSoft, border: `1px solid ${PDS.loss}20`, borderRadius: PDS.rSm }}>
+                                <div className="pds-kicker" style={{ marginBottom: 3 }}>Root cause</div>
+                                <div style={{ color: PDS.text2, fontSize: 11, lineHeight: 1.5 }}>{rootCause}</div>
+                              </div>
+                              <div style={{ padding: '8px 12px', background: PDS.recoverSoft, border: `1px solid ${PDS.recover}20`, borderRadius: PDS.rSm }}>
+                                <div className="pds-kicker" style={{ marginBottom: 3 }}>What should have happened</div>
+                                <div style={{ color: PDS.text2, fontSize: 11, lineHeight: 1.5 }}>
+                                  {gap > 0
+                                    ? `Dispatching ${dec.optimal_action} MW would have recovered ${fmtMoney(gap, data.currency)} with no constraint violation. MILP-verified.`
+                                    : 'Decision was economically optimal. No improvement available.'}
+                                </div>
+                              </div>
+                            </div>
+                            {gap > 0 && (
+                              <div style={{ marginTop: 8, display: 'flex', gap: 16, fontSize: 10, color: PDS.text3 }}>
+                                <span>MILP-verified</span>
+                                <span>Dispatch-log verified</span>
+                                <span>{Math.min(100, Math.round((gap / (data.total_gap_usd || 1)) * 1000))}% of total loss</span>
+                              </div>
+                            )}
+                          </Panel>
+                        );
+                      })}
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* ══ S10: Economic Intelligence Report™ ═════════════════ */}
-          {hasData && activeSection === 'ai' && (
-            <div>
-              <SectionHeader tag="10" title="Economic Intelligence Report™ — Independent Assessment" />
-
-              {/* Executive Status Box */}
-              {hasData && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 12, marginBottom: 20 }}>
-                  {[
-                    { label: 'Risk Band (DQ Thresholds)', v: (data.risk_level || '—').toUpperCase(), c: riskColor(data.risk_level) },
-                    { label: 'Ceiling Capture (ECF)', v: fmtPct(captureRate), c: qualColor(captureRate) },
-                    ...(data.gap_attribution
-                      ? [{ label: 'Recoverable Execution Gap', v: fmtMoney(data.gap_attribution.execution_gap, data.currency), c: DS.optimal }]
-                      : [{ label: 'Ceiling Gap (Upper Bound)', v: fmtMoney(data.total_gap_usd, data.currency), c: DS.warning }]),
-                    { label: 'Dispatch Accuracy', v: m ? `${m.dispatch_accuracy?.toFixed(1)}%` : '—', c: DS.cyan },
-                    { label: 'Forecast Coverage', v: m ? `${m.forecast_utilization_index?.toFixed(0)}%` : '—', c: DS.blue },
-                  ].map(f => (
-                    <Card key={f.label} style={{ textAlign: 'center' }} glow={f.c === riskColor(data.risk_level) && data.risk_level === 'Severe' ? DS.loss : undefined}>
-                      <Label style={{ fontSize: 9 }}>{f.label}</Label>
-                      <BigNum v={f.v} color={f.c} size={18} />
-                    </Card>
-                  ))}
-                </div>
-              )}
-
-              {/* Enhance button */}
-              <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
-                <BtnOutline color={DS.cyan} onClick={generateAI} disabled={!hasData || aiLoading}>
-                  {aiLoading ? 'GENERATING…' : '✦ DEEP ECONOMIC ANALYSIS'}
-                </BtnOutline>
-                {(aiText || data.ai_commentary) && aiText && (
-                  <BtnOutline color={DS.dim} onClick={() => setAiText('')}>RESET</BtnOutline>
+                  </>
                 )}
-              </div>
+              </SectionShell>
+            );
+          })()}
 
-              {/* Report content */}
-              {(aiText || data.ai_commentary) ? (
-                <Card glow={DS.cyan}>
-                  {/* Report header */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, paddingBottom: 16, borderBottom: `1px solid ${DS.border}` }}>
-                    <div>
-                      <div style={{ color: DS.text, fontSize: 14, fontWeight: 700, letterSpacing: '0.08em' }}>PREDAIOT Economic Intelligence Report™</div>
-                      <div style={{ color: DS.dim, fontSize: 10, letterSpacing: '0.15em', marginTop: 3 }}>INDEPENDENT ECONOMIC DECISION ASSESSMENT</div>
+          {/* ══ S04: Root Cause Analysis ════════════════════════════ */}
+          {hasData && activeSection === 'rootcause' && (() => {
+            const rcs = (data.root_causes || []).slice().sort((a, b) => (b.loss_usd || 0) - (a.loss_usd || 0));
+            const top = rcs[0];
+            const lead = top ? (
+              <>The largest driver of leakage is{' '}
+                <span style={{ color: PDS.text, fontWeight: 700 }}>{top.category}</span> —{' '}
+                <span className="pds-num" style={{ color: PDS.loss, fontWeight: 800 }}>{fmtMoney(top.loss_usd, data.currency)}</span>{' '}
+                ({fmtPct(top.contribution_pct, 0)} of recorded loss). Each cause below is decomposed from the audited ledger.</>
+            ) : undefined;
+            return (
+              <SectionShell kicker="Root Cause Analysis" title="Why Value Leaked"
+                question="Why is this happening?" lead={lead}>
+                {rcs.length === 0 ? (
+                  <div style={{ fontSize: 14, color: PDS.text2 }}>Run an audit to decompose leakage by root cause.</div>
+                ) : (
+                  <Zone row="primary">
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                      {rcs.map((rc, i) => (
+                        <div key={rc.category} style={{ display: 'flex', gap: 18, alignItems: 'baseline' }}>
+                          <span className="pds-num" style={{ fontSize: 12, color: PDS.text3, width: 22, flexShrink: 0 }}>{String(i + 1).padStart(2, '0')}</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, marginBottom: 7 }}>
+                              <span style={{ fontSize: 14, color: PDS.text, fontWeight: i === 0 ? 700 : 500 }}>{rc.category}</span>
+                              <span className="pds-num" style={{ fontSize: 13, color: PDS.loss, fontWeight: 700, flexShrink: 0 }}>
+                                {fmtMoney(rc.loss_usd, data.currency)}<span style={{ color: PDS.text3, fontWeight: 400 }}> · {fmtPct(rc.contribution_pct, 0)}</span>
+                              </span>
+                            </div>
+                            <div style={{ height: 3, background: PDS.hairline, borderRadius: 2, overflow: 'hidden' }}>
+                              <div style={{ width: '100%', height: '100%', background: PDS.loss, borderRadius: 2, opacity: i === 0 ? 0.9 : 0.55,
+                                            transform: `scaleX(${Math.min(100, rc.contribution_pct || 0) / 100})`, transformOrigin: 'left',
+                                            transition: 'transform var(--pds-dur-slow) var(--pds-ease)' }} />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                    {hasData && (
-                      <div style={{ textAlign: 'right' }}>
-                        <Pill label={data.risk_level === 'Severe' ? '🔴 CRITICAL' : data.risk_level === 'Moderate' ? '🟡 MODERATE' : '🟢 LOW RISK'} color={riskColor(data.risk_level)} />
-                        <div style={{ color: DS.dim, fontSize: 9, marginTop: 4 }}>{data.audit_period_label}</div>
-                      </div>
-                    )}
-                  </div>
+                    <Panel pad={PDS.s5}>
+                      <div className="pds-kicker" style={{ color: PDS.accent, marginBottom: 12 }}>Leakage Flow — contribution</div>
+                      <Suspense fallback={<ChartSkeleton h={260} />}>
+                        <LeakageFlow rootCauses={rcs} />
+                      </Suspense>
+                    </Panel>
+                  </Zone>
+                )}
+              </SectionShell>
+            );
+          })()}
 
-                  {/* Evidence summary */}
-                  {hasData && m && (
-                    <div style={{ display: 'flex', gap: 20, padding: '10px 14px', background: DS.bgRaised || '#080c12', borderRadius: DS.r8, marginBottom: 20, flexWrap: 'wrap' }}>
-                      {[
-                        { l: 'Dispatch Records Analysed', v: log.length },
-                        { l: 'SCADA Completeness', v: '99.8%' },
-                        { l: 'Forecast Availability', v: `${m.forecast_utilization_index?.toFixed(0)}%` },
-                        { l: 'MILP Validated', v: '✓ Yes' },
-                        { l: 'Evidence Level', v: log.length > 200 ? 'HIGH' : 'MEDIUM' },
-                      ].map(e => (
-                        <div key={e.l}>
-                          <div style={{ color: DS.dim, fontSize: 9, letterSpacing: '0.1em' }}>{e.l.toUpperCase()}</div>
-                          <div style={{ color: DS.cyan, fontFamily: DS.mono, fontSize: 11, fontWeight: 700, marginTop: 2 }}>{e.v}</div>
+          {/* ══ S05: Counterfactual Simulation ══════════════════════ */}
+          {hasData && activeSection === 'counter' && (() => {
+            const gap = data.gap_attribution ? data.gap_attribution.execution_gap : data.total_gap_usd;
+            const money = [
+              { label: 'Captured value', value: fmtMoney(data.edv_actual_total, data.currency), color: PDS.recover },
+              { label: 'Theoretical ceiling', value: fmtMoney(data.edv_optimal_total, data.currency), color: PDS.warn },
+              { label: data.gap_attribution ? 'Recoverable execution gap' : 'Ceiling gap', value: `−${fmtMoney(gap, data.currency)}`, color: PDS.loss },
+            ];
+            const lead = (
+              <>Against a perfect-foresight optimum of{' '}
+                <span className="pds-num" style={{ color: PDS.warn, fontWeight: 700 }}>{fmtMoney(data.edv_optimal_total, data.currency)}</span>,
+                the executed dispatch left{' '}
+                <span className="pds-num" style={{ color: PDS.loss, fontWeight: 800 }}>{fmtMoney(gap, data.currency)}</span>{' '}
+                on the table — MILP-verified, step by step.</>
+            );
+            return (
+              <SectionShell kicker="Counterfactual Simulation" title="What Would Have Happened"
+                question="What would optimal dispatch have earned?" lead={lead}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 360px))', justifyContent: 'start', gap: 'var(--ws-card-gap)' }}>
+                  {money.map((f) => (
+                    <Panel key={f.label} pad={PDS.s5}>
+                      <div className="pds-kicker" style={{ marginBottom: 8 }}>{f.label}</div>
+                      <div className="pds-num" style={{ fontSize: 26, fontWeight: 800, color: f.color, lineHeight: 1 }}>{f.value}</div>
+                    </Panel>
+                  ))}
+                </div>
+                {log.length > 0 && (
+                  <div style={{ marginTop: 'var(--ws-zone-gap)' }}>
+                    <Panel pad={PDS.s5}>
+                      <div className="pds-kicker" style={{ marginBottom: 12 }}>Optimal vs actual dispatch</div>
+                      <Suspense fallback={<ChartSkeleton h={260} />}>
+                        <DispatchCurve log={log} />
+                      </Suspense>
+                    </Panel>
+                  </div>
+                )}
+                {data.counterfactual_summary && (
+                  <div style={{ marginTop: 'var(--ws-zone-gap)' }}>
+                    <Panel pad={PDS.s5} accent>
+                      <div style={{ color: PDS.text2, fontSize: 14, lineHeight: 1.7, maxWidth: 'var(--pds-prose-max)' }}>
+                        {data.counterfactual_summary}
+                      </div>
+                    </Panel>
+                  </div>
+                )}
+              </SectionShell>
+            );
+          })()}
+
+          {/* ══ S06: EDA Metrics ════════════════════════════════════ */}
+          {hasData && activeSection === 'metrics' && (() => {
+            const metrics = m ? [
+              { label: 'Economic Decision Efficiency (EDE)', value: fmtPct(m.economic_decision_efficiency), note: 'EDV captured ÷ EDV ceiling × 100 (Ch 4.2 domain rules)', color: qualColor(m.economic_decision_efficiency), pct: m.economic_decision_efficiency },
+              { label: 'Economic Leakage Ratio (ELR)', value: fmtPct(m.economic_leakage_ratio), note: '100 − EDE', color: m.economic_leakage_ratio <= 30 ? DS.optimal : m.economic_leakage_ratio <= 60 ? DS.warning : DS.loss, pct: m.economic_leakage_ratio },
+              { label: 'Dispatch Accuracy', value: fmtPct(m.dispatch_accuracy), note: 'Steps classified correct ÷ total × 100', color: qualColor(m.dispatch_accuracy), pct: m.dispatch_accuracy },
+              { label: 'Forecast Utilization Index', value: fmtPct(m.forecast_utilization_index), note: 'Steps with a forecast value ÷ total × 100', color: qualColor(m.forecast_utilization_index), pct: m.forecast_utilization_index },
+              ...(m.override_rate_pct != null ? [{ label: 'Override Rate', value: fmtPct(m.override_rate_pct), note: 'Override-flagged steps ÷ total × 100', color: DS.blue, pct: m.override_rate_pct }] : []),
+              ...(m.curtailed_energy_mwh != null ? [{ label: 'Curtailed Energy', value: `${m.curtailed_energy_mwh} MWh`, note: 'Σ curtailment_mw × Δt (descriptive; not a gap attribution)', color: DS.cyan, pct: null }] : []),
+            ] : [];
+            const lead = m ? (
+              <>Decisions captured{' '}
+                <span className="pds-num" style={{ color: qualColor(m.economic_decision_efficiency), fontWeight: 800 }}>{fmtPct(m.economic_decision_efficiency)}</span>{' '}
+                of achievable economic value this period — {fmtPct(m.economic_leakage_ratio, 0)} leaked. Each metric below is a ledger-derived ratio, reproducible from the audit.</>
+            ) : undefined;
+            return (
+              <SectionShell kicker="EDA Metrics" title="Decision Quality Metrics"
+                question="How healthy are our decisions, measured?" lead={lead}>
+                {!m ? (
+                  <div style={{ fontSize: 14, color: PDS.text2 }}>Run an audit to compute the decision-quality metrics.</div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px,100%), 1fr))', gap: 'var(--ws-card-gap)' }}>
+                    {metrics.map((metric) => (
+                      <Panel key={metric.label} pad={PDS.s5}>
+                        <div className="pds-kicker" style={{ marginBottom: 8 }}>{metric.label}</div>
+                        <div className="pds-num" style={{ fontSize: 30, fontWeight: 800, color: metric.color, lineHeight: 1 }}>{metric.value}</div>
+                        <div style={{ color: PDS.text3, fontSize: 10, marginTop: 8, lineHeight: 1.5 }}>{metric.note}</div>
+                        {metric.pct != null && (
+                          <div style={{ height: 4, background: PDS.hairline, borderRadius: 2, overflow: 'hidden', marginTop: 12 }}>
+                            <div style={{ width: '100%', height: '100%', background: metric.color, borderRadius: 2, opacity: 0.85,
+                                          transform: `scaleX(${Math.min(100, metric.pct || 0) / 100})`, transformOrigin: 'left',
+                                          transition: 'transform var(--pds-dur-slow) var(--pds-ease)' }} />
+                          </div>
+                        )}
+                      </Panel>
+                    ))}
+                  </div>
+                )}
+                <div style={{ marginTop: 'var(--ws-zone-gap)' }}>
+                  <DataQualityPanel dqi={data.data_quality_index} ac={data.audit_confidence} fr={data.forecast_reliability} />
+                </div>
+              </SectionShell>
+            );
+          })()}
+
+          {/* ══ S07: Financial Leakage ══════════════════════════════ */}
+          {hasData && activeSection === 'leakage' && (() => {
+            const exec = data.gap_attribution ? data.gap_attribution.execution_gap : null;
+            const sources = data.financial_leakage?.top_sources || [];
+            const maxSrc = sources.reduce((mx, s) => Math.max(mx, s.pct || 0), 0) || 1;
+            const lead = (
+              <>This asset leaked{' '}
+                <span className="pds-num" style={{ color: PDS.loss, fontWeight: 800 }}>{fmtMoney(data.total_gap_usd, data.currency)}</span>{' '}
+                against the perfect-foresight ceiling this period
+                {exec != null && <>, of which <span className="pds-num" style={{ color: PDS.recover, fontWeight: 700 }}>{fmtMoney(Math.abs(exec), data.currency)}</span> was recoverable with information available at decision time</>}.
+                Basis: recorded period only — no forward projection.</>
+            );
+            return (
+              <SectionShell kicker="Financial Leakage" title="Value Leakage"
+                question="How much are we losing — and where?" lead={lead}>
+                {/* Recorded-period money only. The 7/30/365-day linear
+                    extrapolations were removed (PL-1.0 LR §5 / SPEC-QA Q9). */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 420px))', justifyContent: 'start', gap: 'var(--ws-card-gap)' }}>
+                  {exec != null && (
+                    <Panel pad={PDS.s5}>
+                      <div className="pds-kicker" style={{ marginBottom: 8 }}>Recoverable Execution Gap</div>
+                      <div className="pds-num" style={{ fontSize: 34, fontWeight: 800, color: PDS.loss, lineHeight: 1 }}>{fmtMoney(Math.abs(exec), data.currency)}</div>
+                      <div style={{ fontSize: 11, color: PDS.text3, marginTop: 8 }}>achievable with the day-ahead forecast (Ch 8.2)</div>
+                    </Panel>
+                  )}
+                  <Panel pad={PDS.s5}>
+                    <div className="pds-kicker" style={{ marginBottom: 8 }}>Ceiling Gap</div>
+                    <div className="pds-num" style={{ fontSize: 34, fontWeight: 800, color: exec != null ? PDS.warn : PDS.loss, lineHeight: 1 }}>{fmtMoney(data.total_gap_usd, data.currency)}</div>
+                    <div style={{ fontSize: 11, color: PDS.text3, marginTop: 8 }}>vs the perfect-foresight upper bound{data.gap_attribution ? '' : ' — a forecast column isolates the recoverable portion'}</div>
+                  </Panel>
+                </div>
+
+                {/* Top leakage sources — ranked exhibit. */}
+                <div style={{ marginTop: 'var(--ws-zone-gap)' }}>
+                  <div className="pds-kicker" style={{ marginBottom: 14 }}>Where it leaked — top sources</div>
+                  {sources.length === 0 ? (
+                    <div style={{ fontSize: 12, color: PDS.text3 }}>No leakage-source decomposition recorded for this audit.</div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 860 }}>
+                      {sources.map((src, i) => (
+                        <div key={src.name} style={{ display: 'flex', gap: 18, alignItems: 'baseline' }}>
+                          <span className="pds-num" style={{ fontSize: 12, color: PDS.text3, width: 22, flexShrink: 0 }}>{String(i + 1).padStart(2, '0')}</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, marginBottom: 7 }}>
+                              <span style={{ fontSize: 14, color: PDS.text, fontWeight: i === 0 ? 700 : 500 }}>{src.name}</span>
+                              <span className="pds-num" style={{ fontSize: 13, color: PDS.loss, fontWeight: 700, flexShrink: 0 }}>
+                                {fmtMoney(src.usd, data.currency)}<span style={{ color: PDS.text3, fontWeight: 400 }}> · {fmtPct(src.pct, 0)}</span>
+                              </span>
+                            </div>
+                            <div style={{ height: 3, background: PDS.hairline, borderRadius: 2, overflow: 'hidden' }}>
+                              <div style={{ width: '100%', height: '100%', background: PDS.loss, borderRadius: 2, opacity: i === 0 ? 0.9 : 0.55,
+                                            transform: `scaleX(${Math.min(100, (src.pct || 0) / maxSrc)})`, transformOrigin: 'left',
+                                            transition: 'transform var(--pds-dur-slow) var(--pds-ease)' }} />
+                            </div>
+                          </div>
                         </div>
                       ))}
                     </div>
                   )}
+                </div>
 
-                  {/* Report text */}
-                  <pre style={{ color: DS.text, fontSize: 13, lineHeight: 2.0, fontFamily: DS.sans, whiteSpace: 'pre-wrap', margin: 0 }}>
-                    {aiText || data.ai_commentary}
-                  </pre>
+                {/* Recorded leakage history (real periods, not a projection). */}
+                <div style={{ marginTop: 'var(--ws-zone-gap)' }}>
+                  <Panel pad={PDS.s5}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 12, flexWrap: 'wrap' }}>
+                      <div className="pds-kicker">Recorded leakage history</div>
+                      <button onClick={async () => {
+                        setHistLoading(true);
+                        try { const r = await axios.get('/api/historical'); if (r.data?.history_log) setHistData(r.data.history_log); } catch (_) {}
+                        setHistLoading(false);
+                      }} style={{ background: 'none', border: `1px solid ${PDS.border}`, color: PDS.text2, borderRadius: PDS.rSm, padding: '5px 12px', cursor: 'pointer', fontSize: 10, letterSpacing: '0.1em', fontWeight: 700 }}>
+                        {histLoading ? 'QUERYING…' : 'SYNC HISTORY'}
+                      </button>
+                    </div>
+                    <Suspense fallback={<ChartSkeleton h={200} />}>
+                      <LeakageHistory histData={histData} />
+                    </Suspense>
+                    {histData.length === 0 && !histLoading && (
+                      <div style={{ fontSize: 11, color: PDS.text3, marginTop: 10 }}>
+                        Connect a production database to display recorded historical periods.
+                      </div>
+                    )}
+                  </Panel>
+                </div>
+              </SectionShell>
+            );
+          })()}
 
-                  {/* Footer */}
-                  <div style={{ marginTop: 20, paddingTop: 14, borderTop: `1px solid ${DS.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ color: DS.dim, fontSize: 10 }}>
-                      This assessment was generated using the PREDAIOT Economic Decision Audit™ methodology and independently validated against the mathematically optimal dispatch solution.
+          {/* ══ S08: Decision Heat Map ══════════════════════════════ */}
+          {hasData && activeSection === 'heatmap' && (() => {
+            const cells = (data.heat_map || []);
+            const degraded = cells.filter((c) => c.status === 'poor' || c.status === 'critical').length;
+            const lead = cells.length > 0 ? (
+              <>Across {cells.length} audited intervals,{' '}
+                <span className="pds-num" style={{ color: PDS.loss, fontWeight: 800 }}>{degraded}</span>{' '}
+                fell to poor or critical decision quality, leaking{' '}
+                <span className="pds-num" style={{ color: PDS.loss, fontWeight: 700 }}>{fmtMoney(data.total_gap_usd, data.currency)}</span>{' '}
+                in total. Each cell is one recorded decision.</>
+            ) : undefined;
+            return (
+              <SectionShell kicker="Decision Heat Map" title="When Decisions Degraded"
+                question="When did our decisions degrade?" lead={lead}>
+                {cells.length === 0 ? (
+                  <div style={{ fontSize: 14, color: PDS.text2 }}>Run an audit to generate the decision heat map.</div>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', gap: 16, marginBottom: 18, flexWrap: 'wrap' }}>
+                      {[['optimal', PDS.recover, 'Optimal'], ['acceptable', PDS.warn, 'Acceptable'], ['poor', '#F5945B', 'Poor'], ['critical', PDS.loss, 'Critical loss']].map(([s, c, l]) => (
+                        <div key={s} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ width: 12, height: 12, borderRadius: 3, background: c }} />
+                          <span style={{ color: PDS.text3, fontSize: 11 }}>{l}</span>
+                        </div>
+                      ))}
                     </div>
-                    <div style={{ color: DS.dim, fontSize: 9, flexShrink: 0, marginLeft: 16 }}>
-                      {aiText ? 'Enhanced using Claude Sonnet' : 'PREDAIOT Engine v2.0'}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12,1fr)', gap: 5 }}>
+                      {cells.slice(0, 288).map((cell, i) => {
+                        const c = heatColor(cell.status);
+                        return (
+                          <div key={i} title={`${cell.label} · ${cell.action_taken} · gap ${fmtMoney(cell.gap_usd, data.currency)}`} style={{
+                            height: 46, borderRadius: PDS.rSm, background: `${c}18`, border: `1px solid ${c}50`,
+                            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: 'default',
+                          }}>
+                            <div className="pds-num" style={{ color: c, fontSize: 8 }}>{cell.label}</div>
+                            {cell.gap_usd > 0 && <div className="pds-num" style={{ color: PDS.loss, fontSize: 7, marginTop: 1 }}>−{cell.gap_usd.toFixed(0)}</div>}
+                          </div>
+                        );
+                      })}
                     </div>
-                  </div>
-                </Card>
-              ) : <EmptyMsg>Run an audit and click "Deep Economic Analysis" to generate the Intelligence Report.</EmptyMsg>}
-            </div>
+                  </>
+                )}
+              </SectionShell>
+            );
+          })()}
+
+          {/* ══ S09: Economic Action Plan™ ══════════════════════════ */}
+          {hasData && activeSection === 'opps' && (
+            <ActionPlan data={data} />
+          )}
+
+          {/* ══ S10: Economic Intelligence Report™ ═════════════════ */}
+          {hasData && activeSection === 'ai' && (
+            <IntelligenceReport data={data} m={m} captureRate={captureRate}
+              aiText={aiText} aiLoading={aiLoading}
+              onGenerate={generateAI} onReset={() => setAiText('')} />
           )}
 
           {/* ══ S11: Governance ═════════════════════════════════════ */}
           {activeSection === 'govern' && (
-            <div>
-              <SectionHeader tag="11" title="Governance &amp; Decision Authority" />
-
-              {/* ── SCADA / EMS Integration Framework (credibility layer) ── */}
-              <Card style={{ marginBottom: 20 }}>
-                <Label style={{ marginBottom: 6 }}>SCADA / EMS Integration Framework</Label>
-                <div style={{ color: DS.sub, fontSize: 11, marginBottom: 18, lineHeight: 1.6 }}>
-                  PREDAIOT is an <span style={{ color: DS.text, fontWeight: 700 }}>Economic Advisory Observer</span>,
-                  not a control system. We do not issue dispatch commands to your asset by default. Three integration tiers,
-                  selected per deployment:
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-                  {[
-                    {
-                      n: '1', tag: 'READ ONLY', color: DS.optimal,
-                      head: 'Telemetry in, intelligence out',
-                      body: 'SCADA / EMS → PREDAIOT. Compute the audit, surface gaps and opportunities. Asset operates unchanged. No write path of any kind.',
-                      meta: 'Default for diagnostic + audit phases.',
-                    },
-                    {
-                      n: '2', tag: 'ADVISORY', color: DS.cyan,
-                      head: 'Operator-in-the-loop',
-                      body: 'PREDAIOT generates per-interval recommendations. Operator or duty engineer accepts, rejects, or adjusts. Every decision recorded for governance + override-audit trail.',
-                      meta: 'Default for pilot deployments.',
-                    },
-                    {
-                      n: '3', tag: 'CLOSED LOOP', color: DS.warning,
-                      head: 'Direct dispatch — opt-in only',
-                      body: 'PREDAIOT writes dispatch commands directly to the EMS or scheduler. Requires explicit customer opt-in, regulatory sign-off, and a documented kill-switch / fail-safe revert path.',
-                      meta: 'Available on request; not enabled by default.',
-                    },
-                  ].map((t) => (
-                    <div key={t.n} style={{ padding: 16, background: `${t.color}06`, border: `1px solid ${t.color}30`, borderRadius: DS.r12 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                        <div style={{ width: 26, height: 26, borderRadius: '50%', background: t.color, color: '#001b08', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 12 }}>{t.n}</div>
-                        <div style={{ color: t.color, fontSize: 10, letterSpacing: '0.2em', fontWeight: 700 }}>LEVEL {t.n} · {t.tag}</div>
-                      </div>
-                      <div style={{ color: DS.text, fontSize: 12, fontWeight: 700, marginBottom: 6 }}>{t.head}</div>
-                      <div style={{ color: DS.sub, fontSize: 11, lineHeight: 1.6, marginBottom: 8 }}>{t.body}</div>
-                      <div style={{ color: t.color, fontSize: 10, fontStyle: 'italic' }}>{t.meta}</div>
+            <SectionShell kicker="Governance & Decision Authority" title="Who Holds Authority"
+              question="Who decides — and is it recorded?"
+              lead={<>PREDAIOT is an <span style={{ color: PDS.text, fontWeight: 700 }}>Economic Advisory Observer</span>, not a control system. It issues no dispatch commands by default; every decision and override is recorded as governance evidence.</>}>
+              {/* Integration tiers — how authority is delegated per deployment. */}
+              <div className="pds-kicker" style={{ marginBottom: 14 }}>SCADA / EMS integration tiers</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px,100%),1fr))', gap: 'var(--ws-card-gap)' }}>
+                {[
+                  { n: '1', tag: 'READ ONLY', color: PDS.recover, head: 'Telemetry in, intelligence out', body: 'SCADA / EMS → PREDAIOT. Compute the audit, surface gaps and opportunities. Asset operates unchanged. No write path of any kind.', meta: 'Default for diagnostic + audit phases.' },
+                  { n: '2', tag: 'ADVISORY', color: PDS.accent, head: 'Operator-in-the-loop', body: 'PREDAIOT generates per-interval recommendations. Operator or duty engineer accepts, rejects, or adjusts. Every decision recorded for governance and the override-audit trail.', meta: 'Default for pilot deployments.' },
+                  { n: '3', tag: 'CLOSED LOOP', color: PDS.warn, head: 'Direct dispatch — opt-in only', body: 'PREDAIOT writes dispatch commands directly to the EMS or scheduler. Requires explicit customer opt-in, regulatory sign-off, and a documented kill-switch / fail-safe revert path.', meta: 'Available on request; never enabled by default.' },
+                ].map((t) => (
+                  <Panel key={t.n} pad={PDS.s5} accent={false} style={{ borderTop: `2px solid ${t.color}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                      <div className="pds-num" style={{ width: 24, height: 24, borderRadius: '50%', background: t.color, color: PDS.bg0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 11 }}>{t.n}</div>
+                      <div style={{ color: t.color, fontSize: 10, letterSpacing: '0.18em', fontWeight: 700 }}>LEVEL {t.n} · {t.tag}</div>
                     </div>
-                  ))}
-                </div>
-                <div style={{ marginTop: 16, padding: 12, background: `${DS.optimal}08`, border: `1px solid ${DS.optimal}25`, borderRadius: DS.r8 }}>
-                  <div style={{ color: DS.optimal, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em' }}>CURRENT POSTURE</div>
-                  <div style={{ color: DS.sub, fontSize: 11, marginTop: 4, lineHeight: 1.6 }}>
-                    PREDAIOT ships at <span style={{ color: DS.optimal, fontWeight: 700 }}>Level 1–2</span> by default.
-                    No dispatch authority over your asset. Level 3 requires an explicit signed integration agreement and is never enabled silently.
-                  </div>
-                </div>
-              </Card>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-                <Card>
-                  <Label style={{ marginBottom: 16 }}>Decision Authority Breakdown</Label>
-                  {log.length > 0 ? (() => {
-                    const overrides = log.filter(d => d.operator_override).length;
-                    const auto = log.length - overrides;
-                    const ovPct = (overrides / log.length * 100).toFixed(1);
-                    const autoPct = (auto / log.length * 100).toFixed(1);
-                    return (
-                      <>
-                        <div style={{ marginBottom: 14 }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
-                            <span style={{ color: DS.sub }}>Automatic (EMS)</span>
-                            <span style={{ color: DS.optimal, fontFamily: DS.mono, fontWeight: 700 }}>{autoPct}% · {auto} dispatches</span>
-                          </div>
-                          <ProgressBar pct={parseFloat(autoPct)} color={DS.optimal} />
-                        </div>
-                        <div style={{ marginBottom: 14 }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
-                            <span style={{ color: DS.sub }}>Human Override</span>
-                            <span style={{ color: DS.orange, fontFamily: DS.mono, fontWeight: 700 }}>{ovPct}% · {overrides} dispatches</span>
-                          </div>
-                          <ProgressBar pct={parseFloat(ovPct)} color={DS.orange} />
-                        </div>
-                        <div style={{ marginTop: 16, padding: 12, background: `${DS.orange}08`, border: `1px solid ${DS.orange}25`, borderRadius: DS.r8 }}>
-                          <div style={{ color: DS.orange, fontSize: 11, fontWeight: 700 }}>OVERRIDE IMPACT</div>
-                          <div style={{ color: DS.sub, fontSize: 11, marginTop: 4, lineHeight: 1.6 }}>Each human override carries average leakage risk. Review override justification log for compliance and pattern analysis.</div>
-                        </div>
-                      </>
-                    );
-                  })() : <EmptyMsg>Run an audit to populate governance data.</EmptyMsg>}
-                </Card>
-                <Card>
-                  {/* Recorded facts only. The former "Compliance Checklist"
-                      issued PASS verdicts on unverified items (market rules,
-                      SOC limits) and invented DQ thresholds — removed
-                      (docs/REMOVED_HEURISTICS.md). */}
-                  <Label style={{ marginBottom: 16 }}>Recorded Audit Facts</Label>
-                  {[
-                    { fact: 'Decision intervals in ledger', v: log.length },
-                    { fact: 'Operator overrides recorded', v: log.filter(r => r.operator_override).length },
-                    { fact: 'Overrides with positive gap', v: log.filter(r => r.operator_override && (r.gap_step || 0) > 0).length },
-                    { fact: 'Steps with forecast value', v: `${(m?.forecast_utilization_index ?? 0).toFixed(0)}%` },
-                    { fact: 'Steps with SoC telemetry', v: `${log.length ? ((log.filter(r => r.soc != null).length / log.length) * 100).toFixed(0) : 0}%` },
-                    { fact: 'Risk band (published DQ thresholds)', v: (data.risk_level || '—').toUpperCase() },
-                  ].map(({ fact, v }, i) => (
-                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 0', borderBottom: `1px solid ${DS.border}` }}>
-                      <span style={{ color: DS.sub, fontSize: 12 }}>{fact}</span>
-                      <span style={{ color: DS.text, fontFamily: DS.mono, fontSize: 12, fontWeight: 700 }}>{v}</span>
-                    </div>
-                  ))}
-                </Card>
+                    <div style={{ color: PDS.text, fontSize: 13, fontWeight: 700, marginBottom: 6 }}>{t.head}</div>
+                    <div style={{ color: PDS.text2, fontSize: 11, lineHeight: 1.6, marginBottom: 8 }}>{t.body}</div>
+                    <div style={{ color: PDS.text3, fontSize: 10 }}>{t.meta}</div>
+                  </Panel>
+                ))}
               </div>
-            </div>
+              <div style={{ marginTop: PDS.s4, padding: '12px 16px', background: PDS.recoverSoft, border: `1px solid ${PDS.recover}25`, borderRadius: PDS.rSm }}>
+                <span className="pds-kicker" style={{ color: PDS.recover }}>Current posture</span>
+                <div style={{ color: PDS.text2, fontSize: 11, marginTop: 4, lineHeight: 1.6 }}>
+                  PREDAIOT ships at <span style={{ color: PDS.recover, fontWeight: 700 }}>Level 1–2</span> by default — no dispatch authority over your asset. Level 3 requires an explicit signed integration agreement and is never enabled silently.
+                </div>
+              </div>
+
+              {/* Recorded authority split + audit facts. */}
+              <div style={{ marginTop: 'var(--ws-zone-gap)' }}>
+                <Zone row="split">
+                  <Panel pad={PDS.s5}>
+                    <div className="pds-kicker" style={{ marginBottom: 14 }}>Decision authority — recorded split</div>
+                    {log.length > 0 ? (() => {
+                      const overrides = log.filter(d => d.operator_override).length;
+                      const auto = log.length - overrides;
+                      const ovPct = (overrides / log.length * 100), autoPct = (auto / log.length * 100);
+                      return [
+                        { l: 'Automatic (EMS)', pct: autoPct, n: auto, c: PDS.recover },
+                        { l: 'Human override', pct: ovPct, n: overrides, c: '#F5945B' },
+                      ].map((r) => (
+                        <div key={r.l} style={{ marginBottom: 14 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 5 }}>
+                            <span style={{ color: PDS.text2 }}>{r.l}</span>
+                            <span className="pds-num" style={{ color: r.c, fontWeight: 700 }}>{r.pct.toFixed(1)}% · {r.n} dispatches</span>
+                          </div>
+                          <div style={{ height: 4, background: PDS.hairline, borderRadius: 2, overflow: 'hidden' }}>
+                            <div style={{ width: '100%', height: '100%', background: r.c, borderRadius: 2, opacity: 0.85,
+                                          transform: `scaleX(${Math.min(100, r.pct) / 100})`, transformOrigin: 'left',
+                                          transition: 'transform var(--pds-dur-slow) var(--pds-ease)' }} />
+                          </div>
+                        </div>
+                      ));
+                    })() : <div style={{ fontSize: 12, color: PDS.text3 }}>Run an audit to populate the recorded authority split.</div>}
+                  </Panel>
+                  <Panel pad={PDS.s5}>
+                    <div className="pds-kicker" style={{ marginBottom: 14 }}>Recorded audit facts</div>
+                    {[
+                      { fact: 'Decision intervals in ledger', v: log.length },
+                      { fact: 'Operator overrides recorded', v: log.filter(r => r.operator_override).length },
+                      { fact: 'Overrides with positive gap', v: log.filter(r => r.operator_override && (r.gap_step || 0) > 0).length },
+                      { fact: 'Steps with forecast value', v: `${(m?.forecast_utilization_index ?? 0).toFixed(0)}%` },
+                      { fact: 'Steps with SoC telemetry', v: `${log.length ? ((log.filter(r => r.soc != null).length / log.length) * 100).toFixed(0) : 0}%` },
+                      { fact: 'Risk band', v: (data.risk_level || '—') },
+                    ].map(({ fact, v }, i, arr) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 0', borderBottom: i < arr.length - 1 ? `1px solid ${PDS.hairline}` : 'none' }}>
+                        <span style={{ color: PDS.text3, fontSize: 12 }}>{fact}</span>
+                        <span className="pds-num" style={{ color: PDS.text, fontSize: 12, fontWeight: 700 }}>{v}</span>
+                      </div>
+                    ))}
+                  </Panel>
+                </Zone>
+              </div>
+            </SectionShell>
           )}
 
           {/* ══ S12: Math Appendix ══════════════════════════════════ */}
           {activeSection === 'appendix' && (
-            <div>
-              <SectionHeader tag="12" title="Mathematical Appendix" />
-              <div style={{ color: DS.sub, fontSize: 11, marginBottom: 16, lineHeight: 1.6 }}>
-                Canonical formulas from the PREDAIOT Reference Manual (Ch. 4–6). These are the same equations the audit
-                engine computes — naming and arithmetic match <span style={{ fontFamily: DS.mono, color: DS.cyan }}>backend/main.py</span> exactly.
-              </div>
-              <Card>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <SectionShell kicker="Mathematical Appendix" title="How the Audit Is Computed"
+              question="How is every figure derived?"
+              lead={<>The canonical formulas from the PREDAIOT Reference Manual (Ch. 4–6) — the same equations the audit engine computes. Naming and arithmetic match <span className="pds-num" style={{ color: PDS.accent }}>backend/main.py</span> exactly.</>}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--ws-card-gap)' }}>
                   {[
                     {
                       name: 'Economic Decision Value (EDV) — Master Definition',
@@ -2964,20 +2649,19 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                       units: 'USD / year',
                     },
                   ].map((eq) => (
-                    <div key={eq.name} style={{ padding: '16px 20px', background: `${DS.cyan}04`, border: `1px solid ${DS.cyan}18`, borderRadius: DS.r12 }}>
-                      <div style={{ color: DS.cyan, fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{eq.name}</div>
-                      <div style={{ fontFamily: DS.mono, fontSize: 13, color: DS.warning, background: `${DS.warning}08`, padding: '6px 14px', borderRadius: DS.r8, display: 'inline-block', marginBottom: 8 }}>{eq.formula}</div>
-                      <div style={{ color: DS.sub, fontSize: 11, lineHeight: 1.7 }}>{eq.desc}</div>
-                      <div style={{ color: DS.dim, fontSize: 10, marginTop: 4 }}>Units: {eq.units}</div>
-                    </div>
+                    <Panel key={eq.name} pad={PDS.s5} accent={false}>
+                      <div style={{ color: PDS.text, fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{eq.name}</div>
+                      <div className="pds-num" style={{ fontSize: 13, color: PDS.warn, background: PDS.warnSoft, padding: '6px 14px', borderRadius: PDS.rSm, display: 'inline-block', marginBottom: 8 }}>{eq.formula}</div>
+                      <div style={{ color: PDS.text2, fontSize: 11, lineHeight: 1.7, maxWidth: 'var(--pds-prose-max)' }}>{eq.desc}</div>
+                      <div style={{ color: PDS.text3, fontSize: 10, marginTop: 4 }}>Units: {eq.units}</div>
+                    </Panel>
                   ))}
                 </div>
-              </Card>
-              <div style={{ color: DS.dim, fontSize: 10, marginTop: 12, lineHeight: 1.6 }}>
+              <div style={{ color: PDS.text3, fontSize: 10, marginTop: PDS.s5, lineHeight: 1.6, maxWidth: 'var(--pds-prose-max)' }}>
                 Full theoretical derivations, sector-specific applications (Solar / Wind / Gas / Hydro / Hydrogen / Desalination / Nuclear),
                 and the patent-pending counterfactual decomposition live in the PREDAIOT Reference Manual (Vol. III).
               </div>
-            </div>
+            </SectionShell>
           )}
 
           {/* ══ S13: Live Monitor ══════════════════════════════ */}
@@ -2999,14 +2683,24 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
 
           {activeSection === 'live' && (
             <div>
-              <SectionHeader tag="⚡" title="Real-Time Live Monitor — Economic Advisory Observer" />
+              <div style={{ marginBottom: 'var(--ws-zone-gap)' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, marginBottom: 6 }}>
+                  <span className="pds-kicker" style={{ color: PDS.accent }}>Live Monitor</span>
+                  <span aria-hidden style={{ flex: 1, height: 1, background: PDS.hairline, opacity: 0.6 }} />
+                  <span style={{ fontSize: 11, color: PDS.text3 }}>What is happening right now?</span>
+                </div>
+                <div style={{ fontSize: 'clamp(22px, 2vw, 30px)', fontWeight: 800, color: PDS.text, letterSpacing: '-0.015em' }}>Live Operations — Economic Advisory Observer</div>
+                <div style={{ fontSize: 15, color: PDS.text2, lineHeight: 1.7, marginTop: 12, maxWidth: 'var(--pds-prose-max)' }}>
+                  Point your SCADA/EMS at this socket, or simulate a feed, and watch economic leakage update live — computed by the same certified engine, provisional until a certified audit confirms it.
+                </div>
+              </div>
 
               <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
                 <BtnOutline
                   color={liveMode ? DS.loss : DS.optimal}
                   onClick={() => (liveMode ? disconnectLive() : startLive())}
                 >
-                  {liveMode ? '⏹ DISCONNECT' : '▶ CONNECT TO /ws/live'}
+                  {liveMode ? 'DISCONNECT' : 'CONNECT TO /ws/live'}
                 </BtnOutline>
 
                 {/* Sector profile selector — chooses which synthetic feed shape to emit */}
@@ -3059,7 +2753,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                     }
                   }}
                 >
-                  {simRunning ? '⏹ STOP SIMULATED FEED' : `🧪 SIMULATE ${SIM_PROFILES[simProfile]?.label.split(' ·')[0] || 'BESS'} FEED`}
+                  {simRunning ? 'STOP SIMULATED FEED' : `SIMULATE ${SIM_PROFILES[simProfile]?.label.split(' ·')[0] || 'BESS'} FEED`}
                 </BtnOutline>
 
                 {liveData.length > 0 && (
@@ -3094,7 +2788,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   {liveData.length > 0 && (
                     <>
                       <span style={{ color: DS.warning, fontFamily: DS.mono, fontSize: 12 }}>
-                        Cumulative Gap: −{fmtUSD(liveData[liveData.length-1]?.cumulative_gap || 0)}
+                        Cumulative Gap: −{fmtMoney(liveData[liveData.length-1]?.cumulative_gap || 0, data.currency)}
                       </span>
                       <span style={{ color: qualColor(liveData[liveData.length-1]?.dq_score_live || 0), fontFamily: DS.mono, fontSize: 12, fontWeight: 700 }}>
                         DQ Live: {(liveData[liveData.length-1]?.dq_score_live || 0).toFixed(1)}%
@@ -3127,7 +2821,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                         { l: 'Market Price', v: `$${last.price}/MWh`, c: DS.warning },
                         { l: 'Recommended Action', v: last.recommended_action, c: DS.cyan },
                         { l: 'Recommended Power', v: `${last.recommended_power} MW`, c: DS.blue },
-                        { l: 'Expected Gain', v: fmtUSD(last.expected_gain || 0), c: DS.optimal },
+                        { l: 'Expected Gain', v: fmtMoney(last.expected_gain || 0, data.currency), c: DS.optimal },
                         { l: 'Gap % of Step Optimum', v: last.gap_pct_of_optimal != null ? `${last.gap_pct_of_optimal}%` : '—', c: DS.orange },
                         { l: 'Decision Quality', v: `${last.decision_quality}%`, c: qualColor(last.decision_quality) },
                       ].map(f => (
@@ -3149,33 +2843,15 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                   <Card>
                     <Label style={{ marginBottom: 12 }}>Live Gap Accumulation</Label>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <AreaChart data={liveData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
-                        <defs>
-                          <linearGradient id="gGap" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor={DS.loss} stopOpacity={0.3} />
-                            <stop offset="95%" stopColor={DS.loss} stopOpacity={0} />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke={DS.border} />
-                        <XAxis dataKey="step" stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} />
-                        <YAxis stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} tickFormatter={(v) => `$${v}`} />
-                        <Tooltip contentStyle={{ background: '#0f1318', border: `1px solid ${DS.border}`, fontSize: 11 }} formatter={(v) => [`$${v}`, 'Cumulative Gap']} />
-                        <Area type="monotone" dataKey="cumulative_gap" stroke={DS.loss} fill="url(#gGap)" strokeWidth={2} dot={false} />
-                      </AreaChart>
-                    </ResponsiveContainer>
+                    <Suspense fallback={<ChartSkeleton h={200} />}>
+                      <LiveGapFlow liveData={liveData} />
+                    </Suspense>
                   </Card>
                   <Card>
                     <Label style={{ marginBottom: 12 }}>Live Decision Quality Score</Label>
-                    <ResponsiveContainer width="100%" height={150}>
-                      <AreaChart data={liveData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke={DS.border} />
-                        <XAxis dataKey="step" stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} />
-                        <YAxis domain={[0, 100]} stroke={DS.dim} tick={{ fill: DS.dim, fontSize: 9 }} tickFormatter={(v) => `${v}%`} />
-                        <Tooltip contentStyle={{ background: '#0f1318', border: `1px solid ${DS.border}`, fontSize: 11 }} formatter={(v) => [`${v}%`, 'DQ Score']} />
-                        <Area type="monotone" dataKey="dq_score_live" stroke={DS.cyan} fill={`${DS.cyan}18`} strokeWidth={2} dot={false} />
-                      </AreaChart>
-                    </ResponsiveContainer>
+                    <Suspense fallback={<ChartSkeleton h={150} />}>
+                      <LiveCaptureScore liveData={liveData} />
+                    </Suspense>
                   </Card>
                 </div>
               ) : (
@@ -3219,29 +2895,36 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {/* ══ S14: EDPC Certificate ════════════════════════════ */}
           {hasData && activeSection === 'cert' && (
             <div>
-              <SectionHeader tag="🏆" title="Economic Decision Performance Certificate™ (EDPC)" />
-              <div style={{ color: DS.sub, fontSize: 11, marginBottom: 20, maxWidth: 600 }}>
-                The EDPC is a formal economic performance rating for energy assets — the PREDAIOT equivalent of Moody's for industrial infrastructure. Composite rating from 4 weighted dimensions.
+              <div style={{ marginBottom: 'var(--ws-zone-gap)' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, marginBottom: 6 }}>
+                  <span className="pds-kicker" style={{ color: PDS.accent }}>EDPC Certificate</span>
+                  <span aria-hidden style={{ flex: 1, height: 1, background: PDS.hairline, opacity: 0.6 }} />
+                  <span style={{ fontSize: 11, color: PDS.text3 }}>Can we prove it?</span>
+                </div>
+                <div style={{ fontSize: 'clamp(22px, 2vw, 30px)', fontWeight: 800, color: PDS.text, letterSpacing: '-0.015em' }}>Economic Decision Performance Certificate™</div>
+                <div style={{ fontSize: 15, color: PDS.text2, lineHeight: 1.7, marginTop: 12, maxWidth: 'var(--pds-prose-max)' }}>
+                  A formal economic performance rating for energy assets — the PREDAIOT equivalent of a credit rating for industrial infrastructure, composited from four weighted dimensions of the certified audit.
+                </div>
               </div>
 
-              <div style={{ display: 'flex', gap: 10, marginBottom: 24 }}>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 24, flexWrap: 'wrap' }}>
                 <BtnOutline color={DS.warning} onClick={async () => {
                   setCertLoading(true);
                   try {
                     const r = await axios.get('/api/v1/certificate');
                     setCertificate(r.data);
-                  } catch (_) { alert('Generate an audit first, then request the certificate.'); }
+                  } catch (_) { setActionError('Run an audit before requesting the certificate — the EDPC certifies a completed audit.'); }
                   setCertLoading(false);
                 }} disabled={!hasData || certLoading}>
-                  {certLoading ? 'GENERATING…' : '🏆 GENERATE EDPC CERTIFICATE'}
+                  {certLoading ? 'GENERATING…' : 'GENERATE EDPC CERTIFICATE'}
                 </BtnOutline>
                 {certificate && (
                   <>
                     <BtnOutline color={DS.cyan} onClick={() => window.print()}>PRINT / EXPORT PDF</BtnOutline>
                     <BtnOutline color={DS.blue} onClick={() => {
-                      const shareText = `PREDAIOT Economic Decision Performance Certificate™\n\nAsset: ${certificate.asset_name}\nRating: ${certificate.rating} — ${certificate.rating_label}\nEconomic Efficiency: ${certificate.economic_efficiency}%\nCaptured Value: $${certificate.captured_value}\nAudit Date: ${new Date(certificate.issued_at).toLocaleDateString()}\n\nCertificate ID: ${certificate.certificate_id}\nCertified by PREDAIOT`;
+                      const shareText = `PREDAIOT Economic Decision Performance Certificate™\n\nAsset: ${certificate.asset_name}\nRating: ${certificate.rating} — ${certificate.rating_label}\nEconomic Efficiency: ${certificate.economic_efficiency}%\nCaptured Value: ${certificate.captured_value} ${certificate.currency || 'USD'}\nAudit Date: ${new Date(certificate.issued_at).toLocaleDateString()}\n\nCertificate ID: ${certificate.certificate_id}\nCertified by PREDAIOT`;
                       navigator.clipboard?.writeText(shareText);
-                      alert('Certificate text copied — ready to paste on LinkedIn or in reports.');
+                      setNotice('Certificate text copied to clipboard.');
                     }}>SHARE CERTIFICATE</BtnOutline>
                   </>
                 )}
@@ -3385,8 +3068,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                 </div>
               ) : (
                 <div style={{ textAlign: 'center', padding: '60px 40px' }}>
-                  <div style={{ fontSize: 52, marginBottom: 16 }}>🏆</div>
-                  <div style={{ color: DS.text, fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Economic Decision Performance Certificate™</div>
+                                    <div style={{ color: DS.text, fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Economic Decision Performance Certificate™</div>
                   <div style={{ color: DS.sub, fontSize: 12, maxWidth: 500, margin: '0 auto 28px', lineHeight: 1.8 }}>
                     Composite rating across 4 weighted dimensions: Decision Quality (40%), Economic Efficiency (30%), Revenue Capture (20%), Governance (10%).
                     Equivalent to Moody's for energy asset economic performance.
