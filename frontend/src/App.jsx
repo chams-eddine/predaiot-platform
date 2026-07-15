@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, lazy, Suspense } from 
 import axios from 'axios';
 import ExecutiveCommandCenter from './components/ExecutiveCommandCenter';
 import ActionPlan from './components/ActionPlan';
+import IntelligenceReport from './components/IntelligenceReport';
 import { Workspace, Zone, useWorkspaceTier, tierAtLeast } from './workspace/Workspace';
 import { fmtMoney } from './design/ds';   // PL-1.0 L2: the one money voice
 
@@ -1658,10 +1659,10 @@ Two to three sentences. State the capture percentage and resulting rating plainl
 
 KEY FINDINGS
 List four lines exactly in this format:
-✔ Economic Intelligence Score    [value] / 100
-✔ Economic Leakage               $[value]
-✔ Missed High-Value Intervals    [value]
-✔ Largest Opportunity            [name of #1 ranked opportunity]
+· Economic Intelligence Score    [value] / 100
+· Economic Leakage               $[value]
+· Missed High-Value Intervals    [value]
+· Largest Opportunity            [name of #1 ranked opportunity]
 
 ROOT CAUSE ANALYSIS
 Two to three sentences explaining which decision logic (not equipment) caused the loss, citing the specific root cause percentages above.
@@ -2475,98 +2476,9 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
 
           {/* ══ S10: Economic Intelligence Report™ ═════════════════ */}
           {hasData && activeSection === 'ai' && (
-            <div>
-              <SectionHeader tag="10" title="Economic Intelligence Report™ — Independent Assessment" />
-
-              {/* Executive Status Box */}
-              {hasData && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 12, marginBottom: 20 }}>
-                  {[
-                    { label: 'Risk Band (DQ Thresholds)', v: (data.risk_level || '—').toUpperCase(), c: riskColor(data.risk_level) },
-                    { label: 'Ceiling Capture (ECF)', v: fmtPct(captureRate), c: qualColor(captureRate) },
-                    ...(data.gap_attribution
-                      ? [{ label: 'Recoverable Execution Gap', v: fmtMoney(data.gap_attribution.execution_gap, data.currency), c: DS.optimal }]
-                      : [{ label: 'Ceiling Gap (Upper Bound)', v: fmtMoney(data.total_gap_usd, data.currency), c: DS.warning }]),
-                    { label: 'Dispatch Accuracy', v: m ? `${m.dispatch_accuracy?.toFixed(1)}%` : '—', c: DS.cyan },
-                    { label: 'Forecast Coverage', v: m ? `${m.forecast_utilization_index?.toFixed(0)}%` : '—', c: DS.blue },
-                  ].map(f => (
-                    <Card key={f.label} style={{ textAlign: 'center' }} glow={f.c === riskColor(data.risk_level) && data.risk_level === 'Severe' ? DS.loss : undefined}>
-                      <Label style={{ fontSize: 9 }}>{f.label}</Label>
-                      <BigNum v={f.v} color={f.c} size={18} />
-                    </Card>
-                  ))}
-                </div>
-              )}
-
-              {/* Enhance button */}
-              <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
-                <BtnOutline color={DS.cyan} onClick={generateAI} disabled={!hasData || aiLoading}>
-                  {aiLoading ? 'GENERATING…' : '✦ DEEP ECONOMIC ANALYSIS'}
-                </BtnOutline>
-                {(aiText || data.ai_commentary) && aiText && (
-                  <BtnOutline color={DS.dim} onClick={() => setAiText('')}>RESET</BtnOutline>
-                )}
-              </div>
-
-              {/* Report content */}
-              {(aiText || data.ai_commentary) ? (
-                <Card glow={DS.cyan}>
-                  {/* Report header */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, paddingBottom: 16, borderBottom: `1px solid ${DS.border}` }}>
-                    <div>
-                      <div style={{ color: DS.text, fontSize: 14, fontWeight: 700, letterSpacing: '0.08em' }}>PREDAIOT Economic Intelligence Report™</div>
-                      <div style={{ color: DS.dim, fontSize: 10, letterSpacing: '0.15em', marginTop: 3 }}>INDEPENDENT ECONOMIC DECISION ASSESSMENT</div>
-                    </div>
-                    {hasData && (
-                      <div style={{ textAlign: 'right' }}>
-                        <Pill label={data.risk_level === 'Severe' ? 'CRITICAL' : data.risk_level === 'Moderate' ? 'MODERATE' : 'LOW RISK'} color={riskColor(data.risk_level)} />
-                        <div style={{ color: DS.dim, fontSize: 9, marginTop: 4 }}>{data.audit_period_label}</div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Evidence summary — recorded artifacts only. Fabricated
-                      constants (SCADA Completeness 99.8%, MILP Validated ✓,
-                      Evidence Level HIGH/MEDIUM) removed per PLA-1.0 C1 /
-                      P2 Economic Truth: nothing renders that the API did not
-                      report. */}
-                  {hasData && m && (
-                    <div style={{ display: 'flex', gap: 20, padding: '10px 14px', background: DS.bgRaised || '#080c12', borderRadius: DS.r8, marginBottom: 20, flexWrap: 'wrap' }}>
-                      {[
-                        { l: 'Dispatch Records Analysed', v: log.length },
-                        (m.forecast_utilization_index != null) &&
-                          { l: 'Forecast Availability', v: `${m.forecast_utilization_index.toFixed(0)}%` },
-                        (data.data_quality_index?.grade) &&
-                          { l: 'Data Quality', v: `Grade ${data.data_quality_index.grade}` },
-                        (data.audit_confidence?.grade && data.audit_confidence.grade !== 'INDETERMINATE') &&
-                          { l: 'Audit Confidence', v: `Grade ${data.audit_confidence.grade}` },
-                        data.audit_period_label && { l: 'Audit Period', v: data.audit_period_label },
-                      ].filter(Boolean).map(e => (
-                        <div key={e.l}>
-                          <div style={{ color: DS.dim, fontSize: 9, letterSpacing: '0.1em' }}>{e.l.toUpperCase()}</div>
-                          <div style={{ color: DS.cyan, fontFamily: DS.mono, fontSize: 11, fontWeight: 700, marginTop: 2 }}>{e.v}</div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Report text */}
-                  <pre style={{ color: DS.text, fontSize: 13, lineHeight: 2.0, fontFamily: DS.sans, whiteSpace: 'pre-wrap', margin: 0 }}>
-                    {aiText || data.ai_commentary}
-                  </pre>
-
-                  {/* Footer */}
-                  <div style={{ marginTop: 20, paddingTop: 14, borderTop: `1px solid ${DS.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ color: DS.dim, fontSize: 10 }}>
-                      This assessment was generated using the PREDAIOT Economic Decision Audit™ methodology and independently validated against the mathematically optimal dispatch solution.
-                    </div>
-                    <div style={{ color: DS.dim, fontSize: 9, flexShrink: 0, marginLeft: 16 }}>
-                      {aiText ? 'Enhanced using Claude Sonnet' : 'PREDAIOT Engine v2.0'}
-                    </div>
-                  </div>
-                </Card>
-              ) : <EmptyMsg>Run an audit and click "Deep Economic Analysis" to generate the Intelligence Report.</EmptyMsg>}
-            </div>
+            <IntelligenceReport data={data} m={m} captureRate={captureRate}
+              aiText={aiText} aiLoading={aiLoading}
+              onGenerate={generateAI} onReset={() => setAiText('')} />
           )}
 
           {/* ══ S11: Governance ═════════════════════════════════════ */}
