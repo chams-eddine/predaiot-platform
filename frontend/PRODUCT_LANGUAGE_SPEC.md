@@ -200,6 +200,32 @@ the language and does not ship.
 
 ---
 
+## 3a. Implementation waves (absorbed from the one-time language audit)
+
+The Product Language Matrix found exactly one screen (S01) speaking the
+language in full; the rest partial, two fragments (EDA Metrics, Intelligence
+Report). Unification proceeds language-first, integrity before frequency:
+
+- **Wave 0 — Truth & voice triage** — DONE (commit 7f38498): fabricated
+  evidence removed (S10), annualized figures removed from decision surfaces
+  (S09/S10 + AI prompt), all native `alert()` dialogs → institutional
+  surfaces.
+- **Wave 1 — Shared language primitives**: one `fmtMoney` (L2); `SectionShell`
+  (standfirst + question + action), `EconomicContextStrip`, `EvidenceRow` /
+  `GradeBadge` / `ConfidenceLine` — registered in the Component Registry.
+- **Wave 2 — COMMAND→ACTION journey**: Action Plan (09), Intelligence Report
+  (10) onto the shared voice.
+- **Wave 3 — ANALYSIS journey**: 02–08 (Metrics recomposed from grid to
+  ranked exhibit).
+- **Wave 4 — EVIDENCE & GOVERNANCE**: Governance (11), Certificate (CT),
+  Audit History (HX).
+- **Wave 5 — OPERATIONS**: Live Monitor (LV), Real-Time (RT).
+- **Wave 6 — Reference + coherence sweep**: Math Appendix (12); whole-product
+  blind-screenshot recognition pass.
+
+Each wave passes the Language Gate (§2) and re-scores the matrix until every
+section reads ✅; each cites the `PL-xx / LR-§ / ED-§` it satisfies.
+
 ## 4. Relationship to FE-2.0
 
 PL-1.0 is to FE-2.0 what a nation's civil code is to its constitution: FE-2.0
