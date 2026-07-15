@@ -321,8 +321,9 @@ export default function ExecutiveCommandCenter({ data, log, live, onOpenLive }) 
         <Panel pad={PDS.s5}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
                         marginBottom: 10, gap: 12, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: PDS.text2 }}>
-              Market price against per-step captured value — {period}
+            {/* Period lives in Acts I–II; it does not echo here. */}
+            <span style={{ fontSize: 12, color: PDS.text3 }}>
+              Market price against per-step captured value
               {isLive && <span style={{ color: PDS.provisional }}> · PROVISIONAL live stream</span>}
             </span>
             {onOpenLive && (
@@ -400,19 +401,20 @@ function AllocationBar({ captured, recoverable, forecastGap, leakage, ceiling, c
           <div key={s.k} style={{ width: `${(s.v / total) * 100}%`, background: s.c, opacity: 0.85 }} />
         ))}
       </div>
-      <div style={{ display: 'flex', gap: PDS.s5, marginTop: 8, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: PDS.s5, marginTop: 10, flexWrap: 'wrap' }}>
         {segs.map((s) => (
           <span key={s.k} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: PDS.text3 }}>
             <StatusDot color={s.c} size={6} />
             {s.k} <span className="pds-num" style={{ color: PDS.text2, fontWeight: 700 }}>{fmtMoney(s.v, currency)}</span>
           </span>
         ))}
-        {ceiling != null && (
-          <span style={{ fontSize: 11, color: PDS.text3, marginLeft: 'auto' }}>
-            Theoretical ceiling <span className="pds-num">{fmtMoney(ceiling, currency)}</span> — perfect-foresight benchmark, not a target
-          </span>
-        )}
       </div>
+      {/* Benchmark caption on its own quiet line — never fights the legend. */}
+      {ceiling != null && (
+        <div style={{ fontSize: 10, color: PDS.text3, opacity: 0.85, marginTop: 7, textAlign: 'right' }}>
+          Theoretical ceiling <span className="pds-num">{fmtMoney(ceiling, currency)}</span> — perfect-foresight benchmark, not a target
+        </div>
+      )}
     </div>
   );
 }
@@ -454,15 +456,15 @@ function DecisionPanel({ primary, alternatives, fallbackRc, currency }) {
         {p.description}
       </div>
       {alternatives && alternatives.length > 0 && (
-        <div style={{ marginTop: PDS.s5, paddingTop: PDS.s4, borderTop: `1px solid ${PDS.hairline}` }}>
-          <div className="pds-kicker" style={{ marginBottom: 8 }}>Alternative Decisions</div>
-          <div style={{ display: 'flex', gap: PDS.s5, flexWrap: 'wrap' }}>
+        <div style={{ marginTop: PDS.s6, paddingTop: PDS.s5, borderTop: `1px solid ${PDS.hairline}` }}>
+          <div className="pds-kicker" style={{ marginBottom: 12 }}>Alternative Decisions</div>
+          <div style={{ display: 'flex', gap: PDS.s6, rowGap: 12, flexWrap: 'wrap' }}>
             {alternatives.map((a) => {
               const gain = num(a.period_gain);
               return (
                 <div key={a.name} style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                   <StatusDot color={opportunityColor(a.experimental)} size={6} />
-                  <span style={{ fontSize: 12, color: PDS.text2 }}>{a.name}</span>
+                  <span style={{ fontSize: 13, color: PDS.text2 }}>{a.name}</span>
                   {gain != null ? (
                     <span className="pds-num" style={{ fontSize: 12, color: opportunityColor(a.experimental), fontWeight: 700 }}>
                       {fmtMoney(Math.abs(gain), currency)}
@@ -490,7 +492,7 @@ function OutcomePanel({ primary, currency, acGrade, acPct, dqiPct }) {
       ? `Audit confidence ${acGrade}${acPct != null ? ` · ${acPct.toFixed(0)}%` : ''}`
       : dqiPct != null
         ? `Data quality ${dqiPct.toFixed(0)}%`
-        : 'Confidence INDETERMINATE — data-quality index not computed on this audit path';
+        : 'INDETERMINATE — data-quality index not computed on this audit path';
   return (
     <Panel pad={PDS.s5}>
       <div className="pds-kicker" style={{ marginBottom: 12 }}>Expected Outcome</div>
@@ -498,22 +500,27 @@ function OutcomePanel({ primary, currency, acGrade, acPct, dqiPct }) {
                     lineHeight: 1, letterSpacing: '-0.02em' }}>
         <span className="pds-num">{gain != null ? fmtMoney(Math.abs(gain), currency) : '—'}</span>
       </div>
-      <div style={{ fontSize: 10, color: PDS.text3, marginTop: 8 }}>
+      <div style={{ fontSize: 11, color: PDS.text3, marginTop: 10 }}>
         recorded this period — no forward projection
         {primary && primary.intervals_observed != null && (
           <span className="pds-num"> · {primary.intervals_observed} intervals observed</span>
         )}
       </div>
-      {primary && primary.evidence && (
-        <div style={{ fontSize: 11, color: PDS.text3, marginTop: 12, lineHeight: 1.55 }}>
-          <span style={{ color: PDS.text2, fontWeight: 700 }}>Evidence · </span>{primary.evidence}
+      {/* The case — a ledger of two lines, generously spaced. */}
+      <div style={{ marginTop: PDS.s5, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {primary && primary.evidence && (
+          <div style={{ fontSize: 12, color: PDS.text3, lineHeight: 1.65 }}>
+            <span style={{ color: PDS.text2, fontWeight: 700 }}>Evidence · </span>{primary.evidence}
+          </div>
+        )}
+        <div style={{ fontSize: 12, color: PDS.text3, lineHeight: 1.65 }}>
+          <span style={{ color: PDS.text2, fontWeight: 700 }}>Confidence · </span>{confidenceLine}
         </div>
-      )}
-      <div style={{ fontSize: 11, color: PDS.text3, marginTop: 8 }}>
-        <span style={{ color: PDS.text2, fontWeight: 700 }}>Confidence · </span>{confidenceLine}
       </div>
+      {/* Method — footnote treatment: fine print below its own rule. */}
       {primary && primary.derivation && (
-        <div style={{ fontSize: 10, color: PDS.text3, marginTop: 8, opacity: 0.8 }}>
+        <div style={{ fontSize: 10, color: PDS.text3, opacity: 0.75, lineHeight: 1.6,
+                      marginTop: PDS.s4, paddingTop: 10, borderTop: `1px solid ${PDS.hairline}` }}>
           <span style={{ fontWeight: 700 }}>Method · </span>{primary.derivation}
         </div>
       )}
@@ -537,9 +544,10 @@ function EvidencePanel({ datasetHash, dqi, ac }) {
       <div className="pds-kicker" style={{ color: PDS.accent, marginBottom: 12 }}>Evidence Chain</div>
       {rows.length === 0 ? (
         <div style={{ fontSize: 11, color: PDS.text3 }}>No additional artifacts on this audit path.</div>
-      ) : rows.map((r) => (
+      ) : rows.map((r, i) => (
         <div key={r.k} style={{ display: 'flex', justifyContent: 'space-between', gap: 12,
-                                padding: '7px 0', borderBottom: `1px solid ${PDS.hairline}` }}>
+                                padding: '9px 0',
+                                borderBottom: i < rows.length - 1 ? `1px solid ${PDS.hairline}` : 'none' }}>
           <span style={{ fontSize: 11, color: PDS.text3, flexShrink: 0 }}>{r.k}</span>
           <span className={r.mono ? 'pds-num' : undefined}
                 title={r.full || undefined}
