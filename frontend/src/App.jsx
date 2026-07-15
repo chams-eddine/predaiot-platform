@@ -566,70 +566,65 @@ function RealTimePanel({ isSignedIn, onSignIn }) {
 
   if (!isSignedIn) {
     return (
-      <div style={{ padding: 40, textAlign: 'center' }}>
-        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Real-Time Economic Intelligence</div>
-        <div style={{ fontSize: 12, color: DS.sub, marginBottom: 18, lineHeight: 1.6 }}>
-          Sign in to stream live events and watch the economic leakage update every few seconds &mdash;
-          computed by the same certified audit engine, marked provisional until a certified audit confirms it.
-        </div>
-        <button onClick={onSignIn} style={primaryBtn}>Sign in &rarr;</button>
-      </div>
+      <SectionShell kicker="Real-Time" title="Live Economic Intelligence"
+        question="What is happening right now?"
+        lead="Sign in to stream live events and watch economic leakage update every few seconds — computed by the same certified audit engine, marked provisional until a certified audit confirms it.">
+        <button onClick={onSignIn} style={{ ...primaryBtn, width: 'auto', padding: '10px 22px' }}>Sign in</button>
+      </SectionShell>
     );
   }
-  const money = (v) => (v == null ? '—' : `${Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${state?.currency || 'OMR'}`);
+  const money = (v) => (v == null ? '—' : `${Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${state?.currency || 'OMR'}`);
   const tile = (label, value, color) => (
-    <div style={{ background: DS.panel, border: `1px solid ${DS.border}`, borderRadius: DS.r8, padding: '16px 20px', minWidth: 190, flex: 1 }}>
-      <div style={{ fontSize: 9, letterSpacing: '0.16em', color: DS.dim, marginBottom: 8 }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 800, color: color || DS.text, fontFamily: DS.mono }}>{value}</div>
-    </div>
+    <Panel pad={PDS.s5} style={{ minWidth: 190, flex: 1 }}>
+      <div className="pds-kicker" style={{ marginBottom: 8 }}>{label}</div>
+      <div className="pds-num" style={{ fontSize: 26, fontWeight: 800, color: color || PDS.text }}>{value}</div>
+    </Panel>
   );
   const s = state || {};
   const insufficient = s.status === 'INSUFFICIENT_EVIDENCE' || s.status === 'NO_STREAM';
   return (
-    <div>
-      <SectionHeader tag="RT" title="REAL-TIME ECONOMIC INTELLIGENCE (PROVISIONAL)" />
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', margin: '10px 0 18px' }}>
+    <SectionShell kicker="Real-Time" title="Live Economic Intelligence"
+      question="What is happening right now?"
+      right={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 11, fontWeight: 700, color: PDS.provisional, letterSpacing: '0.1em' }}>
+        <StatusDot color={PDS.provisional} pulse={running} size={7} /> PROVISIONAL
+      </span>}
+      lead={<>Live economic state, computed by the same certified engine as batch audits and evidence-hashed — provisional until a certified audit confirms it.</>}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: PDS.s5 }}>
         {!running
-          ? <button onClick={start} style={{ ...primaryBtn, width: 'auto', padding: '10px 22px' }}>&#9654; Start live stream</button>
-          : <button onClick={stop} style={{ ...primaryBtn, width: 'auto', padding: '10px 22px', background: DS.loss }}>&#9632; Stop</button>}
-        <span style={{ fontSize: 11, color: running ? DS.optimal : DS.sub }}>
+          ? <button onClick={start} style={{ ...primaryBtn, width: 'auto', padding: '10px 22px' }}>Start live stream</button>
+          : <button onClick={stop} style={{ ...primaryBtn, width: 'auto', padding: '10px 22px', background: PDS.loss }}>Stop</button>}
+        <span style={{ fontSize: 11, color: running ? PDS.recover : PDS.text3 }}>
           {running ? `streaming · ${s.n_events || 0} events in window · updates every 3s` : 'idle'}
         </span>
       </div>
-      {err && <EmptyMsg>{err}</EmptyMsg>}
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        {tile('LIVE LEAKAGE', insufficient ? '—' : money(s.live_leakage), DS.loss)}
-        {tile('LIVE RECOVERABLE', insufficient ? '—' : money(s.live_recoverable), DS.optimal)}
-        {tile('CONFIDENCE', s.confidence_grade ? `${s.confidence_grade}` : '—', _gradeColor(s.confidence_grade))}
+      {err && <div role="alert" style={{ fontSize: 12, color: PDS.loss, marginBottom: PDS.s4 }}>{err}</div>}
+      <div style={{ display: 'flex', gap: 'var(--ws-card-gap)', flexWrap: 'wrap' }}>
+        {tile('Live leakage', insufficient ? '—' : money(s.live_leakage), PDS.loss)}
+        {tile('Live recoverable', insufficient ? '—' : money(s.live_recoverable), PDS.recover)}
+        {tile('Confidence', s.confidence_grade ? `${s.confidence_grade}` : '—', _gradeColor(s.confidence_grade))}
       </div>
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 12 }}>
-        <div style={{ background: DS.panel, border: `1px solid ${DS.border}`, borderRadius: DS.r8, padding: '14px 18px', flex: 2, minWidth: 260 }}>
-          <div style={{ fontSize: 9, letterSpacing: '0.16em', color: DS.dim, marginBottom: 8 }}>TOP ACTION</div>
-          <div style={{ fontSize: 13, color: DS.text }}>
+      <div style={{ display: 'flex', gap: 'var(--ws-card-gap)', flexWrap: 'wrap', marginTop: 'var(--ws-card-gap)' }}>
+        <Panel pad={PDS.s5} style={{ flex: 2, minWidth: 260 }}>
+          <div className="pds-kicker" style={{ marginBottom: 8 }}>Top action</div>
+          <div style={{ fontSize: 13, color: PDS.text }}>
             {s.top_action
-              ? <><b style={{ color: DS.cyan }}>{s.top_action.decision_type}</b> &mdash; {s.top_action.statement}</>
+              ? <><b style={{ color: PDS.accent }}>{s.top_action.decision_type}</b> — {s.top_action.statement}</>
               : (insufficient ? 'Awaiting sufficient events…' : 'No material action in the current window.')}
           </div>
-        </div>
-        <div style={{ background: DS.panel, border: `1px solid ${DS.border}`, borderRadius: DS.r8, padding: '14px 18px', flex: 1, minWidth: 220 }}>
-          <div style={{ fontSize: 9, letterSpacing: '0.16em', color: DS.dim, marginBottom: 8 }}>EVIDENCE STATUS</div>
-          <div style={{ fontSize: 11, color: DS.warning, fontWeight: 700 }}>PROVISIONAL</div>
-          <div style={{ fontSize: 10, color: DS.sub, marginTop: 4 }}>not yet certified by a batch audit</div>
-          {s.evidence_sha256 && <div style={{ fontSize: 10, color: DS.dim, marginTop: 6, fontFamily: DS.mono }}>evidence {String(s.evidence_sha256).slice(0, 16)}…</div>}
-          {s.dqi != null && <div style={{ fontSize: 10, color: DS.dim, marginTop: 2 }}>DQI {(s.dqi * 100).toFixed(1)}% · AC {(s.audit_confidence * 100).toFixed(1)}%</div>}
-        </div>
+        </Panel>
+        <Panel pad={PDS.s5} style={{ flex: 1, minWidth: 220 }}>
+          <div className="pds-kicker" style={{ marginBottom: 8 }}>Evidence status</div>
+          <div style={{ fontSize: 11, color: PDS.provisional, fontWeight: 700 }}>PROVISIONAL</div>
+          <div style={{ fontSize: 10, color: PDS.text2, marginTop: 4 }}>not yet certified by a batch audit</div>
+          {s.evidence_sha256 && <div className="pds-num" style={{ fontSize: 10, color: PDS.text3, marginTop: 6 }}>evidence {String(s.evidence_sha256).slice(0, 16)}…</div>}
+          {s.dqi != null && <div className="pds-num" style={{ fontSize: 10, color: PDS.text3, marginTop: 2 }}>DQI {(s.dqi * 100).toFixed(1)}% · AC {(s.audit_confidence * 100).toFixed(1)}%</div>}
+        </Panel>
       </div>
-      {hist.length > 1 && (
-        <div style={{ marginTop: 14, fontSize: 10, color: DS.dim }}>
-          leakage trace ({hist.length}): {hist.slice(-12).map((x) => Number(x).toFixed(0)).join('  →  ')}
-        </div>
-      )}
-      <div style={{ marginTop: 16, fontSize: 10, color: DS.dim, lineHeight: 1.6 }}>
-        Live states are computed by the SAME certified Layer-2 audit engine used for CSV audits &mdash;
-        no parallel logic. Every value is provisional and evidence-hashed until a certified batch audit confirms it.
-        Raw telemetry is a drill-down only; the surface shows economic meaning.
+      <div style={{ marginTop: PDS.s5, fontSize: 10, color: PDS.text3, lineHeight: 1.6, maxWidth: 'var(--pds-prose-max)' }}>
+        Live states are computed by the same certified Layer-2 audit engine used for CSV audits — no parallel logic.
+        Every value is provisional and evidence-hashed until a certified batch audit confirms it.
       </div>
-    </div>
+    </SectionShell>
   );
 }
 
@@ -645,41 +640,41 @@ function AuditHistoryPanel({ isSignedIn, onLoad, onSignIn, busyId }) {
   }, [isSignedIn]);
   if (!isSignedIn) {
     return (
-      <div style={{ padding: 40, textAlign: 'center' }}>
-        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Your audits, remembered</div>
-        <div style={{ fontSize: 12, color: DS.sub, marginBottom: 18, lineHeight: 1.6 }}>
-          Sign in and every Economic Decision Audit you run is stored under your organization &mdash;
-          reload any past audit bit-for-bit, and see what your assets keep leaking.
-        </div>
-        <button onClick={onSignIn} style={primaryBtn}>Sign in &rarr;</button>
-      </div>
+      <SectionShell kicker="Audit History" title="Economic Memory"
+        question="How do audits compare over time?"
+        lead="Sign in and every Economic Decision Audit you run is stored under your organization \u2014 reload any past audit bit-for-bit, and see what your assets keep leaking.">
+        <button onClick={onSignIn} style={{ ...primaryBtn, width: 'auto', padding: '10px 22px' }}>Sign in</button>
+      </SectionShell>
     );
   }
-  const money = (v, ccy) => (v == null ? '\u2014' : `${Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${ccy || ''}`);
-  const th = { textAlign: 'left', padding: '8px 10px', fontSize: 9, letterSpacing: '0.14em', color: DS.dim, borderBottom: `1px solid ${DS.border}` };
-  const td = { padding: '9px 10px', fontSize: 11, borderBottom: `1px solid ${DS.border}22`, whiteSpace: 'nowrap' };
+  const money = (v, ccy) => (v == null ? '\u2014' : `${Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 })} ${ccy || ''}`);
+  const th = { textAlign: 'left', padding: '8px 10px', fontSize: 9, letterSpacing: '0.14em', color: PDS.text3, borderBottom: `1px solid ${PDS.border}` };
+  const td = { padding: '9px 10px', fontSize: 11, borderBottom: `1px solid ${PDS.hairline}`, whiteSpace: 'nowrap' };
+  const memLead = (memory && memory.audits > 0) ? (
+    <>Across{' '}<span className="pds-num" style={{ color: PDS.text, fontWeight: 700 }}>{memory.audits}</span> stored audits, PREDAIOT has identified{' '}
+      <span className="pds-num" style={{ color: PDS.loss, fontWeight: 800 }}>{money(memory.total_gap_identified, memory.currency)}</span> of leakage \u2014{' '}
+      <span className="pds-num" style={{ color: PDS.recover, fontWeight: 700 }}>{money(memory.total_recoverable_identified, memory.currency)}</span> recoverable.</>
+  ) : undefined;
   return (
-    <div>
-      <SectionHeader tag="EDA-15" title="AUDIT HISTORY \u2014 ECONOMIC MEMORY" />
-      {err && <EmptyMsg>{err}</EmptyMsg>}
+    <SectionShell kicker="Audit History" title="Economic Memory"
+      question="How do assets compare over time?" lead={memLead}>
+      {err && <div role="alert" style={{ fontSize: 12, color: PDS.loss, marginBottom: PDS.s4 }}>{err}</div>}
       {memory && memory.audits > 0 && (
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', margin: '14px 0 18px' }}>
+        <div style={{ display: 'flex', gap: PDS.s6, rowGap: PDS.s3, flexWrap: 'wrap', marginBottom: PDS.s5 }}>
           {[
-            ['AUDITS ON RECORD', memory.audits],
-            ['LEAKAGE IDENTIFIED', money(memory.total_gap_identified, memory.currency)],
-            ['RECOVERABLE IDENTIFIED', money(memory.total_recoverable_identified, memory.currency)],
-            ['MEAN DQI', memory.mean_dqi != null ? `${(memory.mean_dqi * 100).toFixed(1)}%` : '\u2014'],
-            ['RECURRING ROOT CAUSE', memory.recurring_top_root_cause ? `${memory.recurring_top_root_cause.cause} (${memory.recurring_top_root_cause.audits}\u00d7)` : '\u2014'],
+            ['Audits on record', memory.audits],
+            ['Mean DQI', memory.mean_dqi != null ? `${(memory.mean_dqi * 100).toFixed(1)}%` : '\u2014'],
+            ['Recurring root cause', memory.recurring_top_root_cause ? `${memory.recurring_top_root_cause.cause} (${memory.recurring_top_root_cause.audits}\u00d7)` : '\u2014'],
           ].map(([label, val]) => (
-            <div key={label} style={{ background: DS.panel, border: `1px solid ${DS.border}`, borderRadius: DS.r8, padding: '12px 16px', minWidth: 150 }}>
-              <div style={{ fontSize: 9, letterSpacing: '0.14em', color: DS.dim, marginBottom: 6 }}>{label}</div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: DS.cyan }}>{String(val)}</div>
+            <div key={label}>
+              <div className="pds-kicker" style={{ marginBottom: 4 }}>{label}</div>
+              <div className="pds-num" style={{ fontSize: 16, fontWeight: 800, color: PDS.text }}>{String(val)}</div>
             </div>
           ))}
         </div>
       )}
       {memory && memory.audits > 0 && (
-        <div style={{ fontSize: 10, color: DS.dim, marginBottom: 14 }}>{memory.method_note}</div>
+        <div style={{ fontSize: 10, color: PDS.text3, marginBottom: 14 }}>{memory.method_note}</div>
       )}
       {rows === null && !err && <EmptyMsg>Loading history&hellip;</EmptyMsg>}
       {rows && rows.length === 0 && <EmptyMsg>No audits stored yet &mdash; run an audit while signed in and it will appear here.</EmptyMsg>}
@@ -715,7 +710,7 @@ function AuditHistoryPanel({ isSignedIn, onLoad, onSignIn, busyId }) {
           </table>
         </div>
       )}
-    </div>
+    </SectionShell>
   );
 }
 
@@ -2550,124 +2545,89 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
 
           {/* ══ S11: Governance ═════════════════════════════════════ */}
           {activeSection === 'govern' && (
-            <div>
-              <SectionHeader tag="11" title="Governance &amp; Decision Authority" />
-
-              {/* ── SCADA / EMS Integration Framework (credibility layer) ── */}
-              <Card style={{ marginBottom: 20 }}>
-                <Label style={{ marginBottom: 6 }}>SCADA / EMS Integration Framework</Label>
-                <div style={{ color: DS.sub, fontSize: 11, marginBottom: 18, lineHeight: 1.6 }}>
-                  PREDAIOT is an <span style={{ color: DS.text, fontWeight: 700 }}>Economic Advisory Observer</span>,
-                  not a control system. We do not issue dispatch commands to your asset by default. Three integration tiers,
-                  selected per deployment:
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-                  {[
-                    {
-                      n: '1', tag: 'READ ONLY', color: DS.optimal,
-                      head: 'Telemetry in, intelligence out',
-                      body: 'SCADA / EMS → PREDAIOT. Compute the audit, surface gaps and opportunities. Asset operates unchanged. No write path of any kind.',
-                      meta: 'Default for diagnostic + audit phases.',
-                    },
-                    {
-                      n: '2', tag: 'ADVISORY', color: DS.cyan,
-                      head: 'Operator-in-the-loop',
-                      body: 'PREDAIOT generates per-interval recommendations. Operator or duty engineer accepts, rejects, or adjusts. Every decision recorded for governance + override-audit trail.',
-                      meta: 'Default for pilot deployments.',
-                    },
-                    {
-                      n: '3', tag: 'CLOSED LOOP', color: DS.warning,
-                      head: 'Direct dispatch — opt-in only',
-                      body: 'PREDAIOT writes dispatch commands directly to the EMS or scheduler. Requires explicit customer opt-in, regulatory sign-off, and a documented kill-switch / fail-safe revert path.',
-                      meta: 'Available on request; not enabled by default.',
-                    },
-                  ].map((t) => (
-                    <div key={t.n} style={{ padding: 16, background: `${t.color}06`, border: `1px solid ${t.color}30`, borderRadius: DS.r12 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                        <div style={{ width: 26, height: 26, borderRadius: '50%', background: t.color, color: '#001b08', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 12 }}>{t.n}</div>
-                        <div style={{ color: t.color, fontSize: 10, letterSpacing: '0.2em', fontWeight: 700 }}>LEVEL {t.n} · {t.tag}</div>
-                      </div>
-                      <div style={{ color: DS.text, fontSize: 12, fontWeight: 700, marginBottom: 6 }}>{t.head}</div>
-                      <div style={{ color: DS.sub, fontSize: 11, lineHeight: 1.6, marginBottom: 8 }}>{t.body}</div>
-                      <div style={{ color: t.color, fontSize: 10, fontStyle: 'italic' }}>{t.meta}</div>
+            <SectionShell kicker="Governance & Decision Authority" title="Who Holds Authority"
+              question="Who decides — and is it recorded?"
+              lead={<>PREDAIOT is an <span style={{ color: PDS.text, fontWeight: 700 }}>Economic Advisory Observer</span>, not a control system. It issues no dispatch commands by default; every decision and override is recorded as governance evidence.</>}>
+              {/* Integration tiers — how authority is delegated per deployment. */}
+              <div className="pds-kicker" style={{ marginBottom: 14 }}>SCADA / EMS integration tiers</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px,100%),1fr))', gap: 'var(--ws-card-gap)' }}>
+                {[
+                  { n: '1', tag: 'READ ONLY', color: PDS.recover, head: 'Telemetry in, intelligence out', body: 'SCADA / EMS → PREDAIOT. Compute the audit, surface gaps and opportunities. Asset operates unchanged. No write path of any kind.', meta: 'Default for diagnostic + audit phases.' },
+                  { n: '2', tag: 'ADVISORY', color: PDS.accent, head: 'Operator-in-the-loop', body: 'PREDAIOT generates per-interval recommendations. Operator or duty engineer accepts, rejects, or adjusts. Every decision recorded for governance and the override-audit trail.', meta: 'Default for pilot deployments.' },
+                  { n: '3', tag: 'CLOSED LOOP', color: PDS.warn, head: 'Direct dispatch — opt-in only', body: 'PREDAIOT writes dispatch commands directly to the EMS or scheduler. Requires explicit customer opt-in, regulatory sign-off, and a documented kill-switch / fail-safe revert path.', meta: 'Available on request; never enabled by default.' },
+                ].map((t) => (
+                  <Panel key={t.n} pad={PDS.s5} accent={false} style={{ borderTop: `2px solid ${t.color}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                      <div className="pds-num" style={{ width: 24, height: 24, borderRadius: '50%', background: t.color, color: PDS.bg0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 11 }}>{t.n}</div>
+                      <div style={{ color: t.color, fontSize: 10, letterSpacing: '0.18em', fontWeight: 700 }}>LEVEL {t.n} · {t.tag}</div>
                     </div>
-                  ))}
-                </div>
-                <div style={{ marginTop: 16, padding: 12, background: `${DS.optimal}08`, border: `1px solid ${DS.optimal}25`, borderRadius: DS.r8 }}>
-                  <div style={{ color: DS.optimal, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em' }}>CURRENT POSTURE</div>
-                  <div style={{ color: DS.sub, fontSize: 11, marginTop: 4, lineHeight: 1.6 }}>
-                    PREDAIOT ships at <span style={{ color: DS.optimal, fontWeight: 700 }}>Level 1–2</span> by default.
-                    No dispatch authority over your asset. Level 3 requires an explicit signed integration agreement and is never enabled silently.
-                  </div>
-                </div>
-              </Card>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-                <Card>
-                  <Label style={{ marginBottom: 16 }}>Decision Authority Breakdown</Label>
-                  {log.length > 0 ? (() => {
-                    const overrides = log.filter(d => d.operator_override).length;
-                    const auto = log.length - overrides;
-                    const ovPct = (overrides / log.length * 100).toFixed(1);
-                    const autoPct = (auto / log.length * 100).toFixed(1);
-                    return (
-                      <>
-                        <div style={{ marginBottom: 14 }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
-                            <span style={{ color: DS.sub }}>Automatic (EMS)</span>
-                            <span style={{ color: DS.optimal, fontFamily: DS.mono, fontWeight: 700 }}>{autoPct}% · {auto} dispatches</span>
-                          </div>
-                          <ProgressBar pct={parseFloat(autoPct)} color={DS.optimal} />
-                        </div>
-                        <div style={{ marginBottom: 14 }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
-                            <span style={{ color: DS.sub }}>Human Override</span>
-                            <span style={{ color: DS.orange, fontFamily: DS.mono, fontWeight: 700 }}>{ovPct}% · {overrides} dispatches</span>
-                          </div>
-                          <ProgressBar pct={parseFloat(ovPct)} color={DS.orange} />
-                        </div>
-                        <div style={{ marginTop: 16, padding: 12, background: `${DS.orange}08`, border: `1px solid ${DS.orange}25`, borderRadius: DS.r8 }}>
-                          <div style={{ color: DS.orange, fontSize: 11, fontWeight: 700 }}>OVERRIDE IMPACT</div>
-                          <div style={{ color: DS.sub, fontSize: 11, marginTop: 4, lineHeight: 1.6 }}>Each human override carries average leakage risk. Review override justification log for compliance and pattern analysis.</div>
-                        </div>
-                      </>
-                    );
-                  })() : <EmptyMsg>Run an audit to populate governance data.</EmptyMsg>}
-                </Card>
-                <Card>
-                  {/* Recorded facts only. The former "Compliance Checklist"
-                      issued PASS verdicts on unverified items (market rules,
-                      SOC limits) and invented DQ thresholds — removed
-                      (docs/REMOVED_HEURISTICS.md). */}
-                  <Label style={{ marginBottom: 16 }}>Recorded Audit Facts</Label>
-                  {[
-                    { fact: 'Decision intervals in ledger', v: log.length },
-                    { fact: 'Operator overrides recorded', v: log.filter(r => r.operator_override).length },
-                    { fact: 'Overrides with positive gap', v: log.filter(r => r.operator_override && (r.gap_step || 0) > 0).length },
-                    { fact: 'Steps with forecast value', v: `${(m?.forecast_utilization_index ?? 0).toFixed(0)}%` },
-                    { fact: 'Steps with SoC telemetry', v: `${log.length ? ((log.filter(r => r.soc != null).length / log.length) * 100).toFixed(0) : 0}%` },
-                    { fact: 'Risk band (published DQ thresholds)', v: (data.risk_level || '—').toUpperCase() },
-                  ].map(({ fact, v }, i) => (
-                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 0', borderBottom: `1px solid ${DS.border}` }}>
-                      <span style={{ color: DS.sub, fontSize: 12 }}>{fact}</span>
-                      <span style={{ color: DS.text, fontFamily: DS.mono, fontSize: 12, fontWeight: 700 }}>{v}</span>
-                    </div>
-                  ))}
-                </Card>
+                    <div style={{ color: PDS.text, fontSize: 13, fontWeight: 700, marginBottom: 6 }}>{t.head}</div>
+                    <div style={{ color: PDS.text2, fontSize: 11, lineHeight: 1.6, marginBottom: 8 }}>{t.body}</div>
+                    <div style={{ color: PDS.text3, fontSize: 10 }}>{t.meta}</div>
+                  </Panel>
+                ))}
               </div>
-            </div>
+              <div style={{ marginTop: PDS.s4, padding: '12px 16px', background: PDS.recoverSoft, border: `1px solid ${PDS.recover}25`, borderRadius: PDS.rSm }}>
+                <span className="pds-kicker" style={{ color: PDS.recover }}>Current posture</span>
+                <div style={{ color: PDS.text2, fontSize: 11, marginTop: 4, lineHeight: 1.6 }}>
+                  PREDAIOT ships at <span style={{ color: PDS.recover, fontWeight: 700 }}>Level 1–2</span> by default — no dispatch authority over your asset. Level 3 requires an explicit signed integration agreement and is never enabled silently.
+                </div>
+              </div>
+
+              {/* Recorded authority split + audit facts. */}
+              <div style={{ marginTop: 'var(--ws-zone-gap)' }}>
+                <Zone row="split">
+                  <Panel pad={PDS.s5}>
+                    <div className="pds-kicker" style={{ marginBottom: 14 }}>Decision authority — recorded split</div>
+                    {log.length > 0 ? (() => {
+                      const overrides = log.filter(d => d.operator_override).length;
+                      const auto = log.length - overrides;
+                      const ovPct = (overrides / log.length * 100), autoPct = (auto / log.length * 100);
+                      return [
+                        { l: 'Automatic (EMS)', pct: autoPct, n: auto, c: PDS.recover },
+                        { l: 'Human override', pct: ovPct, n: overrides, c: '#F5945B' },
+                      ].map((r) => (
+                        <div key={r.l} style={{ marginBottom: 14 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 5 }}>
+                            <span style={{ color: PDS.text2 }}>{r.l}</span>
+                            <span className="pds-num" style={{ color: r.c, fontWeight: 700 }}>{r.pct.toFixed(1)}% · {r.n} dispatches</span>
+                          </div>
+                          <div style={{ height: 4, background: PDS.hairline, borderRadius: 2, overflow: 'hidden' }}>
+                            <div style={{ width: '100%', height: '100%', background: r.c, borderRadius: 2, opacity: 0.85,
+                                          transform: `scaleX(${Math.min(100, r.pct) / 100})`, transformOrigin: 'left',
+                                          transition: 'transform var(--pds-dur-slow) var(--pds-ease)' }} />
+                          </div>
+                        </div>
+                      ));
+                    })() : <div style={{ fontSize: 12, color: PDS.text3 }}>Run an audit to populate the recorded authority split.</div>}
+                  </Panel>
+                  <Panel pad={PDS.s5}>
+                    <div className="pds-kicker" style={{ marginBottom: 14 }}>Recorded audit facts</div>
+                    {[
+                      { fact: 'Decision intervals in ledger', v: log.length },
+                      { fact: 'Operator overrides recorded', v: log.filter(r => r.operator_override).length },
+                      { fact: 'Overrides with positive gap', v: log.filter(r => r.operator_override && (r.gap_step || 0) > 0).length },
+                      { fact: 'Steps with forecast value', v: `${(m?.forecast_utilization_index ?? 0).toFixed(0)}%` },
+                      { fact: 'Steps with SoC telemetry', v: `${log.length ? ((log.filter(r => r.soc != null).length / log.length) * 100).toFixed(0) : 0}%` },
+                      { fact: 'Risk band', v: (data.risk_level || '—') },
+                    ].map(({ fact, v }, i, arr) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 0', borderBottom: i < arr.length - 1 ? `1px solid ${PDS.hairline}` : 'none' }}>
+                        <span style={{ color: PDS.text3, fontSize: 12 }}>{fact}</span>
+                        <span className="pds-num" style={{ color: PDS.text, fontSize: 12, fontWeight: 700 }}>{v}</span>
+                      </div>
+                    ))}
+                  </Panel>
+                </Zone>
+              </div>
+            </SectionShell>
           )}
 
           {/* ══ S12: Math Appendix ══════════════════════════════════ */}
           {activeSection === 'appendix' && (
-            <div>
-              <SectionHeader tag="12" title="Mathematical Appendix" />
-              <div style={{ color: DS.sub, fontSize: 11, marginBottom: 16, lineHeight: 1.6 }}>
-                Canonical formulas from the PREDAIOT Reference Manual (Ch. 4–6). These are the same equations the audit
-                engine computes — naming and arithmetic match <span style={{ fontFamily: DS.mono, color: DS.cyan }}>backend/main.py</span> exactly.
-              </div>
-              <Card>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <SectionShell kicker="Mathematical Appendix" title="How the Audit Is Computed"
+              question="How is every figure derived?"
+              lead={<>The canonical formulas from the PREDAIOT Reference Manual (Ch. 4–6) — the same equations the audit engine computes. Naming and arithmetic match <span className="pds-num" style={{ color: PDS.accent }}>backend/main.py</span> exactly.</>}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--ws-card-gap)' }}>
                   {[
                     {
                       name: 'Economic Decision Value (EDV) — Master Definition',
@@ -2718,20 +2678,19 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                       units: 'USD / year',
                     },
                   ].map((eq) => (
-                    <div key={eq.name} style={{ padding: '16px 20px', background: `${DS.cyan}04`, border: `1px solid ${DS.cyan}18`, borderRadius: DS.r12 }}>
-                      <div style={{ color: DS.cyan, fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{eq.name}</div>
-                      <div style={{ fontFamily: DS.mono, fontSize: 13, color: DS.warning, background: `${DS.warning}08`, padding: '6px 14px', borderRadius: DS.r8, display: 'inline-block', marginBottom: 8 }}>{eq.formula}</div>
-                      <div style={{ color: DS.sub, fontSize: 11, lineHeight: 1.7 }}>{eq.desc}</div>
-                      <div style={{ color: DS.dim, fontSize: 10, marginTop: 4 }}>Units: {eq.units}</div>
-                    </div>
+                    <Panel key={eq.name} pad={PDS.s5} accent={false}>
+                      <div style={{ color: PDS.text, fontSize: 13, fontWeight: 700, marginBottom: 8 }}>{eq.name}</div>
+                      <div className="pds-num" style={{ fontSize: 13, color: PDS.warn, background: PDS.warnSoft, padding: '6px 14px', borderRadius: PDS.rSm, display: 'inline-block', marginBottom: 8 }}>{eq.formula}</div>
+                      <div style={{ color: PDS.text2, fontSize: 11, lineHeight: 1.7, maxWidth: 'var(--pds-prose-max)' }}>{eq.desc}</div>
+                      <div style={{ color: PDS.text3, fontSize: 10, marginTop: 4 }}>Units: {eq.units}</div>
+                    </Panel>
                   ))}
                 </div>
-              </Card>
-              <div style={{ color: DS.dim, fontSize: 10, marginTop: 12, lineHeight: 1.6 }}>
+              <div style={{ color: PDS.text3, fontSize: 10, marginTop: PDS.s5, lineHeight: 1.6, maxWidth: 'var(--pds-prose-max)' }}>
                 Full theoretical derivations, sector-specific applications (Solar / Wind / Gas / Hydro / Hydrogen / Desalination / Nuclear),
                 and the patent-pending counterfactual decomposition live in the PREDAIOT Reference Manual (Vol. III).
               </div>
-            </div>
+            </SectionShell>
           )}
 
           {/* ══ S13: Live Monitor ══════════════════════════════ */}
@@ -2753,7 +2712,17 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
 
           {activeSection === 'live' && (
             <div>
-              <SectionHeader tag="RT" title="Real-Time Live Monitor — Economic Advisory Observer" />
+              <div style={{ marginBottom: 'var(--ws-zone-gap)' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, marginBottom: 6 }}>
+                  <span className="pds-kicker" style={{ color: PDS.accent }}>Live Monitor</span>
+                  <span aria-hidden style={{ flex: 1, height: 1, background: PDS.hairline, opacity: 0.6 }} />
+                  <span style={{ fontSize: 11, color: PDS.text3 }}>What is happening right now?</span>
+                </div>
+                <div style={{ fontSize: 'clamp(22px, 2vw, 30px)', fontWeight: 800, color: PDS.text, letterSpacing: '-0.015em' }}>Live Operations — Economic Advisory Observer</div>
+                <div style={{ fontSize: 15, color: PDS.text2, lineHeight: 1.7, marginTop: 12, maxWidth: 'var(--pds-prose-max)' }}>
+                  Point your SCADA/EMS at this socket, or simulate a feed, and watch economic leakage update live — computed by the same certified engine, provisional until a certified audit confirms it.
+                </div>
+              </div>
 
               <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
                 <BtnOutline
@@ -2955,12 +2924,19 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {/* ══ S14: EDPC Certificate ════════════════════════════ */}
           {hasData && activeSection === 'cert' && (
             <div>
-              <SectionHeader tag="CT" title="Economic Decision Performance Certificate™ (EDPC)" />
-              <div style={{ color: DS.sub, fontSize: 11, marginBottom: 20, maxWidth: 600 }}>
-                The EDPC is a formal economic performance rating for energy assets — the PREDAIOT equivalent of Moody's for industrial infrastructure. Composite rating from 4 weighted dimensions.
+              <div style={{ marginBottom: 'var(--ws-zone-gap)' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, marginBottom: 6 }}>
+                  <span className="pds-kicker" style={{ color: PDS.accent }}>EDPC Certificate</span>
+                  <span aria-hidden style={{ flex: 1, height: 1, background: PDS.hairline, opacity: 0.6 }} />
+                  <span style={{ fontSize: 11, color: PDS.text3 }}>Can we prove it?</span>
+                </div>
+                <div style={{ fontSize: 'clamp(22px, 2vw, 30px)', fontWeight: 800, color: PDS.text, letterSpacing: '-0.015em' }}>Economic Decision Performance Certificate™</div>
+                <div style={{ fontSize: 15, color: PDS.text2, lineHeight: 1.7, marginTop: 12, maxWidth: 'var(--pds-prose-max)' }}>
+                  A formal economic performance rating for energy assets — the PREDAIOT equivalent of a credit rating for industrial infrastructure, composited from four weighted dimensions of the certified audit.
+                </div>
               </div>
 
-              <div style={{ display: 'flex', gap: 10, marginBottom: 24 }}>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 24, flexWrap: 'wrap' }}>
                 <BtnOutline color={DS.warning} onClick={async () => {
                   setCertLoading(true);
                   try {
@@ -2975,7 +2951,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   <>
                     <BtnOutline color={DS.cyan} onClick={() => window.print()}>PRINT / EXPORT PDF</BtnOutline>
                     <BtnOutline color={DS.blue} onClick={() => {
-                      const shareText = `PREDAIOT Economic Decision Performance Certificate™\n\nAsset: ${certificate.asset_name}\nRating: ${certificate.rating} — ${certificate.rating_label}\nEconomic Efficiency: ${certificate.economic_efficiency}%\nCaptured Value: $${certificate.captured_value}\nAudit Date: ${new Date(certificate.issued_at).toLocaleDateString()}\n\nCertificate ID: ${certificate.certificate_id}\nCertified by PREDAIOT`;
+                      const shareText = `PREDAIOT Economic Decision Performance Certificate™\n\nAsset: ${certificate.asset_name}\nRating: ${certificate.rating} — ${certificate.rating_label}\nEconomic Efficiency: ${certificate.economic_efficiency}%\nCaptured Value: ${certificate.captured_value} ${certificate.currency || 'USD'}\nAudit Date: ${new Date(certificate.issued_at).toLocaleDateString()}\n\nCertificate ID: ${certificate.certificate_id}\nCertified by PREDAIOT`;
                       navigator.clipboard?.writeText(shareText);
                       setNotice('Certificate text copied to clipboard.');
                     }}>SHARE CERTIFICATE</BtnOutline>
