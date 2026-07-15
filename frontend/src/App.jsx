@@ -2110,44 +2110,44 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
 
           {/* ══ S02: Economic Value Flow ════════════════════════════ */}
-          {hasData && activeSection === 'flow' && (
-            <div>
-              <SectionHeader tag="02" title="Economic Value Flow" />
-              {!hasData ? <EmptyMsg>Run an audit to populate the economic flow.</EmptyMsg> : (
-                <div style={{ maxWidth: 560, margin: '0 auto' }}>
-                  {/* Every stage below is a COMPUTED quantity from the audit
-                      engine. The former intermediate stages (×0.92 grid,
-                      ×0.87 SOC, ×0.97 settlement, ×0.12 unrecoverable) were
-                      fabricated multipliers — removed (docs/REMOVED_HEURISTICS.md). */}
-                  {[
-                    { label: 'Theoretical Ceiling (Upper Bound)', value: fmtMoney(data.edv_optimal_total, data.currency), color: DS.warning, desc: 'Perfect-foresight MILP benchmark — not an achievable operating target' },
-                    ...(data.gap_attribution ? [
-                      { label: 'Forecast-Unreachable Gap', value: `−${fmtMoney(data.gap_attribution.forecast_gap, data.currency)}`, color: DS.dim, desc: 'Reachable only with perfect price foresight (Ch 8.2) — not operator-attributable' },
-                      { label: 'Recoverable Execution Gap', value: `−${fmtMoney(data.gap_attribution.execution_gap, data.currency)}`, color: DS.loss, desc: 'Achievable with the day-ahead forecast available at decision time' },
-                    ] : [
-                      { label: 'Ceiling Gap (Upper Bound)', value: `−${fmtMoney(data.total_gap_usd, data.currency)}`, color: DS.loss, desc: 'Includes forecast-unreachable value; forecast column required to split' },
-                    ]),
-                    { label: 'Captured Value', value: fmtMoney(data.edv_actual_total, data.currency), color: DS.optimal, desc: 'EDV of the dispatch actually executed (Σ edv_actual_step from the ledger)' },
-                  ].map((step, i, arr) => (
-                    <div key={step.label}>
-                      <div style={{
-                        display: 'flex', alignItems: 'center', gap: 16, padding: '14px 18px',
-                        background: DS.surface, border: `1px solid ${step.color}25`, borderRadius: DS.r12,
-                      }}>
-                        <div style={{ width: 4, height: 44, backgroundColor: step.color, borderRadius: 2, flexShrink: 0 }} />
-                        <div style={{ flex: 1 }}>
-                          <Label style={{ marginBottom: 2 }}>{step.label}</Label>
-                          <BigNum v={step.value} color={step.color} size={18} />
-                          <div style={{ color: DS.dim, fontSize: 10, marginTop: 3 }}>{step.desc}</div>
-                        </div>
+          {hasData && activeSection === 'flow' && (() => {
+            const stages = [
+              { label: 'Theoretical Ceiling', value: fmtMoney(data.edv_optimal_total, data.currency), color: PDS.warn, desc: 'Perfect-foresight MILP benchmark — not an achievable operating target' },
+              ...(data.gap_attribution ? [
+                { label: 'Forecast-Unreachable Gap', value: `−${fmtMoney(data.gap_attribution.forecast_gap, data.currency)}`, color: PDS.text3, desc: 'Reachable only with perfect price foresight (Ch 8.2) — not operator-attributable' },
+                { label: 'Recoverable Execution Gap', value: `−${fmtMoney(data.gap_attribution.execution_gap, data.currency)}`, color: PDS.loss, desc: 'Achievable with the day-ahead forecast available at decision time' },
+              ] : [
+                { label: 'Ceiling Gap', value: `−${fmtMoney(data.total_gap_usd, data.currency)}`, color: PDS.loss, desc: 'Includes forecast-unreachable value; a forecast column is required to split it' },
+              ]),
+              { label: 'Captured Value', value: fmtMoney(data.edv_actual_total, data.currency), color: PDS.recover, desc: 'EDV of the dispatch actually executed (Σ edv_actual_step from the ledger)' },
+            ];
+            const lead = (
+              <>Of a{' '}<span className="pds-num" style={{ color: PDS.warn, fontWeight: 700 }}>{fmtMoney(data.edv_optimal_total, data.currency)}</span>{' '}
+                perfect-foresight ceiling, this asset captured{' '}
+                <span className="pds-num" style={{ color: PDS.recover, fontWeight: 800 }}>{fmtMoney(data.edv_actual_total, data.currency)}</span>{' '}
+                — the remainder leaked as the gaps below.</>
+            );
+            return (
+              <SectionShell kicker="Economic Value Flow" title="Where the Value Went"
+                question="Where did the value go?" lead={lead}>
+                {/* Every stage is a computed quantity from the audit engine;
+                    fabricated intermediate multipliers were removed long ago
+                    (docs/REMOVED_HEURISTICS.md). */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 640 }}>
+                  {stages.map((step) => (
+                    <Panel key={step.label} pad={PDS.s5} accent={false}
+                           style={{ display: 'flex', alignItems: 'center', gap: 16, borderLeft: `3px solid ${step.color}` }}>
+                      <div style={{ flex: 1 }}>
+                        <div className="pds-kicker" style={{ marginBottom: 4 }}>{step.label}</div>
+                        <div style={{ fontSize: 11, color: PDS.text3, lineHeight: 1.5, maxWidth: 'var(--pds-prose-max)' }}>{step.desc}</div>
                       </div>
-                      {i < arr.length - 1 && <div style={{ textAlign: 'center', color: DS.dim, lineHeight: '22px', fontSize: 18 }}>↓</div>}
-                    </div>
+                      <div className="pds-num" style={{ fontSize: 22, fontWeight: 800, color: step.color, whiteSpace: 'nowrap', flexShrink: 0 }}>{step.value}</div>
+                    </Panel>
                   ))}
                 </div>
-              )}
-            </div>
-          )}
+              </SectionShell>
+            );
+          })()}
 
           {/* ══ S03: Decision Audit Trail™ ══════════════════════════ */}
           {hasData && activeSection === 'timeline' && (
@@ -2270,71 +2270,102 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           )}
 
           {/* ══ S04: Root Cause Analysis ════════════════════════════ */}
-          {hasData && activeSection === 'rootcause' && (
-            <div>
-              <SectionHeader tag="04" title="Root Cause Analysis"
-                sub="Recorded leakage decomposed by cause — ranked by economic loss." />
-              {(data.root_causes || []).length === 0 ? <EmptyMsg>Run an audit to generate the root cause analysis.</EmptyMsg> : (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-                  <Card>
-                    <Label style={{ marginBottom: 16 }}>Failure Category Breakdown</Label>
-                    {(data.root_causes || []).map((rc, i) => (
-                      <div key={i} style={{ marginBottom: 14 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
-                          <span style={{ color: DS.text }}>{rc.category}</span>
-                          <span style={{ color: [DS.loss, DS.orange, DS.warning, DS.blue, DS.cyan, DS.purple][i % 6], fontFamily: DS.mono, fontWeight: 700 }}>
-                            {rc.contribution_pct}% · {fmtMoney(rc.loss_usd, data.currency)}
-                          </span>
+          {hasData && activeSection === 'rootcause' && (() => {
+            const rcs = (data.root_causes || []).slice().sort((a, b) => (b.loss_usd || 0) - (a.loss_usd || 0));
+            const top = rcs[0];
+            const lead = top ? (
+              <>The largest driver of leakage is{' '}
+                <span style={{ color: PDS.text, fontWeight: 700 }}>{top.category}</span> —{' '}
+                <span className="pds-num" style={{ color: PDS.loss, fontWeight: 800 }}>{fmtMoney(top.loss_usd, data.currency)}</span>{' '}
+                ({fmtPct(top.contribution_pct, 0)} of recorded loss). Each cause below is decomposed from the audited ledger.</>
+            ) : undefined;
+            return (
+              <SectionShell kicker="Root Cause Analysis" title="Why Value Leaked"
+                question="Why is this happening?" lead={lead}>
+                {rcs.length === 0 ? (
+                  <div style={{ fontSize: 14, color: PDS.text2 }}>Run an audit to decompose leakage by root cause.</div>
+                ) : (
+                  <Zone row="primary">
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                      {rcs.map((rc, i) => (
+                        <div key={rc.category} style={{ display: 'flex', gap: 18, alignItems: 'baseline' }}>
+                          <span className="pds-num" style={{ fontSize: 12, color: PDS.text3, width: 22, flexShrink: 0 }}>{String(i + 1).padStart(2, '0')}</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, marginBottom: 7 }}>
+                              <span style={{ fontSize: 14, color: PDS.text, fontWeight: i === 0 ? 700 : 500 }}>{rc.category}</span>
+                              <span className="pds-num" style={{ fontSize: 13, color: PDS.loss, fontWeight: 700, flexShrink: 0 }}>
+                                {fmtMoney(rc.loss_usd, data.currency)}<span style={{ color: PDS.text3, fontWeight: 400 }}> · {fmtPct(rc.contribution_pct, 0)}</span>
+                              </span>
+                            </div>
+                            <div style={{ height: 3, background: PDS.hairline, borderRadius: 2, overflow: 'hidden' }}>
+                              <div style={{ width: '100%', height: '100%', background: PDS.loss, borderRadius: 2, opacity: i === 0 ? 0.9 : 0.55,
+                                            transform: `scaleX(${Math.min(100, rc.contribution_pct || 0) / 100})`, transformOrigin: 'left',
+                                            transition: 'transform var(--pds-dur-slow) var(--pds-ease)' }} />
+                            </div>
+                          </div>
                         </div>
-                        <ProgressBar pct={rc.contribution_pct} color={[DS.loss, DS.orange, DS.warning, DS.blue, DS.cyan, DS.purple][i % 6]} />
-                      </div>
-                    ))}
-                  </Card>
-                  <Card>
-                    {/* IN-06 Leakage Flow — leakage decomposed by root cause. */}
-                    <Label style={{ marginBottom: 12 }}>Leakage Flow — Root-Cause Contribution</Label>
-                    <Suspense fallback={<ChartSkeleton h={260} />}>
-                      <LeakageFlow rootCauses={data.root_causes || []} />
-                    </Suspense>
-                  </Card>
-                </div>
-              )}
-            </div>
-          )}
+                      ))}
+                    </div>
+                    <Panel pad={PDS.s5}>
+                      <div className="pds-kicker" style={{ color: PDS.accent, marginBottom: 12 }}>Leakage Flow — contribution</div>
+                      <Suspense fallback={<ChartSkeleton h={260} />}>
+                        <LeakageFlow rootCauses={rcs} />
+                      </Suspense>
+                    </Panel>
+                  </Zone>
+                )}
+              </SectionShell>
+            );
+          })()}
 
           {/* ══ S05: Counterfactual Simulation ══════════════════════ */}
-          {hasData && activeSection === 'counter' && (
-            <div>
-              <SectionHeader tag="05" title='Counterfactual Simulation — "What Would Have Happened?"' />
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16, marginBottom: 20 }}>
-                {[
-                  { label: 'Actual Revenue', value: fmtMoney(data.edv_actual_total, data.currency), color: DS.blue },
-                  { label: 'Theoretical Ceiling (Upper Bound)', value: fmtMoney(data.edv_optimal_total, data.currency), color: DS.optimal },
-                  ...(data.gap_attribution
-                    ? [{ label: 'Recoverable Execution Gap', value: `−${fmtMoney(data.gap_attribution.execution_gap, data.currency)}`, color: DS.loss }]
-                    : [{ label: 'Ceiling Gap (Upper Bound)', value: `−${fmtMoney(data.total_gap_usd, data.currency)}`, color: DS.loss }]),
-                ].map((f) => (
-                  <Card key={f.label} style={{ textAlign: 'center' }}>
-                    <Label>{f.label}</Label>
-                    <BigNum v={f.value} color={f.color} size={26} />
-                  </Card>
-                ))}
-              </div>
-              {log.length > 0 && (
-                <Card style={{ marginBottom: 16 }}>
-                  <Label style={{ marginBottom: 14 }}>Optimal vs Actual Dispatch Curve</Label>
-                  <Suspense fallback={<ChartSkeleton h={260} />}>
-                    <DispatchCurve log={log} />
-                  </Suspense>
-                </Card>
-              )}
-              {data.counterfactual_summary && (
-                <Card glow={DS.cyan}>
-                  <div style={{ color: DS.cyan, fontSize: 12, lineHeight: 1.8, fontStyle: 'italic' }}>"{data.counterfactual_summary}"</div>
-                </Card>
-              )}
-            </div>
-          )}
+          {hasData && activeSection === 'counter' && (() => {
+            const gap = data.gap_attribution ? data.gap_attribution.execution_gap : data.total_gap_usd;
+            const money = [
+              { label: 'Captured value', value: fmtMoney(data.edv_actual_total, data.currency), color: PDS.recover },
+              { label: 'Theoretical ceiling', value: fmtMoney(data.edv_optimal_total, data.currency), color: PDS.warn },
+              { label: data.gap_attribution ? 'Recoverable execution gap' : 'Ceiling gap', value: `−${fmtMoney(gap, data.currency)}`, color: PDS.loss },
+            ];
+            const lead = (
+              <>Against a perfect-foresight optimum of{' '}
+                <span className="pds-num" style={{ color: PDS.warn, fontWeight: 700 }}>{fmtMoney(data.edv_optimal_total, data.currency)}</span>,
+                the executed dispatch left{' '}
+                <span className="pds-num" style={{ color: PDS.loss, fontWeight: 800 }}>{fmtMoney(gap, data.currency)}</span>{' '}
+                on the table — MILP-verified, step by step.</>
+            );
+            return (
+              <SectionShell kicker="Counterfactual Simulation" title="What Would Have Happened"
+                question="What would optimal dispatch have earned?" lead={lead}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 360px))', justifyContent: 'start', gap: 'var(--ws-card-gap)' }}>
+                  {money.map((f) => (
+                    <Panel key={f.label} pad={PDS.s5}>
+                      <div className="pds-kicker" style={{ marginBottom: 8 }}>{f.label}</div>
+                      <div className="pds-num" style={{ fontSize: 26, fontWeight: 800, color: f.color, lineHeight: 1 }}>{f.value}</div>
+                    </Panel>
+                  ))}
+                </div>
+                {log.length > 0 && (
+                  <div style={{ marginTop: 'var(--ws-zone-gap)' }}>
+                    <Panel pad={PDS.s5}>
+                      <div className="pds-kicker" style={{ marginBottom: 12 }}>Optimal vs actual dispatch</div>
+                      <Suspense fallback={<ChartSkeleton h={260} />}>
+                        <DispatchCurve log={log} />
+                      </Suspense>
+                    </Panel>
+                  </div>
+                )}
+                {data.counterfactual_summary && (
+                  <div style={{ marginTop: 'var(--ws-zone-gap)' }}>
+                    <Panel pad={PDS.s5} accent>
+                      <div style={{ color: PDS.text2, fontSize: 14, lineHeight: 1.7, maxWidth: 'var(--pds-prose-max)' }}>
+                        {data.counterfactual_summary}
+                      </div>
+                    </Panel>
+                  </div>
+                )}
+              </SectionShell>
+            );
+          })()}
 
           {/* ══ S06: EDA Metrics ════════════════════════════════════ */}
           {hasData && activeSection === 'metrics' && (() => {
