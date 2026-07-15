@@ -160,13 +160,6 @@ const Label = ({ children, style }) => (
   }}>{children}</div>
 );
 
-const BigNum = ({ v, color, size = 26 }) => (
-  <div style={{
-    color: color || DS.text, fontSize: size, fontWeight: 700, fontFamily: DS.mono,
-    lineHeight: 1.1, whiteSpace: 'nowrap',
-  }}>{v}</div>
-);
-
 const Pill = ({ label, color }) => (
   <span style={{
     display: 'inline-block', padding: '3px 10px', borderRadius: 20,
@@ -175,24 +168,11 @@ const Pill = ({ label, color }) => (
   }}>{label}</span>
 );
 
-const Divider = ({ style }) => <div style={{ height: 1, background: DS.border, margin: '16px 0', ...style }} />;
-
-const SectionHeader = ({ tag, title, sub, right }) => (
-  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end',
-                gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
-    <div>
-      {tag && <div style={{ color: DS.cyan, fontFamily: DS.mono, fontSize: 10, fontWeight: 600,
-                            letterSpacing: '0.22em', marginBottom: 7 }}>EDA-{tag}</div>}
-      <h2 style={{ margin: 0, fontSize: 21, fontWeight: 800, color: DS.text, letterSpacing: '-0.012em' }}>{title}</h2>
-      {sub && <div style={{ fontSize: 12, color: DS.dim, marginTop: 5, maxWidth: 620, lineHeight: 1.55 }}>{sub}</div>}
-    </div>
-    {right}
-  </div>
-);
-
 const EmptyMsg = ({ children }) => (
   <div style={{ textAlign: 'center', color: DS.dim, padding: '48px 0', fontSize: 12 }}>{children}</div>
 );
+
+const Divider = ({ style }) => <div style={{ height: 1, background: DS.border, margin: '16px 0', ...style }} />;
 
 const BtnOutline = ({ color, children, onClick, disabled, style }) => (
   <button onClick={onClick} disabled={disabled} style={{
@@ -202,15 +182,6 @@ const BtnOutline = ({ color, children, onClick, disabled, style }) => (
     fontSize: 11, letterSpacing: '0.1em', fontWeight: 700,
     fontFamily: DS.sans, ...style,
   }}>{children}</button>
-);
-
-// ── Progress Bar ─────────────────────────────────────────────────────
-const ProgressBar = ({ pct, color }) => (
-  <div style={{ height: 5, background: DS.border, borderRadius: 3, marginTop: 8, overflow: 'hidden' }}>
-    <div style={{ width: '100%', height: '100%', background: color, borderRadius: 3,
-                  transform: `scaleX(${Math.min(100, pct || 0) / 100})`, transformOrigin: 'left',
-                  transition: 'transform var(--pds-dur-slow) var(--pds-ease)' }} />
-  </div>
 );
 
 // ══════════════════════════════════════════════════════════════════════
