@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import axios from 'axios';
 import ExecutiveCommandCenter from './components/ExecutiveCommandCenter';
+import ActionPlan from './components/ActionPlan';
 import { Workspace, Zone, useWorkspaceTier, tierAtLeast } from './workspace/Workspace';
 import { fmtMoney } from './design/ds';   // PL-1.0 L2: the one money voice
 
@@ -2469,110 +2470,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
 
           {/* ══ S09: Economic Action Plan™ ══════════════════════════ */}
           {hasData && activeSection === 'opps' && (
-            <div>
-              <SectionHeader tag="09" title="Economic Action Plan™ — Value Recovery Roadmap" />
-
-              {/* Portfolio header */}
-              {(data.opportunities || []).length > 0 && (() => {
-                const ops   = data.opportunities || [];
-                const total = ops.reduce((s, o) => s + (o.annual_gain_usd || 0), 0);
-                // Header stats derived strictly from the ledger-backed items.
-                // Former "Portfolio Confidence" (mean of fabricated per-item
-                // confidences) and difficulty timeline claims removed.
-                const quantified = ops.filter(o => !o.experimental && o.period_gain != null);
-                const advisory   = ops.filter(o => o.experimental);
-                const periodTotal = quantified
-                  .filter(o => o.name !== 'Operator override governance') // cross-cut, excluded from sum
-                  .reduce((s, o) => s + (o.period_gain || 0), 0);
-                const intervalsTotal = quantified
-                  .filter(o => o.name !== 'Operator override governance')
-                  .reduce((s, o) => s + (o.intervals_observed || 0), 0);
-                return (
-                  <div style={{ background: `linear-gradient(135deg, rgba(0,230,118,0.06) 0%, rgba(75,191,255,0.04) 100%)`, border: `1px solid ${DS.optimal}25`, borderRadius: DS.r16, padding: 24, marginBottom: 24 }}>
-                    {/* Recorded-period totals only. The annualized (×365) KPI
-                        was removed per PLA-1.0 C2 / SPEC-AI rule 5 — no forward
-                        projection on a decision surface. */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20 }}>
-                      {[
-                        { label: 'Period Gap Attributed', v: fmtMoney(periodTotal, data.currency), c: DS.optimal, big: true, sub: 'Σ over classified ledger rows · recorded period' },
-                        { label: 'Quantified Actions', v: quantified.length, c: DS.optimal, sub: 'ledger-derived' },
-                        { label: 'Ledger Intervals', v: intervalsTotal, c: DS.blue, sub: 'evidence rows' },
-                        { label: 'Advisory (Experimental)', v: advisory.length, c: DS.dim, sub: 'not quantified' },
-                      ].map(f => (
-                        <div key={f.label}>
-                          <Label style={{ fontSize: 9, marginBottom: 4 }}>{f.label}</Label>
-                          <BigNum v={f.v} color={f.c} size={f.big ? 24 : 20} />
-                          {f.sub && <div style={{ color: DS.dim, fontSize: 9, marginTop: 3 }}>{f.sub}</div>}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {(data.opportunities || []).length === 0 ? <EmptyMsg>Run an audit to generate the Economic Action Plan.</EmptyMsg> : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  {(data.opportunities || []).map((op, i) => (
-                    <div key={i} style={{ background: DS.surface, border: `1px solid ${op.experimental ? DS.dim : DS.border}`, borderRadius: DS.r12, overflow: 'hidden', opacity: op.experimental ? 0.85 : 1 }}>
-                      {/* Card header */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '18px 22px 14px', borderBottom: `1px solid ${DS.border}` }}>
-                        <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-                          <div style={{ color: DS.dim, fontFamily: DS.mono, fontSize: 20, fontWeight: 800, lineHeight: 1, minWidth: 30 }}>#{i+1}</div>
-                          <div>
-                            <div style={{ color: DS.text, fontWeight: 700, fontSize: 14, marginBottom: 5 }}>
-                              {op.name}
-                              {op.experimental && <Pill label="EXPERIMENTAL — NOT PART OF EDA STANDARD v1.0" color={DS.dim} style={{ marginLeft: 10 }} />}
-                            </div>
-                            <div style={{ color: DS.sub, fontSize: 11, lineHeight: 1.6, maxWidth: 520 }}>{op.description}</div>
-                          </div>
-                        </div>
-                        {!op.experimental && op.period_gain != null && (
-                          <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 20 }}>
-                            <BigNum v={fmtMoney(op.period_gain, data.currency)} color={DS.optimal} size={22} />
-                            {/* Recorded period only — annualized figure removed
-                                (PLA-1.0 C2 / SPEC-AI rule 5). */}
-                            <div style={{ color: DS.dim, fontSize: 9, letterSpacing: '0.12em', marginTop: 2 }}>RECORDED PERIOD · NO FORWARD PROJECTION</div>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Derived metrics (quantified items only) */}
-                      {!op.experimental && op.period_gain != null && (
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 0, padding: '12px 22px' }}>
-                          {[
-                            { label: 'Ledger Intervals', v: op.intervals_observed, c: DS.blue },
-                            { label: 'Share of Positive Gap', v: op.share_of_positive_gap_pct != null ? `${op.share_of_positive_gap_pct}%` : '—', c: DS.cyan },
-                            { label: 'Reproducible From', v: 'Ledger CSV (decision_type filter)', c: DS.sub },
-                          ].map(f => (
-                            <div key={f.label} style={{ borderRight: `1px solid ${DS.border}`, padding: '4px 12px 4px 0', marginRight: 12 }}>
-                              <Label style={{ fontSize: 9, marginBottom: 3 }}>{f.label}</Label>
-                              <div style={{ color: f.c, fontSize: 12, fontWeight: 600 }}>{f.v}</div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Evidence + derivation footer */}
-                      <div style={{ padding: '10px 22px', background: `rgba(255,255,255,0.015)`, borderTop: `1px solid ${DS.border}` }}>
-                        {op.evidence && (
-                          <div style={{ color: DS.dim, fontSize: 11, marginBottom: op.derivation ? 4 : 0 }}>
-                            <span style={{ color: DS.sub }}>Evidence:</span> {op.evidence}
-                          </div>
-                        )}
-                        {op.derivation && (
-                          <div style={{ color: DS.dim, fontSize: 10, fontFamily: DS.mono }}>
-                            <span style={{ color: DS.sub, fontFamily: 'inherit' }}>Derivation:</span> {op.derivation}
-                          </div>
-                        )}
-                        {op.experimental && (
-                          <div style={{ color: DS.dim, fontSize: 10 }}>{op.experimental_note}</div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            <ActionPlan data={data} />
           )}
 
           {/* ══ S10: Economic Intelligence Report™ ═════════════════ */}

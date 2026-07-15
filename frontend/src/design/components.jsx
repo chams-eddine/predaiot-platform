@@ -137,6 +137,38 @@ export function SectionTitle({ tag, title, sub, right }) {
   );
 }
 
+/* SectionShell — the briefing standfirst every section wears (PL-1.0 PL-ED,
+   SPEC-ST): a kicker, the title, the executive question stated on-screen
+   (right-aligned deck), an optional one-sentence lead, and an optional
+   closing action. Body flows beneath. Reused across every section rebuild. */
+export function SectionShell({ kicker, title, question, lead, right, action, children }) {
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, marginBottom: 6, flexWrap: 'wrap' }}>
+        {kicker && <span className="pds-kicker" style={{ color: PDS.accent }}>{kicker}</span>}
+        <span aria-hidden style={{ flex: 1, height: 1, background: PDS.hairline, alignSelf: 'center', opacity: 0.6, minWidth: 24 }} />
+        {question && <span style={{ fontSize: 11, color: PDS.text3, letterSpacing: '0.02em', flexShrink: 0 }}>{question}</span>}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 'clamp(22px, 2vw, 30px)', fontWeight: 800, color: PDS.text, letterSpacing: '-0.015em', lineHeight: 1.15 }}>
+          {title}
+        </div>
+        {right}
+      </div>
+      {lead && (
+        <div style={{ fontSize: 15, color: PDS.text2, lineHeight: 1.7, marginTop: 12, maxWidth: 'var(--pds-prose-max)' }}>
+          {lead}
+        </div>
+      )}
+      <div style={{ marginTop: PDS.s6 }}>{children}</div>
+      {action && (
+        <div style={{ marginTop: PDS.s6, paddingTop: PDS.s4, borderTop: `1px solid ${PDS.hairline}`,
+                      fontSize: 12, color: PDS.text3 }}>{action}</div>
+      )}
+    </div>
+  );
+}
+
 /* Lightweight SVG sparkline — no chart lib, PREDAIOT line language. */
 export function Sparkline({ points = [], color = PDS.accent, height = 44, width = 160, fill = true }) {
   if (!points || points.length < 2) return <div style={{ height }} />;
