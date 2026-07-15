@@ -24,7 +24,7 @@ const num = (x) => (x == null || Number.isNaN(Number(x)) ? null : Number(x));
    document flowing downward, never as adjacent widgets. */
 function Act({ n, title, question, children }) {
   return (
-    <section aria-label={`Act ${n} — ${title}`} style={{ position: 'relative', paddingLeft: 34 }}>
+    <section aria-label={`Act ${n} — ${title}`} style={{ position: 'relative', paddingLeft: 38 }}>
       {/* node on the spine */}
       <span aria-hidden className="pds-num" style={{
         position: 'absolute', left: 0, top: 0, width: 22, height: 22,
@@ -33,10 +33,12 @@ function Act({ n, title, question, children }) {
         border: `1px solid ${PDS.accent}55`, borderRadius: '50%',
         background: PDS.panel,
       }}>{n}</span>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 14, minHeight: 22 }}>
+      {/* editorial standfirst: quiet label left, the question as a calm
+          right-aligned deck — no italics, no ornament. */}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, marginBottom: 18, minHeight: 22 }}>
         <span className="pds-kicker" style={{ color: PDS.accent }}>{title}</span>
-        <span aria-hidden style={{ flex: 1, height: 1, background: PDS.hairline, alignSelf: 'center' }} />
-        <span style={{ fontSize: 10, color: PDS.text3, fontStyle: 'italic', flexShrink: 0 }}>{question}</span>
+        <span aria-hidden style={{ flex: 1, height: 1, background: PDS.hairline, alignSelf: 'center', opacity: 0.6 }} />
+        <span style={{ fontSize: 11, color: PDS.text3, letterSpacing: '0.02em', flexShrink: 0 }}>{question}</span>
       </div>
       {children}
     </section>
@@ -75,11 +77,12 @@ export default function ExecutiveCommandCenter({ data, log, live, onOpenLive }) 
   const period = data.audit_period_label || 'the audited period';
 
   return (
-    <div className="pds-rise" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 'var(--ws-zone-gap)' }}>
+    <div className="pds-rise" style={{ position: 'relative', display: 'flex', flexDirection: 'column',
+                                       gap: 'calc(var(--ws-zone-gap) * 1.5)' }}>
       {/* the spine rail itself — accent at the top, fading to hairline */}
       <div aria-hidden style={{
-        position: 'absolute', left: 10, top: 22, bottom: 10, width: 1,
-        background: `linear-gradient(180deg, ${PDS.accent}66, var(--pds-hairline) 30%, var(--pds-hairline))`,
+        position: 'absolute', left: 11, top: 22, bottom: 10, width: 1,
+        background: `linear-gradient(180deg, ${PDS.accent}55, var(--pds-hairline) 30%, var(--pds-hairline))`,
       }} />
 
       {/* ══════════════════════════════════════════════════════════════
@@ -102,34 +105,36 @@ export default function ExecutiveCommandCenter({ data, log, live, onOpenLive }) 
                                  belong to Act II), charts, opportunities.
       ══════════════════════════════════════════════════════════════ */}
       <Act n="I" title="Economic Situation" question="What is our current economic reality?">
-        <Panel pad={PDS.s6}>
-          <div style={{ display: 'flex', gap: PDS.s6, flexWrap: 'wrap', alignItems: 'center' }}>
-            <div style={{ flex: 2, minWidth: 300 }}>
-              <div style={{ fontSize: 24, fontWeight: 800, color: PDS.text, letterSpacing: '-0.015em' }}>
-                {data.asset_name || 'Energy Asset'}
-              </div>
-              <div style={{ fontSize: 13, color: PDS.text2, lineHeight: 1.7, marginTop: 8, maxWidth: 'var(--pds-prose-max)' }}>
-                Over {period}, this {data.asset_type || 'asset'} operated at{' '}
-                <span style={{ color: riskColor(data.risk_level), fontWeight: 700 }}>
-                  {ecfPct != null ? `${ecfPct.toFixed(1)}%` : 'an unmeasured share'} of its achievable economic optimum
-                </span>
-                {data.risk_level && <> — a <span style={{ color: riskColor(data.risk_level), fontWeight: 700 }}>{data.risk_level.toLowerCase()}-risk</span> decision posture</>}.
-              </div>
-              <div style={{ fontSize: 11, color: PDS.text3, marginTop: 10 }}>
+        {/* Open editorial title page — no box. The masthead, one standfirst
+            sentence, the trust anchors; the verdict figure to the right. */}
+        <div style={{ display: 'flex', gap: PDS.s7, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div style={{ flex: 2, minWidth: 300 }}>
+            <div style={{ fontSize: 'clamp(26px, 2.4vw, 38px)', fontWeight: 800, color: PDS.text,
+                          letterSpacing: '-0.02em', lineHeight: 1.15 }}>
+              {data.asset_name || 'Energy Asset'}
+            </div>
+            <div style={{ fontSize: 16, color: PDS.text2, lineHeight: 1.75, marginTop: 12,
+                          maxWidth: 'var(--pds-prose-max)' }}>
+              Over {period}, this {data.asset_type || 'asset'} operated at{' '}
+              <span style={{ color: riskColor(data.risk_level), fontWeight: 700 }}>
+                {ecfPct != null ? `${ecfPct.toFixed(1)}%` : 'an unmeasured share'} of its achievable economic optimum
+              </span>
+              {data.risk_level && <> — a <span style={{ color: riskColor(data.risk_level), fontWeight: 700 }}>{data.risk_level.toLowerCase()}-risk</span> decision posture</>}.
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', marginTop: 16 }}>
+              <EvidenceBadge provisional={isLive} hash={datasetHash}
+                status={isLive ? 'PROVISIONAL' : 'CERTIFIED'} />
+              <span style={{ fontSize: 11, color: PDS.text3 }}>
                 {acGrade ? `Audit confidence ${acGrade}${acPct != null ? ` · ${acPct.toFixed(0)}%` : ''}`
                   : dqiPct != null ? `Data quality ${dqiPct.toFixed(0)}%`
                   : 'Measured against the optimal-dispatch benchmark of the certified audit engine'}
-              </div>
-              <div style={{ marginTop: 12 }}>
-                <EvidenceBadge provisional={isLive} hash={datasetHash}
-                  status={isLive ? 'PROVISIONAL' : 'CERTIFIED'} />
-              </div>
-            </div>
-            <div style={{ borderLeft: `1px solid ${PDS.hairline}`, paddingLeft: PDS.s5 }}>
-              <VerdictDial ecfPct={ecfPct} riskLevel={data.risk_level} />
+              </span>
             </div>
           </div>
-        </Panel>
+          <div style={{ borderLeft: `1px solid ${PDS.hairline}`, paddingLeft: PDS.s6 }}>
+            <VerdictDial ecfPct={ecfPct} riskLevel={data.risk_level} />
+          </div>
+        </div>
       </Act>
 
       {/* ══════════════════════════════════════════════════════════════
@@ -154,19 +159,19 @@ export default function ExecutiveCommandCenter({ data, log, live, onOpenLive }) 
                                  (Act III), recommendations (Act IV).
       ══════════════════════════════════════════════════════════════ */}
       <Act n="II" title="Financial Impact" question="How much value are we losing or protecting?">
-        <Panel pad={PDS.s6} style={{ boxShadow: 'var(--pds-glow-loss), var(--pds-shadow-1)' }}>
-          <div style={{ fontSize: 15, color: PDS.text2, lineHeight: 1.6 }}>Value left unrealized:</div>
+        <Panel pad="clamp(28px, 3vw, 44px)" style={{ boxShadow: 'var(--pds-glow-loss), var(--pds-shadow-1)' }}>
+          <div className="pds-kicker" style={{ marginBottom: 14 }}>Value left unrealized · {period}</div>
           <div className="pds-num" style={{
-            fontSize: 'clamp(44px, 4.6vw, 72px)', fontWeight: 800, lineHeight: 1.05,
-            color: PDS.loss, letterSpacing: '-0.02em',
-            textShadow: '0 0 40px rgba(255,92,122,0.18)',
+            fontSize: 'clamp(48px, 5vw, 80px)', fontWeight: 800, lineHeight: 1.02,
+            color: PDS.loss, letterSpacing: '-0.025em',
+            textShadow: '0 0 44px rgba(255,92,122,0.16)',
           }}>
             {leakage != null
               ? Math.abs(leakage).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
               : '—'}
-            <span style={{ fontSize: '0.32em', color: PDS.text2, fontWeight: 600, marginLeft: 10 }}>{currency}</span>
+            <span style={{ fontSize: '0.3em', color: PDS.text2, fontWeight: 600, marginLeft: 12 }}>{currency}</span>
           </div>
-          <div style={{ fontSize: 14, color: PDS.text2, lineHeight: 1.7, marginTop: 10, maxWidth: 'var(--pds-prose-max)' }}>
+          <div style={{ fontSize: 15, color: PDS.text2, lineHeight: 1.75, marginTop: 16, maxWidth: 'var(--pds-prose-max)' }}>
             Of this,{' '}
             <span className="pds-num" style={{ color: PDS.recover, fontWeight: 800 }}>
               {recoverable != null ? fmtMoney(Math.abs(recoverable), currency) : '—'}
@@ -182,8 +187,8 @@ export default function ExecutiveCommandCenter({ data, log, live, onOpenLive }) 
             forecastGap={forecastGap} leakage={leakage} ceiling={ceiling} currency={currency} />
           {/* Q9 — the recorded cost of waiting. */}
           {recoverable != null && (
-            <div style={{ fontSize: 11, color: PDS.text3, marginTop: 12 }}>
-              This period recorded {fmtMoney(Math.abs(recoverable), currency)} recoverable in {period}.
+            <div style={{ fontSize: 11, color: PDS.text3, marginTop: 14 }}>
+              Recorded recoverable value for {period}: {fmtMoney(Math.abs(recoverable), currency)}.
               Basis: recorded period only — no forward projection.
             </div>
           )}
@@ -207,32 +212,40 @@ export default function ExecutiveCommandCenter({ data, log, live, onOpenLive }) 
                                  artifacts, confidence grades.
       ══════════════════════════════════════════════════════════════ */}
       <Act n="III" title="Decision Analysis" question="Why is this happening?">
-        <Panel pad={PDS.s5}>
-          {(!rcs || rcs.length === 0) ? (
-            <div style={{ fontSize: 12, color: PDS.text3 }}>No root-cause decomposition recorded for this audit.</div>
-          ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))', gap: PDS.s5 }}>
-              {rcs.slice(0, 4).map((rc) => (
-                <div key={rc.category}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
-                    <span style={{ fontSize: 12, color: PDS.text2 }}>{rc.category}</span>
-                    <span className="pds-num" style={{ fontSize: 12, color: PDS.loss, fontWeight: 700 }}>
+        {/* Open ranked exhibit — a board report's attribution list, not a
+            grid of widgets. One column, rank numerals, full-width bars. */}
+        {(!rcs || rcs.length === 0) ? (
+          <div style={{ fontSize: 12, color: PDS.text3 }}>No root-cause decomposition recorded for this audit.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 860 }}>
+            {rcs.slice(0, 4).map((rc, i) => (
+              <div key={rc.category} style={{ display: 'flex', gap: 18, alignItems: 'baseline' }}>
+                <span className="pds-num" style={{ fontSize: 12, color: PDS.text3, width: 22, flexShrink: 0 }}>
+                  {String(i + 1).padStart(2, '0')}
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+                                gap: 12, marginBottom: 7 }}>
+                    <span style={{ fontSize: 14, color: PDS.text, fontWeight: i === 0 ? 700 : 500 }}>
+                      {rc.category}
+                    </span>
+                    <span className="pds-num" style={{ fontSize: 13, color: PDS.loss, fontWeight: 700, flexShrink: 0 }}>
                       {fmtMoney(rc.loss_usd, currency)}
                       <span style={{ color: PDS.text3, fontWeight: 400 }}> · {fmtPct(rc.contribution_pct, 0)}</span>
                     </span>
                   </div>
-                  <div style={{ height: 4, background: PDS.hairline, borderRadius: 2, overflow: 'hidden' }}>
+                  <div style={{ height: 3, background: PDS.hairline, borderRadius: 2, overflow: 'hidden' }}>
                     <div style={{ width: '100%', height: '100%',
-                                  background: PDS.loss, borderRadius: 2, opacity: 0.8,
+                                  background: PDS.loss, borderRadius: 2, opacity: i === 0 ? 0.9 : 0.55,
                                   transform: `scaleX(${Math.min(100, rc.contribution_pct || 0) / 100})`,
                                   transformOrigin: 'left',
                                   transition: 'transform var(--pds-dur-slow) var(--pds-ease)' }} />
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
-        </Panel>
+              </div>
+            ))}
+          </div>
+        )}
       </Act>
 
       {/* ══════════════════════════════════════════════════════════════
@@ -423,8 +436,8 @@ function DecisionPanel({ primary, alternatives, fallbackRc, currency }) {
     experimental: false,
   };
   return (
-    <Panel pad={PDS.s6} accent>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+    <Panel pad="clamp(28px, 3vw, 44px)" accent>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
         <span className="pds-kicker" style={{ color: PDS.accent }}>PREDAIOT Recommendation</span>
         {p.experimental && (
           <span className="pds-num" style={{ fontSize: 9, letterSpacing: '0.1em', color: PDS.text3,
@@ -433,10 +446,11 @@ function DecisionPanel({ primary, alternatives, fallbackRc, currency }) {
           </span>
         )}
       </div>
-      <div style={{ fontSize: 22, fontWeight: 800, color: PDS.text, marginBottom: 8, letterSpacing: '-0.01em' }}>
+      <div style={{ fontSize: 'clamp(22px, 2vw, 30px)', fontWeight: 800, color: PDS.text,
+                    marginBottom: 10, letterSpacing: '-0.015em', lineHeight: 1.2 }}>
         {p.name}
       </div>
-      <div style={{ fontSize: 13, color: PDS.text2, lineHeight: 1.65, maxWidth: 'var(--pds-prose-max)' }}>
+      <div style={{ fontSize: 15, color: PDS.text2, lineHeight: 1.75, maxWidth: 'var(--pds-prose-max)' }}>
         {p.description}
       </div>
       {alternatives && alternatives.length > 0 && (
@@ -479,8 +493,9 @@ function OutcomePanel({ primary, currency, acGrade, acPct, dqiPct }) {
         : 'Confidence INDETERMINATE — data-quality index not computed on this audit path';
   return (
     <Panel pad={PDS.s5}>
-      <div className="pds-kicker" style={{ marginBottom: 10 }}>Expected Outcome</div>
-      <div style={{ fontSize: 34, fontWeight: 800, color: PDS.recover, lineHeight: 1 }}>
+      <div className="pds-kicker" style={{ marginBottom: 12 }}>Expected Outcome</div>
+      <div style={{ fontSize: 'clamp(34px, 3vw, 44px)', fontWeight: 800, color: PDS.recover,
+                    lineHeight: 1, letterSpacing: '-0.02em' }}>
         <span className="pds-num">{gain != null ? fmtMoney(Math.abs(gain), currency) : '—'}</span>
       </div>
       <div style={{ fontSize: 10, color: PDS.text3, marginTop: 8 }}>
