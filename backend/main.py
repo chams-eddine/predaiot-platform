@@ -1711,8 +1711,7 @@ def _build_opportunities(total_gap: float, asset_type: str, decision_log: list =
             evidence=(f"{counts[bucket]} ledger row(s) classified '{bucket}' with positive gap; "
                       f"sum of gap_step = {_fmt_money(gain, currency)} for the audited period."),
             derivation=(f"period_gain = sum of gap_step over ledger rows where decision_type maps to "
-                        f"'{bucket}' and gap_step > 0; annual = period_gain x {annual_factor:.2f} "
-                        "(linear extrapolation of the audited period)."),
+                        f"'{bucket}' and gap_step > 0 (recorded period only; no forward projection)."),
         ))
 
     # Operator-override governance - derived from override-flagged rows only.
@@ -1927,8 +1926,7 @@ def _build_ai_commentary(
         for i, op in enumerate(quantified[:5], 1):
             L.append("")
             L.append(f"Recommendation {i} — {op.name}")
-            L.append(f"  Period Value            {_fmt_money(op.period_gain, currency)}")
-            L.append(f"  Annualised (linear est.) {_fmt_money(op.annual_gain_usd, currency, 0)}")
+            L.append(f"  Value at Stake          {_fmt_money(op.period_gain, currency)}  (recorded period)")
             L.append(f"  Ledger Intervals        {op.intervals_observed}")
             L.append(f"  Derivation              {op.derivation}")
     else:
@@ -3877,14 +3875,13 @@ def _dq(severity: str, code: str, message: str) -> dict:
 
 
 def _fmt_money(x, cur: str = "USD", decimals: int = 2) -> str:
-    """"$1,234.56" for USD, "1,234.56 OMR" for everything else."""
+    """"1,234.56 USD" / "1,234.56 OMR" — code suffix, no currency symbol, so
+    every PREDAIOT surface (UI, PDF, certificate) speaks one money language."""
     cur = (cur or "USD").upper()
     try:
         val = float(x or 0)
     except (TypeError, ValueError):
         val = 0.0
-    if cur == "USD":
-        return f"${val:,.{decimals}f}"
     return f"{val:,.{decimals}f} {cur}"
 
 
@@ -4982,7 +4979,9 @@ def _register_certificate(cert: dict, manifest: Optional[dict],
 # a broader construct than DQ measures, and no defensible methodology exists
 # until the EDA Standard defines and validates one.
 # See docs/REMOVED_HEURISTICS.md.
-_RATING_WITHDRAWN_LABEL = "Withdrawn — pending EDA Standard v1.0 definition"
+# Client-facing label: "Withdrawn" reads like a defect to an executive, so the
+# certificate presents the same not-yet-issued state as a reservation.
+_RATING_WITHDRAWN_LABEL = "Reserved for EDA Standard v1.0"
 
 
 # ==========================================
@@ -5426,8 +5425,8 @@ def _build_certificate(data: dict) -> dict:
         )
         + f"Decision-quality risk band per the published DQ thresholds: "
         + str(data.get("risk_level", "Moderate")) + ". "
-        "An AAA–CCC Economic Rating is not issued: the rating methodology is withdrawn "
-        "pending formal definition and validation in EDA Standard v1.0."
+        "An AAA–CCC Economic Rating is not issued: the rating methodology is reserved "
+        "for formal definition and validation in EDA Standard v1.0."
     )
 
     # ── ISSUED BY / ISSUED TO / AUDIT SCOPE (Coverage Tasks Fix B) ─────
@@ -5775,6 +5774,22 @@ def _build_audit_pdf(audit: dict) -> bytes:
     # perfect-foresight UPPER BOUND; only the execution gap (when a forecast
     # column allowed the Ch 8.2 split) may be presented as recoverable.
     ga = audit.get("gap_attribution") or None
+
+    # Executive verdict — the two-second read. Recorded period only; capture is
+    # the backend's clamped efficiency (edv_act/edv_opt), recoverable is the
+    # execution gap when the Ch 8.2 split is available, else the ceiling gap.
+    _cap = (max(0.0, min(1.0, edv_act / edv_opt)) * 100.0) if edv_opt > 0 else 0.0
+    _recoverable = ga.get("execution_gap") if ga else gap
+    _verdict = (f"The facility captured {_cap:.1f}% of its economically achievable value "
+                f"during the audited period, leaving {_fmt_money(_recoverable, cur)} of "
+                f"recoverable value.")
+    from reportlab.lib.utils import simpleSplit
+    y -= 20
+    c.setFillColorRGB(0.10, 0.12, 0.16)
+    c.setFont("Helvetica", 9.5)
+    for _ln in simpleSplit(_verdict, "Helvetica", 9.5, 466):
+        c.drawString(72, y, _ln); y -= 12
+
     rows = [
         ("Theoretical Ceiling (Upper Bound)", _fmt_money(edv_opt, cur)),
         ("Captured Value",                    _fmt_money(edv_act, cur)),
@@ -5789,7 +5804,7 @@ def _build_audit_pdf(audit: dict) -> bytes:
         ("Decision Quality (DQ)",             f"{dq_pct:.1f} / 100"),
         ("Risk Level",                        risk.upper()),
     ]
-    y -= 22
+    y -= 8
     c.setFillColorRGB(0.18, 0.18, 0.2)
     c.setFont("Helvetica", 11)
     for label, value in rows:
@@ -5805,6 +5820,9 @@ def _build_audit_pdf(audit: dict) -> bytes:
         "information available at decision time." if ga else
         "Ceiling = perfect-foresight benchmark (upper bound). Recoverable portion requires a "
         "day-ahead forecast column in the source data."))
+    y -= 12
+    c.drawString(72, y, "Risk Level is derived from Decision Quality and Economic Loss "
+                        "metrics against the published DQ thresholds.")
     y -= 14
     c.setFillColorRGB(0.18, 0.18, 0.2)
 
@@ -5836,7 +5854,7 @@ def _build_audit_pdf(audit: dict) -> bytes:
     y -= 12
     c.setFillColorRGB(0.04, 0.14, 0.22)
     c.setFont("Helvetica-Bold", 12)
-    c.drawString(60, y, "TOP OPPORTUNITIES   (annualised)")
+    c.drawString(60, y, "TOP OPPORTUNITIES   (recorded period)")
     c.line(60, y - 4, 535, y - 4)
     y -= 20
 
@@ -5854,11 +5872,10 @@ def _build_audit_pdf(audit: dict) -> bytes:
         c.setFont("Helvetica-Oblique", 8)
         c.drawString(80, y - 11,
                      f"{_opf(op, 'intervals_observed')} ledger intervals · "
-                     f"{_fmt_money(_opf(op, 'period_gain'), cur)} audited period · "
-                     "annualised = linear extrapolation")
+                     "value at stake, recorded period — no forward projection")
         c.setFillColorRGB(0.18, 0.18, 0.2)
         c.setFont("Helvetica", 10)
-        c.drawRightString(535, y, _fmt_money(_opf(op, "annual_gain_usd"), cur, 0))
+        c.drawRightString(535, y, _fmt_money(_opf(op, "period_gain"), cur, 0))
         y -= 26
 
     # ── Certification block ───────────────────────────────────────────
