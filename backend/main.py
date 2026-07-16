@@ -3842,16 +3842,22 @@ def _detect_and_resample(df: pd.DataFrame) -> tuple:
     con_cols = [c for c in ("price", "forecast_price") if c in df.columns]
     rule = f"{snapped}s"
 
+    # Anchor bins to the asset's FIRST reading (origin="start"), not to the
+    # pandas default (epoch/midnight). Real SCADA exports rarely begin on a
+    # clean boundary (e.g. 01:09); default anchoring would open with an empty
+    # leading bin whose all-NaN row crashes the downstream engine. origin="start"
+    # is an identity for data that already begins on a boundary, so audited
+    # results are unchanged for well-aligned files.
     parts = []
     if op_cols:
-        parts.append(df[op_cols].resample(rule).ffill())
+        parts.append(df[op_cols].resample(rule, origin="start").ffill())
     if con_cols:
         # numeric only — linear interp
-        parts.append(df[con_cols].apply(pd.to_numeric, errors="coerce").resample(rule).mean().interpolate("linear"))
+        parts.append(df[con_cols].apply(pd.to_numeric, errors="coerce").resample(rule, origin="start").mean().interpolate("linear"))
     # Pass-through anything else (grid_demand etc.) with ffill
     other = [c for c in df.columns if c not in op_cols + con_cols]
     if other:
-        parts.append(df[other].resample(rule).ffill())
+        parts.append(df[other].resample(rule, origin="start").ffill())
 
     df = pd.concat(parts, axis=1).reset_index()
     notes["resampled"] = True
@@ -3955,6 +3961,29 @@ def _coerce_numeric_columns(df: pd.DataFrame) -> tuple:
                 flags.append(_dq("info", f"{col}_negatives_clipped",
                                  f"{n_neg} negative {col} value(s) clipped to 0 MW "
                                  "(charge and discharge are separate columns)."))
+
+    # Secondary numeric telemetry that still reaches DecisionRecord (context
+    # fields, not load-bearing for EDV). A stray non-numeric cell here — e.g.
+    # an Excel "#REF!" left in a historian export — must NOT 500 the audit;
+    # strip junk to a missing value (NaN) so the row still validates. Blank
+    # cells already arrive as NaN, so this only touches genuinely corrupt cells
+    # and is an identity for clean files.
+    for col in ("forecast_price", "soc", "grid_demand"):
+        if col not in df.columns:
+            continue
+        raw = df[col]
+        num = pd.to_numeric(
+            raw.astype(str).str.replace(r"[^\d.\-eE]", "", regex=True).replace("", None),
+            errors="coerce",
+        )
+        # count cells that were non-blank yet unparseable (true corruption)
+        was_blank = raw.isna() | (raw.astype(str).str.strip() == "")
+        n_corrupt = int((num.isna() & ~was_blank).sum())
+        if n_corrupt:
+            flags.append(_dq("warning", f"{col}_corrupt_values_dropped",
+                             f"{n_corrupt} non-numeric {col} value(s) could not be parsed "
+                             "and were treated as missing."))
+        df[col] = num
     return df, flags
 
 

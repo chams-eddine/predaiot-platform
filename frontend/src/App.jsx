@@ -1585,7 +1585,9 @@ export default function App() {
     if (!(data.decision_log || []).length) return;
     setAiLoading(true);
     try {
-      const capturePct = data.edv_optimal_total > 0 ? (data.edv_actual_total / data.edv_optimal_total) * 100 : 0;
+      const capturePct = (data.eda_metrics && data.eda_metrics.economic_decision_efficiency != null)
+        ? data.eda_metrics.economic_decision_efficiency
+        : (data.edv_optimal_total > 0 ? (data.edv_actual_total / data.edv_optimal_total) * 100 : 0);
       const missedCount = (data.decision_log || []).filter(d => d.decision_type === 'Missed Arbitrage').length;
       const opsBlock = (data.opportunities || []).slice(0, 5).map((o, i) =>
         `${i + 1}. ${o.name}${o.experimental ? ' [EXPERIMENTAL — not quantified]' : ` — Period Value: ${o.period_gain} | Ledger intervals: ${o.intervals_observed} | Derivation: ${o.derivation}`} | Evidence: ${o.evidence || '—'}`
@@ -1674,7 +1676,14 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
 
   // ── Derived ────────────────────────────────────────────────────────
   const log         = Array.isArray(data.decision_log) ? data.decision_log : [];
-  const captureRate = data.edv_optimal_total > 0 ? (data.edv_actual_total / data.edv_optimal_total) * 100 : 0;
+  // Capture = the backend's authoritative EDE (economic_decision_efficiency),
+  // which carries Ch 4.2 domain rules (clamped to [0,100]). Never recompute it
+  // here: a naive edv_act/edv_opt can exceed 100% on infeasible telemetry or go
+  // negative on destroyed-value periods, disagreeing with the certified figure.
+  // Fall back to the local ratio only for legacy responses without eda_metrics.
+  const captureRate = (data.eda_metrics && data.eda_metrics.economic_decision_efficiency != null)
+    ? data.eda_metrics.economic_decision_efficiency
+    : (data.edv_optimal_total > 0 ? (data.edv_actual_total / data.edv_optimal_total) * 100 : 0);
   const m           = data.eda_metrics;   // EDA metric block; consumed by S06/S10/S05
   // "An audit is loaded" = the decision log has rows. NOT dq_score > 0 —
   // an honest DQ of 0.0 (destructive dispatch) is a real, displayable audit.
