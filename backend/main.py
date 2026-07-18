@@ -849,45 +849,11 @@ def _bump_audit_count(token: str) -> None:
 # Existing trial-token funnel is untouched; account users are dual-accepted
 # on every audit endpoint via a linked TrialLead row ("acct-<user_id>").
 # ==========================================
-import bcrypt as _bcrypt
-import jwt as _pyjwt
-
-_AUTH_SECRET = os.environ.get("PREDAIOT_AUTH_SECRET", "")
-if not _AUTH_SECRET:
-    # Dev fallback: deterministic per-machine secret. Production MUST set
-    # PREDAIOT_AUTH_SECRET (startup log warns; tokens don't survive redeploys
-    # of ephemeral filesystems otherwise).
-    _AUTH_SECRET = _hashlib.sha256(f"predaiot-dev-{os.path.abspath(__file__)}".encode()).hexdigest()
-    print("[startup] WARNING: PREDAIOT_AUTH_SECRET not set — using dev-only derived secret.")
-
-_JWT_TTL_HOURS = int(os.environ.get("PREDAIOT_JWT_TTL_HOURS", "24"))
-_ROLES = ("owner", "admin", "asset_manager", "operator", "finance", "viewer")
-
-
-def _hash_password(pw: str) -> str:
-    return _bcrypt.hashpw(pw.encode("utf-8"), _bcrypt.gensalt()).decode("ascii")
-
-
-def _verify_password(pw: str, pw_hash: str) -> bool:
-    try:
-        return _bcrypt.checkpw(pw.encode("utf-8"), pw_hash.encode("ascii"))
-    except Exception:
-        return False
-
-
-def _issue_jwt(user: "User") -> str:
-    now = datetime.utcnow()
-    return _pyjwt.encode(
-        {"sub": str(user.id), "org": user.org_id, "role": user.role,
-         "email": user.email, "iat": now, "exp": now + timedelta(hours=_JWT_TTL_HOURS)},
-        _AUTH_SECRET, algorithm="HS256")
-
-
-def _decode_jwt(token: str) -> Optional[dict]:
-    try:
-        return _pyjwt.decode(token, _AUTH_SECRET, algorithms=["HS256"])
-    except Exception:
-        return None
+# Auth primitives (JWT + bcrypt) now live in app/core/security.py (refactor 2A).
+from app.core.security import (  # noqa: E402
+    _AUTH_SECRET, _JWT_TTL_HOURS, _ROLES,
+    _hash_password, _verify_password, _issue_jwt, _decode_jwt,
+)
 
 
 def require_user(
