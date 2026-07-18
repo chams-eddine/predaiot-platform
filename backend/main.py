@@ -35,27 +35,10 @@ SOLVER_VERSION      = getattr(pulp, "__version__", "unknown")
 # ==========================================
 # 1. Database Setup  (CORE LOGIC UNCHANGED — connection made fault-tolerant)
 # ==========================================
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./predaiot_audit.db")
-
-# Render's managed Postgres sometimes gives "postgres://" — SQLAlchemy 2.x needs "postgresql://"
-if DATABASE_URL:
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://")
-
-if "sqlite" in DATABASE_URL:
-    engine = create_engine(
-        DATABASE_URL,
-        connect_args={"check_same_thread": False}
-    )
-else:
-    engine = create_engine(
-        DATABASE_URL,
-        pool_pre_ping=True,
-        pool_recycle=300,
-        pool_size=5,
-        max_overflow=10
-    )
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# DB engine / session / URL now live in app/core/config.py (refactor step 2A).
+# Imported back so every `engine` / `SessionLocal` / `DATABASE_URL` call site and
+# the fault-tolerant startup handler remain unchanged.
+from app.core.config import DATABASE_URL, engine, SessionLocal  # noqa: E402
 Base = declarative_base()
 
 class DecisionAuditLog(Base):
