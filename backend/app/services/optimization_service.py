@@ -204,3 +204,32 @@ def run_optimizer_full(asset: AssetSpecs, time_series_list: list, dt_hours: floa
         dis, ch = _run_optimizer_storage(asset, prices, dt_hours=dt_hours, return_charge=True)
         return dis, ch
     return run_optimizer(asset, time_series_list, dt_hours=dt_hours), {}
+
+
+# ── Shared economic step-classification taxonomy (normative). Lives on the
+# economic leaf so audit_service + telemetry_service depend downward on it.
+# (DDD phase P6 will promote this into domain/.)
+def _classify_decision(opt: float, act: float, price: float, threshold: float = 5.0) -> tuple:
+    """
+    Deterministic step classification. The boundaries below are NORMATIVE
+    TAXONOMY DEFINITIONS (published in the methodology), not measurements:
+      tolerance 0.5 MW  — |opt − act| below this is "the same action"
+      materiality 5 MW  — optimal dispatch below this is "no opportunity"
+
+    Returns (decision_type, confidence). Confidence is ALWAYS None: the
+    previous per-class constants (0.96/0.85/…) were fabricated and were
+    removed under the No-Fabrication rule (docs/REMOVED_HEURISTICS.md).
+    A defensible confidence must derive from data quality — future EDA
+    Standard work, not an invented constant.
+    """
+    if abs(opt - act) < 0.5:
+        return "Correct Dispatch", None
+    if opt > threshold and act < 0.5:
+        return "Missed Arbitrage", None
+    if act > opt + threshold:
+        return "Over-Dispatch", None
+    if opt < threshold and act < 0.5:
+        return "Correct Idle", None
+    if opt > threshold and 0 < act < opt:
+        return "Partial Capture", None
+    return "Sub-optimal Dispatch", None
