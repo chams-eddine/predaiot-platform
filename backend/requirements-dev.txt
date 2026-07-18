@@ -1,0 +1,4 @@
+# Test-only dependencies (NOT installed in the production image).
+# The runtime deps live in requirements.txt; pypdf is already there.
+pytest>=8.0
+httpx>=0.27
