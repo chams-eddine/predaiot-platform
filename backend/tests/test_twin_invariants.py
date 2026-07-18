@@ -2,10 +2,16 @@
 """Digital-twin campaign (CI subset): drive many simulated scenarios through
 the engine and assert invariants + never-500 on parseable input."""
 import itertools
+import zlib
 
 import pytest
 from conftest import audit_invariants
 import twin
+
+
+def _seed(asset, regime, faults):
+    # deterministic across processes (unlike hash(), which PYTHONHASHSEED randomizes)
+    return zlib.crc32(f"{asset}|{regime}|{'-'.join(faults)}".encode()) % 9999
 
 ASSETS = ["bess", "solar"]
 REGIMES = ["normal", "volatile", "negative", "flat"]
@@ -18,7 +24,7 @@ SCENARIOS = [(a, rg, f) for a, rg, f in itertools.product(ASSETS, REGIMES, FAULT
 
 @pytest.mark.parametrize("asset,regime,faults", SCENARIOS)
 def test_scenario_never_500_and_invariants_hold(client, token, asset, regime, faults):
-    df = twin.build(asset=asset, hours=24, dt_min=60, seed=hash((asset, regime, faults)) % 9999,
+    df = twin.build(asset=asset, hours=24, dt_min=60, seed=_seed(asset, regime, faults),
                     regime=regime, faults=faults)
     r = client.post("/api/v1/audit/file", headers=token(),
                     files={"file": ("s.csv", twin.to_csv_bytes(df), "text/csv")})
