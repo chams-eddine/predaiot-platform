@@ -31,3 +31,9 @@ else:
     )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Consultation booking CTA target (env-overridable) — surfaced by the trial gate.
+CONSULTATION_BOOKING_URL = os.environ.get(
+    "CONSULTATION_BOOKING_URL",
+    "mailto:chams@preda-iot.com?subject=PREDAIOT%20Audit%20Consultation"
+)
