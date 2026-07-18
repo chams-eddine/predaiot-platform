@@ -41,6 +41,12 @@ SOLVER_VERSION      = getattr(pulp, "__version__", "unknown")
 from app.core.config import DATABASE_URL, engine, SessionLocal  # noqa: E402
 Base = declarative_base()
 
+# Pure literal constants now live in app/core/constants.py (refactor step 2A).
+from app.core.constants import (  # noqa: E402
+    _STANDARD_INTERVALS, _MAX_UPLOAD_BYTES, _RATING_WITHDRAWN_LABEL,
+    _COMMS_STATUS_ALIASES, _COMMS_OK_VALUES,
+)
+
 class DecisionAuditLog(Base):
     __tablename__ = "audit_logs"
     id = Column(Integer, primary_key=True, index=True)
@@ -3753,7 +3759,7 @@ def _fill_ts_bounds(series, notes: dict) -> None:
 
 
 # Standard energy-market resolutions we snap to (seconds)
-_STANDARD_INTERVALS = [60, 300, 900, 1800, 3600]  # 1min, 5min, 15min, 30min, 60min
+# _STANDARD_INTERVALS → app/core/constants.py (refactor step 2A)
 
 
 def _detect_and_resample(df: pd.DataFrame) -> tuple:
@@ -3952,11 +3958,7 @@ def _coerce_numeric_columns(df: pd.DataFrame) -> tuple:
 
 
 # Column names that carry a comms / link health status in SCADA exports
-_COMMS_STATUS_ALIASES = {
-    "communication_status", "comm_status", "comms_status", "comms",
-    "link_status", "connection_status", "telemetry_status", "signal_status",
-}
-_COMMS_OK_VALUES = {"ok", "online", "good", "connected", "healthy", "up", "1", "true", "normal"}
+# _COMMS_STATUS_ALIASES / _COMMS_OK_VALUES → app/core/constants.py (refactor step 2A)
 
 
 def _build_sensor_quality_flags(df: pd.DataFrame, dt_hours: float,
@@ -4165,7 +4167,7 @@ def _detect_currency(raw_columns: list) -> Optional[str]:
 
 # Upload ceiling: a year of 1-minute data for one asset is ~40 MB of CSV;
 # anything past this is either the wrong export or a memory-exhaustion attempt.
-_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+# _MAX_UPLOAD_BYTES → app/core/constants.py (refactor step 2A)
 
 
 def _looks_numeric(v: str) -> bool:
@@ -4946,9 +4948,7 @@ def _register_certificate(cert: dict, manifest: Optional[dict],
 # a broader construct than DQ measures, and no defensible methodology exists
 # until the EDA Standard defines and validates one.
 # See docs/REMOVED_HEURISTICS.md.
-# Client-facing label: "Withdrawn" reads like a defect to an executive, so the
-# certificate presents the same not-yet-issued state as a reservation.
-_RATING_WITHDRAWN_LABEL = "Reserved for EDA Standard v1.0"
+# _RATING_WITHDRAWN_LABEL → app/core/constants.py (refactor step 2A)
 
 
 # ==========================================
