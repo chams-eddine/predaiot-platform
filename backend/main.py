@@ -301,52 +301,18 @@ def _persist_audit_record(lead: TrialLead, result: "AuditResponse",
 # Rate limiter — lazy-imported so a deploy without slowapi still boots and
 # the endpoints just aren't rate-limited (fail-open, not fail-closed —
 # availability > perfect throttling on a pre-seed platform).
-try:
-    from slowapi import Limiter, _rate_limit_exceeded_handler
-    from slowapi.errors import RateLimitExceeded
-    _HAS_SLOWAPI = True
-except ImportError:
-    _HAS_SLOWAPI = False
-
-
 # Access-log middleware + _client_ip helper now live in app/core/logging.py (2B).
-from app.core.logging import _client_ip, _api_access_log, _security_log  # noqa: E402
-
-
-def _rate_limit_key(request) -> str:
-    """
-    Rate-limit key: prefer the trial token (per-user) with the real client IP
-    as fallback. Falls back to a stable string if the request context is
-    unusual so slowapi never explodes.
-    """
-    try:
-        token = request.headers.get("X-Trial-Token") if hasattr(request, "headers") else None
-        if token:
-            return f"tok:{token[:16]}"
-        return f"ip:{_client_ip(request)}"
-    except Exception:
-        return "unknown"
+from app.core.logging import _client_ip, _api_access_log, _security_log  # noqa: E402,F401
+# Rate limiter + in-process runtime state now live in app/core (refactor step 6
+# prep) so routers share them without importing main (no import cycle).
+from app.core.ratelimit import limiter, register_rate_limiter  # noqa: E402
+from app.core.state import (  # noqa: E402
+    _BOOT_ID, _BOOT_TIME, _latest_by_token, _EMPTY_LATEST, shared_audits,
+)
 
 
 app = FastAPI(title="PREDAIOT Engine")
-
-# Boot marker — captured once at import. Changes iff the process restarts, so
-# restart-recovery can be verified by OBSERVED evidence, not deploy inference.
-_BOOT_ID = secrets.token_hex(8)
-_BOOT_TIME = datetime.utcnow()
-
-if _HAS_SLOWAPI:
-    limiter = Limiter(key_func=_rate_limit_key)
-    app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-else:
-    # Null-object shim so the @limiter.limit(...) decorators below are no-ops
-    # when slowapi isn't installed. Keeps the audit code path identical.
-    class _NullLimiter:
-        def limit(self, *_args, **_kwargs):
-            def _wrap(fn): return fn
-            return _wrap
-    limiter = _NullLimiter()
+register_rate_limiter(app)
 
 
 # CORS — allow_origins is now an explicit list from ALLOWED_ORIGINS env
@@ -464,12 +430,8 @@ async def init_database_tables():
 # (any caller could see whichever audit ran most recently). Now indexed by
 # lead.token so /api/latest, /api/v1/certificate, /api/v1/audit/pdf/latest
 # only return the caller's own data.
-_latest_by_token: Dict[str, dict] = {}
-_EMPTY_LATEST = {
-    "edv_optimal_total": 0, "edv_actual_total": 0,
-    "dq_score": 0, "total_gap_usd": 0, "decision_log": [],
-}
-shared_audits = {}
+# _latest_by_token / _EMPTY_LATEST / shared_audits → app/core/state.py (step 6 prep;
+# the D7 in-process state seam). Imported back above.
 
 # ==========================================
 # 4. Optimizer  (multi-asset router)
