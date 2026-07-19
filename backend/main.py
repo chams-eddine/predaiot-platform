@@ -2688,9 +2688,40 @@ async def ai_enhance(request: Dict[str, Any] = Body(...)):
 # ==========================================
 
 # Register /health FIRST so it isn't shadowed by the static mount below.
+def _build_version() -> str:
+    """Deployed build identity. Render injects RENDER_GIT_COMMIT at build time; a
+    baked VERSION file (Dockerfile / on-prem image) is the fallback; 'unknown' only
+    in a bare checkout. Makes deploys verifiable via GET /version instead of
+    inferring from boot time (deployment-maturity fix)."""
+    sha = (os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("GIT_COMMIT")
+           or os.environ.get("SOURCE_VERSION"))
+    if not sha:
+        try:
+            _vf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")
+            if os.path.exists(_vf):
+                with open(_vf, encoding="utf-8") as _f:
+                    sha = _f.read().strip()
+        except Exception:
+            sha = None
+    return sha or "unknown"
+
+
 @app.get("/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/version")
+def version():
+    """Deployed build identity — deterministic deploy verification."""
+    from app.core.versions import ENGINE_VERSION
+    return {
+        "service": "predaiot-backend",
+        "engine_version": ENGINE_VERSION,
+        "git_commit": _build_version(),
+        "boot_id": _BOOT_ID,
+        "boot_time": _BOOT_TIME.isoformat() + "Z",
+    }
 
 
 @app.get("/health/db")
