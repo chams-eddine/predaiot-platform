@@ -43,4 +43,4 @@ Legend — Risk: 🔴 Critical · 🟠 High · 🟡 Medium · 🟢 Low.
 - PDF output frozen — layout hash + `pdf_size` + ledger CSV byte-identical (timestamps normalized, documented).
 - No API/route/schema/DB/output change. Every step gated by the committed pytest suite + golden + twin + perf + security battery.
 
-_Last updated: Phase 3, service 5 part 2 (`domain/economics.py` — first domain module) — `main.py` at 2,612 L._
+_Last updated: Phase 3 COMPLETE — service 5 part 3 (`audit_service.py` orchestrator). All 5 services extracted; `main.py` at 2,385 L (from 6,157)._
