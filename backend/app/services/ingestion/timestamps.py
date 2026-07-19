@@ -164,7 +164,6 @@ def _detect_and_resample(df: pd.DataFrame) -> tuple:
         return df, notes
 
     # Snap to the nearest standard interval by log-distance
-    import math
     snapped = min(_STANDARD_INTERVALS, key=lambda x: abs(math.log(x) - math.log(median_delta)))
     notes["detected_resolution_sec"] = snapped
     notes["detected_resolution_label"] = {

@@ -19,7 +19,7 @@ Canonical event fields:
   currency
 """
 import hashlib
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 CANONICAL_EVENT_VERSION = "EDA-EVENT-1.0"
 SOURCE_TYPES = ("opcua", "modbus", "mqtt", "csv", "rest", "sim")

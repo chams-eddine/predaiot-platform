@@ -136,7 +136,6 @@ def _build_certificate(data: dict) -> dict:
     total_gap  = data.get("total_gap_usd", 0)
     opt        = data.get("edv_optimal_total", 0)
     act        = data.get("edv_actual_total", 0)
-    m          = data.get("eda_metrics") or {}
     # Economic Rating WITHDRAWN (No-Fabrication rule + hardening constraint 4):
     # the AAA–CCC composite used unvalidated weights and is not re-derived
     # from DQ alone. Keys retained for API compatibility.
@@ -174,7 +173,7 @@ def _build_certificate(data: dict) -> dict:
             "The recoverable portion could not be isolated (no day-ahead forecast column in "
             "the source data). "
         )
-        + f"Decision-quality risk band per the published DQ thresholds: "
+        + "Decision-quality risk band per the published DQ thresholds: "
         + str(data.get("risk_level", "Moderate")) + ". "
         "An AAA–CCC Economic Rating is not issued: the rating methodology is reserved "
         "for formal definition and validation in EDA Standard v1.0."

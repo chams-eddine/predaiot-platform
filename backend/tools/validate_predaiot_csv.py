@@ -32,7 +32,6 @@ GREEN, YELLOW, RED, RESET = "\033[92m", "\033[93m", "\033[91m", "\033[0m"
 
 
 def validate(path: str) -> int:
-    import pandas as pd
     import main
 
     p = Path(path)

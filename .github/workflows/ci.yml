@@ -6,6 +6,7 @@ on:
   pull_request:
 
 jobs:
+  # ── Behaviour gate: frozen-engine characterization suite + coverage floor ──
   characterization-suite:
     runs-on: ubuntu-latest
     defaults:
@@ -13,22 +14,52 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Python (pinned to Render runtime)
         uses: actions/setup-python@v5
         with:
           python-version: "3.12.6"
-
       - name: Install dependencies (locked, reproducible)
         run: |
           python -m pip install --upgrade pip
-          # Install the exact validated closure. requirements.txt holds the
-          # human-editable direct pins; requirements.lock is the full transitive
-          # lock the battery validated (golden 188.62 / PDF 562731 / 149 tests).
           pip install -r requirements.lock
           pip install -r requirements-dev.txt
-
-      - name: Run characterization suite (behaviour-preserving gate)
+      - name: Characterization suite + coverage floor
         env:
           PREDAIOT_AUTH_SECRET: ci-only-not-a-real-secret
-        run: pytest -q
+        run: |
+          coverage run -m pytest -q
+          # Floor = current 65.9% minus a small buffer; ratchets UP as the Router /
+          # Repository phases add API-layer tests. Never let it regress.
+          coverage report --fail-under=64
+
+  # ── Quality & security gates (no app import needed — static analysis) ──
+  quality-gates:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.6"
+      - name: Install gate tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Ruff (lint / dead code)
+        run: ruff check .
+      - name: Bandit (SAST — fail on HIGH severity + HIGH confidence)
+        run: bandit -r main.py eda_metrics.py canonical_event.py app --severity-level high --confidence-level high -q
+      - name: pip-audit (dependency CVE scan of the lockfile)
+        run: pip-audit -r requirements.lock
+      - name: Architecture fitness (dependency direction — rules 6/7/8)
+        run: python tools/arch_graph.py --check
+
+  # ── Reproducible image build (validates the Dockerfile end-to-end) ──
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the single deployable image
+        run: docker build --build-arg GIT_SHA=${{ github.sha }} -t predaiot:ci .

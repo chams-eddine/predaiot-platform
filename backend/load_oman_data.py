@@ -1,5 +1,4 @@
 import pandas as pd
-import os
 
 def prepare_oman_data():
     prod_path = 'Monthly electricity production by energy source (MWh), by year.xlsx'
@@ -14,12 +13,12 @@ def prepare_oman_data():
     # تنظيف وتوحيد المسميات (بناءً على ما ظهر في الـ Terminal)
     # ملاحظة: سنستخدم أسماء الأعمدة الفعلية من ملفاتك
     df_prod.rename(columns={
-        'اسم الأصل': 'Date', 
+        'اسم الأصل': 'Date',
         'انتاج  الكهرباء الشهري لكل سنة MWh حسب مصدر الانتاج ': 'Production_MWh'
     }, inplace=True)
-    
+
     df_peak.rename(columns={
-        'اسم الأصل': 'Date', 
+        'اسم الأصل': 'Date',
         'ذروة الطلب على الكهرباء بشكل شهري لكل نظام  MW ': 'Peak_Demand_MW'
     }, inplace=True)
 
@@ -33,7 +32,7 @@ def prepare_oman_data():
 
     # تجهيز للـ API الخاص بـ PREDAIOT
     df_merged['hour'] = range(len(df_merged))
-    df_merged['price'] = 25.0 
+    df_merged['price'] = 25.0
     df_merged['actual_discharge'] = df_merged['Production_MWh']
 
     # الحفظ

@@ -116,7 +116,7 @@ def _build_audit_pdf(audit: dict) -> bytes:
 
     # Two-column engagement-letter header. Left column carries the long
     # legal-operator line and needs more room (LEFT_X to RIGHT_X-8).
-    LEFT_X, RIGHT_X, MAX_X = 60, 345, 535
+    LEFT_X, RIGHT_X = 60, 345
     y = 630
     c.setFillColorRGB(*LABEL_C)
     c.setFont("Helvetica-Bold", 8)

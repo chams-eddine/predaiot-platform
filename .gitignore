@@ -35,7 +35,16 @@ lerna-debug.log*
 
 # Smoke-test artifacts
 backend/smoke_*
+backend/_*.py
+backend/*_baseline.json
+backend/twin_report.json
 *.pdf.tmp
+
+# Tooling / analysis venvs + coverage artifacts
+.venv*/
+.coverage
+backend/.coverage
+htmlcov/
 
 # node-core generated artifacts
 node-core/node_modules/

@@ -1,0 +1,31 @@
+# PREDAIOT backend — tooling config (ruff, coverage). Single source of truth so
+# local and CI runs are identical. Ruleset is intentionally focused now (real bugs
+# + pycodestyle) and ratchets up (isort I, bugbear B, pyupgrade UP) as the Router /
+# Repository phases land — adopt-then-enforce, not a big-bang reformat.
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["smoke_*.py", "_*.py"]
+
+[tool.ruff.lint]
+select = ["F", "E", "W"]     # pyflakes (real bugs) + pycodestyle
+ignore = [
+  "E701",  # `if x: return y` compound line — used deliberately throughout
+  "E702",  # compound statement with `;` — same
+  "E501",  # long lines are mostly derivation comments / f-strings (line-length set above)
+  "E741",  # ambiguous names (l, I, O) appear in math code
+]
+
+[tool.ruff.lint.per-file-ignores]
+"main.py" = ["E402"]                        # import-back pattern (imports after app creation)
+"app/services/ingestion/*.py" = ["F401"]    # shared header re-exports — documented debt D14
+"**/__init__.py" = ["F401"]                 # package re-exports are the public surface
+
+[tool.coverage.run]
+source = ["app", "main", "eda_metrics", "canonical_event"]
+omit = ["tests/*", "smoke_*.py", "_*.py"]
+
+[tool.coverage.report]
+show_missing = false
+precision = 1

@@ -1,4 +1,9 @@
-# Test-only dependencies (NOT installed in the production image).
-# The runtime deps live in requirements.txt; pypdf is already there.
+# Test + CI-gate dependencies (NOT installed in the production image).
+# Runtime deps live in requirements.txt / requirements.lock.
 pytest>=8.0
 httpx>=0.27
+coverage>=7.5
+# Quality & security gates (Production Safety phase)
+ruff>=0.6
+bandit>=1.7
+pip-audit>=2.7

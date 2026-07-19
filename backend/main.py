@@ -7,20 +7,17 @@ import secrets
 import urllib.request
 import urllib.error
 import pandas as pd
-from io import BytesIO, StringIO
-from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Body, Header, Depends, HTTPException, Request
+from io import StringIO
+from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Body, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
-import pulp
+from typing import Optional, Dict, Any
 import hashlib as _hashlib
 import base64 as _base64
 import eda_metrics  # versioned, asset-agnostic DQI / Audit Confidence (pure module)
 import canonical_event  # EDA-EVENT-1.0 — the single normalization contract (pure)
-from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime, Boolean, text
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy import text
 from datetime import datetime, timedelta
 
 # ── Version identity (chain of custody, C2) → app/core/versions.py (refactor 3).
@@ -37,16 +34,14 @@ from app.core.versions import (  # noqa: E402
 from app.core.config import DATABASE_URL, engine, SessionLocal, CONSULTATION_BOOKING_URL  # noqa: E402
 # ORM models + Base now live in app/models/tables.py (refactor step 2B).
 from app.models import (  # noqa: E402
-    Base, DecisionAuditLog, TrialLead, Organization, User, Asset, AuditRecord,
+    Base, TrialLead, Organization, User, Asset, AuditRecord,
     EconomicState, Decision, DecisionEvent, Outcome, GovernanceRecord,
-    LiveEvent, LiveState, Reconciliation, SecurityAuditLog, APIAccessLog,
-    CertificateRecord,
+    LiveEvent, LiveState, Reconciliation, SecurityAuditLog, CertificateRecord,
 )
 
 # Pure literal constants now live in app/core/constants.py (refactor step 2A).
 from app.core.constants import (  # noqa: E402
-    _STANDARD_INTERVALS, _MAX_UPLOAD_BYTES, _RATING_WITHDRAWN_LABEL,
-    _COMMS_STATUS_ALIASES, _COMMS_OK_VALUES,
+    _MAX_UPLOAD_BYTES, _RATING_WITHDRAWN_LABEL,
 )
 
 
@@ -68,9 +63,8 @@ TRIAL_DURATION_DAYS = 7
 # ==========================================
 # Pydantic schemas now live in app/schemas/ (refactor step 3, schemas-first).
 from app.schemas import (  # noqa: E402
-    AssetSpecs, TimeStepData, AuditRequest, DecisionRecord,
-    RootCauseItem, OpportunityItem, HeatMapCell, EDAMetrics,
-    FinancialLeakage, AuditResponse, HistoricalResponse, TrialStartRequest,
+    AssetSpecs, AuditRequest, DecisionRecord,
+    AuditResponse, HistoricalResponse, TrialStartRequest,
     TrialStartResponse, TrialStatusResponse, RegisterRequest, LoginRequest,
     AssetCreateRequest, MemberCreateRequest, MemberRoleRequest, DecisionTransitionRequest,
     OutcomeRequest, GovernanceRequest, LiveIngestRequest, ReconcileRequest,
@@ -191,8 +185,7 @@ def _create_trial_lead(email: str, asset_name: Optional[str]) -> TrialLead:
 
 # Auth DI dependencies now live in app/core/dependencies.py (refactor step 2B).
 from app.core.dependencies import (  # noqa: E402
-    require_trial_token, require_user, require_role, _lead_for_user,
-    require_audit_runner, require_trial_or_user,
+    require_trial_token, require_user, require_role, require_audit_runner, require_trial_or_user,
 )
 
 
@@ -216,8 +209,8 @@ def _bump_audit_count(token: str) -> None:
 # ==========================================
 # Auth primitives (JWT + bcrypt) now live in app/core/security.py (refactor 2A).
 from app.core.security import (  # noqa: E402
-    _AUTH_SECRET, _JWT_TTL_HOURS, _ROLES,
-    _hash_password, _verify_password, _issue_jwt, _decode_jwt,
+    _ROLES,
+    _hash_password, _verify_password, _issue_jwt,
 )
 
 
@@ -311,7 +304,6 @@ def _persist_audit_record(lead: TrialLead, result: "AuditResponse",
 try:
     from slowapi import Limiter, _rate_limit_exceeded_handler
     from slowapi.errors import RateLimitExceeded
-    from slowapi.util import get_remote_address
     _HAS_SLOWAPI = True
 except ImportError:
     _HAS_SLOWAPI = False
@@ -429,7 +421,6 @@ def _apply_additive_migrations(bind_engine):
             ("user_id", "INTEGER"),
         ],
     }
-    insp_sql_existing = {}
     with bind_engine.connect() as conn:
         for table, cols in _EXPECTED.items():
             try:
@@ -503,8 +494,7 @@ _STORAGE_TYPES      = {"bess", "battery", "storage", "pumped hydro", "pumpedhydr
 # Dispatch optimizers now live in app/services/optimization_service.py (step 3).
 # ECONOMIC ENGINE FROZEN — moved byte-for-byte; imported back where referenced.
 from app.services.optimization_service import (  # noqa: E402
-    _dispatch_mode, _MILP_LAST, _run_optimizer_storage,
-    run_optimizer, run_optimizer_full,
+    _dispatch_mode, _MILP_LAST,
 )
 
 # ==========================================
@@ -512,15 +502,10 @@ from app.services.optimization_service import (  # noqa: E402
 # ==========================================
 # _classify_decision -> optimization_service (economic leaf); _live_decision_core
 # -> telemetry_service (refactor step 3, service 4).
-from app.services.optimization_service import _classify_decision  # noqa: E402
 from app.services.telemetry_service import _live_decision_core  # noqa: E402
 
 # Economic-narrative builders now in app/domain/economics.py (first domain module;
 # refactor step 3, service 5 part 2). Internal helpers stay private to the module.
-from app.domain.economics import (  # noqa: E402
-    _build_root_causes, _build_opportunities, _build_heat_map,
-    _build_eda_metrics, _build_ai_commentary, _risk_level,
-)
 
 # ==========================================
 # 6. Central Calculation Engine  (CORE UNCHANGED + EDA LAYER)
@@ -1655,12 +1640,11 @@ async def calculate_gap(
 # ==========================================
 # Ingestion + data-quality service now in app/services/ingestion.py (svc 5 pt 1).
 from app.services.ingestion import (  # noqa: E402
-    COLUMN_ALIASES, ASSET_META_ALIASES, _normalise_col, _FUZZY_THRESHOLD,
-    _resolve_columns_verbose, _resolve_columns, _detect_and_apply_units, _detect_excel_serial_timestamps,
-    _TIMESTAMP_FORMAT_ATTEMPTS, _parse_timestamps, _fill_ts_bounds, _detect_and_resample,
+    ASSET_META_ALIASES, _normalise_col, _resolve_columns_verbose, _detect_and_apply_units, _detect_excel_serial_timestamps,
+    _parse_timestamps, _detect_and_resample,
     _dq, _order_and_dedupe_timestamps, _coerce_numeric_columns, _build_sensor_quality_flags,
     _collect_data_quality_counts, _dqi_components_from_manifest, _forecast_reliability_from_snapshot, _detect_currency,
-    _looks_numeric, _fix_banner_header, _parse_file_bytes, _parse_file_bytes_raw,
+    _parse_file_bytes,
 )
 
 # Asset spec meta-columns that can optionally appear as file columns
@@ -2188,8 +2172,7 @@ async def get_latest_live_data(lead: TrialLead = Depends(require_trial_or_user))
 # Certificate trust service now lives in app/services/certificate_service.py
 # (refactor step 3, service 2). CRYPTO FROZEN — moved byte-for-byte.
 from app.services.certificate_service import (  # noqa: E402
-    _CERT_KEY_ENV, _VERIFY_BASE_URL, _cert_signing_key, _canonical_json,
-    _register_certificate, _build_certificate,
+    _CERT_KEY_ENV, _cert_signing_key, _build_certificate,
 )
 
 
