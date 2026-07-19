@@ -23,12 +23,19 @@ Legend — Risk: 🔴 Critical · 🟠 High · 🟡 Medium · 🟢 Low.
 | D5b | **`_security_log` (writes SecurityAuditLog) in `core/logging`** | 🟢 | Needed a shared home below cert+main; core.logging already owns audit-log writes | **P9** → `infrastructure/` or a security repository | Security |
 | D6 | **Ledger-CSV built inline in the route handler** (not in `report_service`) | 🟢 | It's endpoint code; moves with the endpoints | **P5 Routers** → `report_service` | Reporting |
 | D7 | **In-process state / singletons in `main.py`** (`_latest_by_token`, `_BOOT_ID`, `limiter`, live WS state) | 🔴 | Existing runtime behaviour; not touched during structural extraction | **P4/P9** — externalize to Redis; **blocks horizontal scaling today** | Infrastructure |
-| D8 | **`main.py` ~4.4k lines** (55 routes still inline; static mount must stay last) | 🟠 | Routers phase not started; extraction order was core→models→schemas→services first | **P5 Routers** → `api/` `APIRouter`s; `main.py` → ~200-line bootstrap | Architecture |
+| D8 | **`main.py` ~3.0k lines** (55 routes still inline; static mount must stay last) | 🟠 | Routers phase not started; extraction order was core→models→schemas→services first | **P5 Routers** → `api/` `APIRouter`s; `main.py` → ~200-line bootstrap | Architecture |
 | D9 | **`core/versions.py` imports `pulp`** (for `SOLVER_VERSION`) | 🟢 | `SOLVER_VERSION = pulp.__version__` needs the lib | **P9** — inject via config/build metadata | Infrastructure |
 | D10 | **No CI-enforced SAST/DAST/coverage gate / IaC** (functional CI only) | 🟠 | Test gate exists; static-analysis + Docker gates are the next phase | **Production Safety Phase** — ruff/black/mypy/bandit/pip-audit/coverage/Docker | DevEx |
 | D11 | **No repository/domain/infrastructure layers yet**; services still mix orchestration + persistence + rules | 🟠 | Current phase is service extraction, not layering | **P6** | Architecture |
 | D12 | **`_LETTERHEAD_PATH` `__file__` resolution adjusted** (only non-verbatim line in Phase 3) | 🟢 | Module moved; path re-resolved to the same asset (output proven byte-identical) | **P9** — asset path via config/infrastructure | Reporting |
 | D13 | **No structured logging / metrics / tracing / correlation IDs** (print-based) | 🟠 | Not introduced during behaviour-preserving extraction | **P8 Observability** — OpenTelemetry-ready structured logging | DevEx |
+| D14 | **Ingestion submodules carry the full shared import header** (some imports unused-but-`# noqa: F401`) | 🟢 | Structural split kept a uniform header to avoid a missing-import regression; the battery is the safety net, not per-file import surgery | **Production Safety Phase** — ruff auto-removes unused imports | DevEx |
+
+## Resolved debt (kept for DD traceability)
+- **Ingestion 1,015-line budget breach** (service 5 part 1) — RESOLVED by splitting
+  `services/ingestion.py` into the cohesive package `services/ingestion/` (6 submodules
+  ≤ 265 L), see [ADR 0005](adr/0005-ingestion-package-split.md). Public surface and
+  output byte-identical.
 
 ## Invariants held throughout (NOT debt — guardrails)
 - Economic engine **byte-for-byte frozen** — golden Ibri2 fingerprint identical at every commit.
@@ -36,4 +43,4 @@ Legend — Risk: 🔴 Critical · 🟠 High · 🟡 Medium · 🟢 Low.
 - PDF output frozen — layout hash + `pdf_size` + ledger CSV byte-identical (timestamps normalized, documented).
 - No API/route/schema/DB/output change. Every step gated by the committed pytest suite + golden + twin + perf + security battery.
 
-_Last updated: Phase 3, after service 4 (`telemetry_service`)._
+_Last updated: Phase 3, service 5 part 1 (`ingestion` package) — `main.py` at 2,999 L._

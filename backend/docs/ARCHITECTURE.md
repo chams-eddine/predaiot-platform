@@ -19,7 +19,7 @@ graph TD
 | Layer | Files | LOC | Largest module |
 |---|--:|--:|---|
 | __init__ | 1 | 6 | __init__ (6 L) |
-| services | 5 | 1018 | services.report_service (354 L) |
+| services | 12 | 2215 | services.report_service (354 L) |
 | core | 7 | 360 | core.dependencies (153 L) |
 | utils | 2 | 27 | utils.formatting (27 L) |
 | models | 2 | 411 | models.tables (402 L) |
@@ -30,5 +30,5 @@ graph TD
 - Hard violations (upward/circular): **0**
 - Peer edges (same-layer, tracked as debt D1/D11): **0**
 
-- Modules scanned: 18
+- Modules scanned: 25
 
