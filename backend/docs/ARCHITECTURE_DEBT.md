@@ -30,6 +30,7 @@ Legend — Risk: 🔴 Critical · 🟠 High · 🟡 Medium · 🟢 Low.
 | D12 | **`_LETTERHEAD_PATH` `__file__` resolution adjusted** (only non-verbatim line in Phase 3) | 🟢 | Module moved; path re-resolved to the same asset (output proven byte-identical) | **P9** — asset path via config/infrastructure | Reporting |
 | D13 | **No structured logging / metrics / tracing / correlation IDs** (print-based) | 🟠 | Not introduced during behaviour-preserving extraction | **P8 Observability** — OpenTelemetry-ready structured logging | DevEx |
 | D14 | **Ingestion submodules carry the full shared import header** (some imports unused-but-`# noqa: F401`) | 🟢 | Structural split kept a uniform header to avoid a missing-import regression; the battery is the safety net, not per-file import surgery | **Production Safety Phase** — ruff auto-removes unused imports | DevEx |
+| D15 | **`domain/economics.py` is 451 L** (51 over the ADR-0004 budget) | 🟢 | Cohesive economic-findings set moved VERBATIM (incl. the ~110-line narrative builder `_build_ai_commentary` and rich No-Fabrication derivation comments); splitting mid-Phase-3 would be redesign, not extraction | **P6 DDD** — split findings (`root_cause`/`opportunity`/`heat_map`/`eda_metrics`) from narrative (`ai_commentary`) as value objects emerge | Economics |
 
 ## Resolved debt (kept for DD traceability)
 - **Ingestion 1,015-line budget breach** (service 5 part 1) — RESOLVED by splitting
