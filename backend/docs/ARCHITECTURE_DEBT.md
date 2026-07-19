@@ -25,7 +25,7 @@ Legend — Risk: 🔴 Critical · 🟠 High · 🟡 Medium · 🟢 Low.
 | D7 | **In-process state / singletons in `main.py`** (`_latest_by_token`, `_BOOT_ID`, `limiter`, live WS state) | 🔴 | Existing runtime behaviour; not touched during structural extraction | **P4/P9** — externalize to Redis; **blocks horizontal scaling today** | Infrastructure |
 | D8 | **`main.py` ~3.0k lines** (55 routes still inline; static mount must stay last) | 🟠 | Routers phase not started; extraction order was core→models→schemas→services first | **P5 Routers** → `api/` `APIRouter`s; `main.py` → ~200-line bootstrap | Architecture |
 | D9 | **`core/versions.py` imports `pulp`** (for `SOLVER_VERSION`) | 🟢 | `SOLVER_VERSION = pulp.__version__` needs the lib | **P9** — inject via config/build metadata | Infrastructure |
-| D10 | **No CI-enforced SAST/DAST/coverage gate / IaC** (functional CI only) | 🟠 | Test gate exists; static-analysis + Docker gates are the next phase | **Production Safety Phase** — ruff/black/mypy/bandit/pip-audit/coverage/Docker | DevEx |
+| ~~D10~~ | ~~**No CI-enforced SAST/DAST/coverage gate / IaC**~~ | ✅ | RESOLVED (Production Safety phase): CI now gates ruff + bandit + pip-audit + coverage-floor + arch_graph --check + docker-build; render.yaml IaC + Dockerfile added | done | DevEx |
 | D11 | **No repository/domain/infrastructure layers yet**; services still mix orchestration + persistence + rules | 🟠 | Current phase is service extraction, not layering | **P6** | Architecture |
 | D12 | **`_LETTERHEAD_PATH` `__file__` resolution adjusted** (only non-verbatim line in Phase 3) | 🟢 | Module moved; path re-resolved to the same asset (output proven byte-identical) | **P9** — asset path via config/infrastructure | Reporting |
 | D13 | **No structured logging / metrics / tracing / correlation IDs** (print-based) | 🟠 | Not introduced during behaviour-preserving extraction | **P8 Observability** — OpenTelemetry-ready structured logging | DevEx |
@@ -37,6 +37,13 @@ Legend — Risk: 🔴 Critical · 🟠 High · 🟡 Medium · 🟢 Low.
   `services/ingestion.py` into the cohesive package `services/ingestion/` (6 submodules
   ≤ 265 L), see [ADR 0005](adr/0005-ingestion-package-split.md). Public surface and
   output byte-identical.
+- **D10 — no SAST/DAST/coverage/IaC** — RESOLVED (Production Safety phase): CI gates
+  ruff + bandit + pip-audit + coverage(≥64%) + `arch_graph --check` + docker-build;
+  `render.yaml` + `Dockerfile` added; deps fully pinned + lockfile.
+- **Unpinned dependencies / non-reproducible builds** — RESOLVED: `requirements.txt`
+  fully pinned + `requirements.lock` (52-pkg closure), CI installs the lock.
+- **Real dependency CVEs** — RESOLVED: pip-audit found + we fixed cryptography 46→48.0.1
+  and PyJWT 2.10.1→2.13.0 (Ed25519 + auth byte-identical). pip-audit now clean.
 
 ## Invariants held throughout (NOT debt — guardrails)
 - Economic engine **byte-for-byte frozen** — golden Ibri2 fingerprint identical at every commit.
@@ -44,4 +51,4 @@ Legend — Risk: 🔴 Critical · 🟠 High · 🟡 Medium · 🟢 Low.
 - PDF output frozen — layout hash + `pdf_size` + ledger CSV byte-identical (timestamps normalized, documented).
 - No API/route/schema/DB/output change. Every step gated by the committed pytest suite + golden + twin + perf + security battery.
 
-_Last updated: Phase 3 COMPLETE — service 5 part 3 (`audit_service.py` orchestrator). All 5 services extracted; `main.py` at 2,385 L (from 6,157)._
+_Last updated: Production Safety phase complete (CI gates, deps pinned+CVE-fixed, /version, IaC, Docker). Next: Router Extraction (D8). `main.py` ~2,410 L._
