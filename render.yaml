@@ -1,0 +1,38 @@
+# PREDAIOT — Render Blueprint (Infrastructure-as-Code).
+#
+# WHY: the deploy config previously lived ONLY in the Render dashboard — invisible,
+# unreviewable, and the root cause of the unverifiable 2026-07-19 deploy. This file
+# version-controls it. `autoDeploy: true` is the setting that makes `git push` to
+# `main` actually deploy.
+#
+# BEFORE ADOPTING as a Blueprint, reconcile with the EXISTING service:
+#   * `name` must match the current Render service (else Render creates a 2nd one).
+#   * `plan` must match the current plan (else it up/downgrades).
+#   * DATABASE_URL must point at the EXISTING managed Postgres — do NOT declare a
+#     new `databases:` block here or Render will provision a second, empty DB.
+# Secrets stay `sync: false` (set in the dashboard, never committed).
+
+services:
+  - type: web
+    name: predaiot-backend          # <-- confirm against the live service name
+    runtime: python
+    plan: starter                   # <-- confirm against the live plan
+    branch: main
+    autoDeploy: true
+    healthCheckPath: /health
+    buildCommand: >-
+      cd frontend && npm ci && npm run build &&
+      cd ../backend && pip install -r requirements.lock
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      - key: PREDAIOT_AUTH_SECRET     # secret — dashboard only
+        sync: false
+      - key: DATABASE_URL             # point at the EXISTING managed Postgres
+        sync: false
+      - key: PREDAIOT_CERT_SIGNING_KEY
+        sync: false
+      - key: CONSULTATION_BOOKING_URL
+        sync: false
+    # RENDER_GIT_COMMIT is injected automatically by Render → GET /version reads it.

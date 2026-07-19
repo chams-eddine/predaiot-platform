@@ -1,0 +1,16 @@
+# Keep the Docker build context small & reproducible.
+**/node_modules
+**/.venv
+.venv-twin
+.venv-pin
+backend/venv
+**/__pycache__
+**/*.pyc
+**/*.db
+frontend/dist
+landing/.next
+.git
+.github
+**/smoke_*.py
+**/_*.py
+docs
