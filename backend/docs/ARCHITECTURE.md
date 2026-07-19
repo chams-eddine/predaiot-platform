@@ -8,6 +8,7 @@
 graph TD
     core --> models
     domain --> schemas
+    domain --> utils
     services --> core
     services --> domain
     services --> models
@@ -20,6 +21,7 @@ graph TD
 |---|--:|--:|---|
 | __init__ | 1 | 6 | __init__ (6 L) |
 | services | 12 | 2215 | services.report_service (354 L) |
+| domain | 2 | 462 | domain.economics (451 L) |
 | core | 7 | 360 | core.dependencies (153 L) |
 | utils | 2 | 27 | utils.formatting (27 L) |
 | models | 2 | 411 | models.tables (402 L) |
@@ -30,5 +32,5 @@ graph TD
 - Hard violations (upward/circular): **0**
 - Peer edges (same-layer, tracked as debt D1/D11): **0**
 
-- Modules scanned: 25
+- Modules scanned: 27
 

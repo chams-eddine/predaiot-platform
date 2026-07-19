@@ -16,7 +16,7 @@ Legend — Risk: 🔴 Critical · 🟠 High · 🟡 Medium · 🟢 Low.
 | # | Debt | Risk | Reason (why now) | Removal phase | Owner |
 |---|------|:---:|------|------|------|
 | D1 | **Flat `app/services/*.py`** instead of domain packages | 🟢 | Incremental behaviour-preserving refactor; big-bang re-layout is riskier on a live system | **P6 DDD** — promote to `domain/`, `optimization/`, `reporting/`, `certificates/`, `telemetry/` | Architecture |
-| D2 | **`_classify_decision` (decision taxonomy) lives in `optimization_service`** | 🟢 | It's shared domain logic; placed on the economic leaf so audit+telemetry depend downward without a peer edge | **P6** → `domain/economics/` | Economics |
+| D2 | **`_classify_decision` + `_dispatch_mode` (economic taxonomies) live in `optimization_service`** | 🟢 | Shared domain logic on the economic leaf (domain-by-intent in `arch_graph`) so audit+telemetry+`domain/economics` depend downward without a peer edge; `domain/economics` imports `_dispatch_mode` from here | **P6** → move both into `domain/` alongside `economics.py`; the physical `domain→services` edge then disappears | Economics |
 | D3 | **`_MILP_LAST` mutable module-global** (last-solve status) | 🟡 | Verbatim extraction preserved existing behaviour; read by ingestion to disclose time-limited solves | **P4/P9** — make request-scoped (blocks clean multi-instance disclosure) | Economics |
 | D4 | **Economic rules split across `services` + `eda_metrics`** (DQ, leakage, root-cause, opportunity, optimization) — not a single Domain layer | 🟠 | Rules are currently where they were written; moving them is the DDD step, not an extraction step | **P6** — consolidate into `domain/` (business rules must not live in api/routers/pdf/telemetry) | Economics |
 | D5 | **DB access inside services** (`certificate_service`/`audit_service` call `SessionLocal`, `_register_certificate` writes rows) | 🟠 | Verbatim extraction kept the existing persistence pattern | **P?/repositories** — persistence moves to a `repositories/` layer; services orchestrate, domain computes, infra stores | Backend |
@@ -43,4 +43,4 @@ Legend — Risk: 🔴 Critical · 🟠 High · 🟡 Medium · 🟢 Low.
 - PDF output frozen — layout hash + `pdf_size` + ledger CSV byte-identical (timestamps normalized, documented).
 - No API/route/schema/DB/output change. Every step gated by the committed pytest suite + golden + twin + perf + security battery.
 
-_Last updated: Phase 3, service 5 part 1 (`ingestion` package) — `main.py` at 2,999 L._
+_Last updated: Phase 3, service 5 part 2 (`domain/economics.py` — first domain module) — `main.py` at 2,612 L._
