@@ -1,22 +1,28 @@
-fastapi
-uvicorn[standard]
-pulp
-sqlalchemy
-pg8000
-python-multipart
-pandas
-openpyxl
-pypdf
-reportlab
-rapidfuzz
+# PREDAIOT backend runtime dependencies — PINNED for reproducible builds.
+# Versions are the exact set validated by the characterization battery (golden
+# Ibri2 188.62, PDF pdf_size 562731, Ed25519 certs, twin 160/160) on Python 3.12/3.13.
+# Full transitive closure is locked in requirements.lock — install that in CI/prod
+# for byte-reproducible environments. Bump deliberately: change here, regenerate the
+# lock, and re-run the battery (golden fingerprint is the gate).
+fastapi==0.139.0
+uvicorn[standard]==0.51.0
+pulp==3.3.2
+sqlalchemy==2.0.51
+pg8000==1.31.5
+python-multipart==0.0.32
+pandas==3.0.3
+openpyxl==3.1.5
+pypdf==6.14.2
+reportlab==5.0.0
+rapidfuzz==3.14.5
 # Rate limiting — small, essential for the safety pass. Falls back to a
 # null-object shim if not installed, so removing this line makes the
 # rate-limit decorators no-ops without breaking the app.
-slowapi
+slowapi==0.1.10
 # Optional integration deps — all lazy-imported. Uncomment to enable
 # the corresponding endpoints; without them the endpoints return 503
 # with a clear "pip install X" message. Kept commented to preserve the
-# lean Render deploy footprint (pyarrow alone is ~50MB).
+# lean Render deploy footprint (pyarrow alone is ~50MB). Pin when enabling.
 # lxml           # XML upload parser
 # pyarrow        # Parquet upload parser
 # paho-mqtt      # MQTT bridge (Coverage Tasks 3.3)
