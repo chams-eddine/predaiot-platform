@@ -1450,30 +1450,20 @@ export default function App() {
   }, []);
 
   // ── Demo audit ─────────────────────────────────────────────────────
+  // Instant + UNGATED: opens the pre-computed certified reference audit
+  // (deterministic synthetic 500 MW BESS day, seed-fixed digital twin, run
+  // through the real certified engine — see backend/tools/gen_demo_fixture.py).
+  // Replaces the old flow which generated Math.random() data per click, labelled
+  // it "Ibri 2", and bounced anonymous visitors into the email gate. The gate
+  // now appears at the honest moment: "run it on YOUR data".
   const runDemo = async () => {
-    if (!requireTrial()) return;
     setLoading(true);
     setShowUpload(false);
     try {
-      const ts = [];
-      let soc = 0.2;
-      for (let i = 0; i < 288; i++) {
-        const base = 30 + 70 * Math.sin((i - 72) * (Math.PI / 144));
-        const price = Math.max(5, parseFloat((base + (Math.random() - 0.5) * 10).toFixed(2)));
-        let dis = 0;
-        if (price < 20 && soc < 0.9) soc += 40 * 0.95 / 100;
-        if (price > 40 && soc > 0.2) {
-          dis = Math.min(40, (soc - 0.2) * 100);
-          soc -= dis / 0.95 / 100;
-        }
-        ts.push({ hour: i, price, actual_discharge: dis, forecast_price: parseFloat((price * (0.9 + Math.random() * 0.2)).toFixed(2)) });
-      }
-      const r = await axios.post('/api/v1/audit', {
-        asset: { asset_type: 'BESS', asset_name: 'Ibri 2 — 500 MW BESS', asset_id: 'IBRI2_BESS', p_max: 50, e_max: 100, soc_init: 0.5, eta_ch: 0.95, eta_dis: 0.95, deg_cost: 5.0 },
-        time_series: ts,
-        dt_hours: 1 / 12,  // 288 five-minute steps = a 24h demo day
-      });
-      setData(r.data);
+      const r = await fetch('/demo_report.json');
+      if (!r.ok) throw new Error(`fixture ${r.status}`);
+      const demo = await r.json();
+      setData(demo);
       setDataSource('demo');
       setAiText('');
       setIngestionNotes(null);  // demo data is synthetic; no ingestion notes
@@ -1482,7 +1472,7 @@ export default function App() {
     } catch (e) {
       console.error(e);
       // SPEC-IX rule 4: errors state impact + recovery path, in place.
-      setActionError('The demo audit could not be completed — the audit engine did not respond. Check your connection and run the demo again.');
+      setActionError('The reference report could not be loaded. Refresh the page and try again.');
     }
     setLoading(false);
   };
@@ -2065,7 +2055,8 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                 </BtnOutline>
               </div>
               <div style={{ color: DS.dim, fontSize: 10, marginTop: 24 }}>
-                Don&rsquo;t have data handy? RUN DEMO replays the reference 500 MW BESS audit (~7s on CBC).
+                Don&rsquo;t have data handy? RUN DEMO opens the certified reference audit &mdash; a synthetic
+                500&nbsp;MW BESS day computed by the live engine. Instant, no sign-up.
               </div>
             </div>
           )}
