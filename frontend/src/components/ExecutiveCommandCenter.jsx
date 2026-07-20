@@ -12,6 +12,7 @@ import { PDS, gradeColor, riskColor, opportunityColor, fmtMoney, fmtPct } from '
 import { Panel, EvidenceBadge, StatusDot } from '../design/components';
 import { Zone } from '../workspace/Workspace';
 import { ChartSkeleton } from '../instruments/theme';
+import PrimeCounter from '../motion/PrimeCounter';
 
 const FinancialTimeline = lazy(() =>
   import('../instruments/charts').then((m) => ({ default: m.FinancialTimeline })));
@@ -161,16 +162,17 @@ export default function ExecutiveCommandCenter({ data, log, live, onOpenLive }) 
       <Act n="II" title="Financial Impact" question="How much value are we losing or protecting?">
         <Panel pad="clamp(28px, 3vw, 44px)" style={{ boxShadow: 'var(--pds-glow-loss), var(--pds-shadow-1)' }}>
           <div className="pds-kicker" style={{ marginBottom: 14 }}>Value left unrealized · {period}</div>
-          <div className="pds-num" style={{
-            fontSize: 'clamp(48px, 5vw, 80px)', fontWeight: 800, lineHeight: 1.02,
-            color: PDS.loss, letterSpacing: '-0.025em',
-            textShadow: '0 0 44px rgba(255,92,122,0.16)',
-          }}>
-            {leakage != null
-              ? Math.abs(leakage).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-              : '—'}
-            <span style={{ fontSize: '0.3em', color: PDS.text2, fontWeight: 600, marginLeft: 12 }}>{currency}</span>
-          </div>
+          {/* SPEC-MI · PrimeCounter — the audited figure MOUNTS with spring
+              physics (stiffness 45 / damping 18) instead of jumping. MI-0:
+              target is the real total_gap_usd, nothing invented. */}
+          {leakage != null ? (
+            <PrimeCounter
+              value={Math.abs(leakage)} mode="currency" intent="leak" currency={currency}
+              numStyle={{ fontSize: 'clamp(48px, 5vw, 80px)', letterSpacing: '-0.025em', lineHeight: 1.02 }}
+            />
+          ) : (
+            <div className="pds-num" style={{ fontSize: 'clamp(48px, 5vw, 80px)', fontWeight: 800, color: PDS.loss }}>—</div>
+          )}
           <div style={{ fontSize: 15, color: PDS.text2, lineHeight: 1.75, marginTop: 16, maxWidth: 'var(--pds-prose-max)' }}>
             Of this,{' '}
             <span className="pds-num" style={{ color: PDS.recover, fontWeight: 800 }}>

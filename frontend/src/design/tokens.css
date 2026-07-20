@@ -182,7 +182,44 @@
   opacity: 0.5;
 }
 
+/* ============================================================================
+   SPEC-MI — Motion Identity tokens ("the math itself moves", Mission Control)
+   Closed vocabulary, same law as SPEC-MO: every pattern has a bound meaning and
+   binds ONLY to real audit data (MI-0 No-Fabrication Motion).
+     pdm-flow-*  = energy genuinely moving between nodes (ledger/live-bound);
+                   fast+optimal green = value captured, slow+leak red = value lost.
+     pdm-etch    = a real cryptographic artifact materializing (Ed25519 present).
+     pdm-leak-pulse = a live loss indicator on the affected edge.
+   ============================================================================ */
+:root {
+  /* Mission-Control surfaces (motion-layer panels sit on the deepest ink) */
+  --pdm-void: #0B0F19;
+  --pdm-panel: #111520;
+  /* Motion semantics */
+  --pdm-optimal: #00FA9A;   /* optimal flow / captured value / verified */
+  --pdm-leak: #FF3366;      /* execution gap / missed arbitrage / leak */
+  --pdm-optimal-glow: rgba(0, 250, 154, 0.45);
+  --pdm-leak-glow: rgba(255, 51, 102, 0.45);
+}
+
+@keyframes pdm-flow { to { stroke-dashoffset: -48; } }
+@keyframes pdm-leak-pulse {
+  0%, 100% { opacity: 0.9; r: 4; }
+  50%      { opacity: 0.3; r: 6.5; }
+}
+@keyframes pdm-etch { from { stroke-dashoffset: var(--pdm-etch-len, 320); opacity: 0.4; }
+                      to   { stroke-dashoffset: 0; opacity: 1; } }
+
+.pdm-flow-fast { stroke-dasharray: 10 14; animation: pdm-flow 0.9s linear infinite; }
+.pdm-flow-slow { stroke-dasharray: 6 18;  animation: pdm-flow 2.6s linear infinite; }
+.pdm-leak-dot  { animation: pdm-leak-pulse 1.6s ease-in-out infinite; }
+.pdm-etch      { animation: pdm-etch 1.4s ease-out both; }
+.pdm-mono      { font-family: var(--pds-font-mono, ui-monospace, monospace);
+                 font-variant-numeric: tabular-nums; }
+
 @media (prefers-reduced-motion: reduce) {
   .pds-rise, .pds-live-dot { animation: none !important; }
+  .pdm-flow-fast, .pdm-flow-slow, .pdm-leak-dot { animation: none !important; }
+  .pdm-etch { animation: none !important; stroke-dashoffset: 0 !important; opacity: 1 !important; }
   * { scroll-behavior: auto !important; }
 }

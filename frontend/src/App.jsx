@@ -18,6 +18,8 @@ const LiveGapFlow       = lazy(() => chartsModule().then((m) => ({ default: m.Li
 const LiveCaptureScore  = lazy(() => chartsModule().then((m) => ({ default: m.LiveCaptureScore })));
 
 import { ChartSkeleton } from './instruments/theme';
+import EnergyFlowNetwork from './motion/EnergyFlowNetwork';
+import DigitalFingerprint from './motion/DigitalFingerprint';
 
 // ══════════════════════════════════════════════════════════════════════
 // TRIAL GATE — 7-day free diagnostic token (lead capture)
@@ -2161,6 +2163,18 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
             return (
               <SectionShell kicker="Economic Value Flow" title="Where the Value Went"
                 question="Where did the value go?" lead={lead}>
+                {/* SPEC-MI · Digital Twin Pulse — energy flow renders the audit's
+                    REAL verdict (MI-0): a leak edge appears iff the audited gap
+                    is material (risk_level from the engine, never invented). */}
+                <div style={{ maxWidth: 640, marginBottom: 18 }}>
+                  <EnergyFlowNetwork
+                    hasLeak={data.risk_level !== 'Low'}
+                    leakEdge="bess-load"
+                    caption={data.risk_level !== 'Low'
+                      ? `ECONOMIC LEAK DETECTED — ${fmtMoney(data.total_gap_usd, data.currency)} UNREALIZED`
+                      : 'FLOW AT ECONOMIC OPTIMUM'}
+                  />
+                </div>
                 {/* Every stage is a computed quantity from the audit engine;
                     fabricated intermediate multipliers were removed long ago
                     (docs/REMOVED_HEURISTICS.md). */}
@@ -3128,6 +3142,20 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                         <div style={{ color: DS.cyan, fontFamily: DS.mono, fontSize: 10 }}>{certificate.certificate_id}</div>
                         <div style={{ color: DS.dim, fontSize: 9, marginTop: 2 }}>{new Date(certificate.issued_at).toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })}</div>
                       </div>
+                    </div>
+
+                    {/* SPEC-MI · DigitalFingerprint — the REAL Ed25519 artifact
+                        laser-etches in (MI-0: renders only backend-issued
+                        signature/hash; never generated client-side). */}
+                    <div style={{ marginTop: 18 }}>
+                      <DigitalFingerprint
+                        hash={certificate.signature_ed25519 || certificate.payload_sha256}
+                        certId={certificate.certificate_id}
+                        verified={certificate.signature_status === 'SIGNED'}
+                        statusText={certificate.signature_status === 'SIGNED'
+                          ? 'VERIFIED · TAMPER-PROOF'
+                          : (certificate.signature_status || 'UNSIGNED')}
+                      />
                     </div>
                   </div>
                 </div>
