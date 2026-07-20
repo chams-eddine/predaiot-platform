@@ -9,15 +9,19 @@ graph TD
     api --> core
     api --> domain
     api --> models
+    api --> repositories
     api --> schemas
     api --> services
     api --> utils
     core --> models
     domain --> schemas
     domain --> utils
+    repositories --> core
+    repositories --> models
     services --> core
     services --> domain
     services --> models
+    services --> repositories
     services --> schemas
     services --> utils
 ```
@@ -30,7 +34,8 @@ graph TD
 | api | 11 | 2286 | api.audit (733 L) |
 | services | 14 | 2612 | services.report_service (354 L) |
 | domain | 2 | 462 | domain.economics (451 L) |
-| core | 9 | 456 | core.dependencies (153 L) |
+| repositories | 2 | 75 | repositories.security_log (59 L) |
+| core | 9 | 436 | core.dependencies (153 L) |
 | utils | 2 | 27 | utils.formatting (27 L) |
 | models | 2 | 411 | models.tables (402 L) |
 | schemas | 1 | 266 | schemas (266 L) |
@@ -40,5 +45,5 @@ graph TD
 - Hard violations (upward/circular): **0**
 - Peer edges (same-layer, tracked as debt D1/D11): **0**
 
-- Modules scanned: 42
+- Modules scanned: 44
 

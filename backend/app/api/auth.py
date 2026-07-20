@@ -14,7 +14,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from app.core.config import CONSULTATION_BOOKING_URL, SessionLocal
 from app.core.dependencies import require_role, require_trial_token, require_user  # noqa: F401
-from app.core.logging import _security_log
+from app.repositories.security_log import _security_log
 from app.core.ratelimit import limiter
 from app.core.security import _hash_password, _issue_jwt, _verify_password
 from app.models import Asset, Organization, TrialLead, User

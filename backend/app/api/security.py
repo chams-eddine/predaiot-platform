@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """Security-log API router — public tamper-evidence verification + org-scoped
-viewing of the SecurityAuditLog hash chain. Extracted VERBATIM from main.py
-(Router Extraction, step 6).
+viewing of the SecurityAuditLog hash chain. Extracted from main.py (Router
+Extraction, step 6); data access moved behind SecurityLogRepository (step 7).
 
-Dependency direction: api -> core (config.SessionLocal, dependencies.require_role)
-+ models (SecurityAuditLog, User) + stdlib. No business/economic logic.
+Dependency direction: api -> repositories (data access) + core (config,
+dependencies) + models + stdlib. The chain-verification loop stays here (it is
+integrity presentation over rows, not data access). No business/economic logic.
 """
 import hashlib as _hashlib
 
@@ -12,7 +13,8 @@ from fastapi import APIRouter, Depends
 
 from app.core.config import SessionLocal
 from app.core.dependencies import require_role
-from app.models import SecurityAuditLog, User
+from app.models import User
+from app.repositories.security_log import SecurityLogRepository
 
 router = APIRouter()
 
@@ -23,7 +25,7 @@ async def security_log_verify():
     Returns validity + counts only — no event content."""
     db = SessionLocal()
     try:
-        rows = db.query(SecurityAuditLog).order_by(SecurityAuditLog.id.asc()).all()
+        rows = SecurityLogRepository(db).all_asc()
         prev = "GENESIS"
         broken_at = None
         for r in rows:
@@ -44,9 +46,7 @@ async def security_log_view(user: User = Depends(require_role("admin"))):
     """Org-scoped security events (owner/admin only), newest first."""
     db = SessionLocal()
     try:
-        rows = (db.query(SecurityAuditLog)
-                .filter(SecurityAuditLog.org_id == user.org_id)
-                .order_by(SecurityAuditLog.id.desc()).limit(200).all())
+        rows = SecurityLogRepository(db).for_org_desc(user.org_id, limit=200)
         return {"events": [{
             "id": r.id, "at": r.at.isoformat() + "Z", "actor": r.actor,
             "action": r.action, "object": r.object_ref, "row_hash": r.row_hash[:16],

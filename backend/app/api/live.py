@@ -21,7 +21,7 @@ from app.core.config import SessionLocal  # noqa: F401
 from app.core.dependencies import (  # noqa: F401
     require_audit_runner, require_role, require_trial_or_user, require_user,
 )
-from app.core.logging import _security_log  # noqa: F401
+from app.repositories.security_log import _security_log  # noqa: F401
 from app.core.ratelimit import limiter  # noqa: F401
 from app.models import (  # noqa: F401
     AuditRecord, LiveEvent, LiveState, Reconciliation, TrialLead, User,

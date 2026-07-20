@@ -4,33 +4,13 @@ middleware. Extracted VERBATIM from main.py (refactor step 2B). Imports only
 core + models (downward); registered onto the app by main.py to preserve
 middleware order. _client_ip is also reused by the rate-limit key function.
 """
-import hashlib as _hashlib
 from datetime import datetime
-from typing import Optional
 
 from app.core.config import SessionLocal
-from app.models import APIAccessLog, SecurityAuditLog
+from app.models import APIAccessLog
 
-
-def _security_log(action: str, actor: Optional[str] = None,
-                  object_ref: Optional[str] = None, org_id: Optional[int] = None) -> None:
-    """Append one hash-chained security event. Never fatal to the caller."""
-    try:
-        db = SessionLocal()
-        try:
-            last = db.query(SecurityAuditLog).order_by(SecurityAuditLog.id.desc()).first()
-            prev = last.row_hash if last else "GENESIS"
-            at = datetime.utcnow()
-            body = f"{prev}|{org_id}|{actor}|{action}|{object_ref}|{at.isoformat()}"
-            row = SecurityAuditLog(org_id=org_id, actor=actor, action=action,
-                                   object_ref=object_ref, at=at, prev_hash=prev,
-                                   row_hash=_hashlib.sha256(body.encode()).hexdigest())
-            db.add(row)
-            db.commit()
-        finally:
-            db.close()
-    except Exception as e:
-        print(f"[seclog] WARNING: could not append security event ({action}): {e}")
+# _security_log → app/repositories/security_log.py (step 7; D5b resolved — core no
+# longer writes SecurityAuditLog; the chained-append helper lives with its repo).
 
 
 def _client_ip(request) -> str:

@@ -113,7 +113,8 @@ from app.core.dependencies import (  # noqa: E402
 # the endpoints just aren't rate-limited (fail-open, not fail-closed —
 # availability > perfect throttling on a pre-seed platform).
 # Access-log middleware + _client_ip helper now live in app/core/logging.py (2B).
-from app.core.logging import _client_ip, _api_access_log, _security_log  # noqa: E402,F401
+from app.core.logging import _client_ip, _api_access_log  # noqa: E402,F401
+from app.repositories.security_log import _security_log  # noqa: E402,F401
 # Rate limiter + in-process runtime state now live in app/core (refactor step 6
 # prep) so routers share them without importing main (no import cycle).
 from app.core.ratelimit import register_rate_limiter  # noqa: E402

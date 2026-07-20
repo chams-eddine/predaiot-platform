@@ -25,7 +25,7 @@ import canonical_event  # noqa: F401
 from app.core.config import SessionLocal  # noqa: F401
 from app.core.constants import _MAX_UPLOAD_BYTES, _RATING_WITHDRAWN_LABEL  # noqa: F401
 from app.core.dependencies import require_audit_runner, require_trial_or_user  # noqa: F401
-from app.core.logging import _security_log  # noqa: F401
+from app.repositories.security_log import _security_log  # noqa: F401
 from app.core.ratelimit import limiter  # noqa: F401
 from app.core.state import _latest_by_token  # noqa: F401
 from app.core.versions import (  # noqa: F401

@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.config import SessionLocal
 from app.core.dependencies import require_role, require_user
-from app.core.logging import _security_log
+from app.repositories.security_log import _security_log
 from app.core.security import _ROLES, _hash_password
 from app.models import Asset, User
 from app.schemas import AssetCreateRequest, MemberCreateRequest, MemberRoleRequest

@@ -15,7 +15,7 @@ from typing import Optional, Dict, Any  # noqa: F401
 import eda_metrics  # noqa: F401
 
 from app.core.config import SessionLocal  # noqa: F401
-from app.core.logging import _security_log  # noqa: F401
+from app.repositories.security_log import _security_log  # noqa: F401
 from app.core.constants import _RATING_WITHDRAWN_LABEL  # noqa: F401
 from app.core.versions import (  # noqa: F401
     ENGINE_VERSION, METHODOLOGY_VERSION, PARSER_VERSION, SOLVER_NAME, SOLVER_VERSION,

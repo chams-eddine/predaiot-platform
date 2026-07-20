@@ -18,7 +18,7 @@ import eda_metrics  # noqa: F401
 import canonical_event  # noqa: F401
 from app.core.config import SessionLocal  # noqa: F401
 from app.core.dependencies import require_user, require_role  # noqa: F401
-from app.core.logging import _security_log  # noqa: F401
+from app.repositories.security_log import _security_log  # noqa: F401
 from app.models import (  # noqa: F401
     AuditRecord, Decision, DecisionEvent, Outcome, GovernanceRecord, LiveEvent, User,
 )
