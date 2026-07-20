@@ -25,6 +25,8 @@ import MissionStatusBanner from './motion/MissionStatusBanner';
 import LeakageRadar from './motion/LeakageRadar';
 import EconomicHealthOrb from './motion/EconomicHealthOrb';
 import PredictiveTimeline from './motion/PredictiveTimeline';
+// Mission API facade (single import for the Mission-Control composition layer).
+import { MissionMeter } from './design/mission';
 
 // ══════════════════════════════════════════════════════════════════════
 // TRIAL GATE — 7-day free diagnostic token (lead capture)
@@ -2506,6 +2508,19 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
             return (
               <SectionShell kicker="Financial Leakage" title="Value Leakage"
                 question="How much are we losing — and where?" lead={lead}>
+                {/* SPEC-MI · MissionMeter — the section's headline ratio as the
+                    "value grows like ████" bar language. Fill = REAL
+                    economic_leakage_ratio; leak tone. No meter if the engine
+                    didn't compute it (MI-0). */}
+                {data.eda_metrics?.economic_leakage_ratio != null && (
+                  <div style={{ maxWidth: 560, marginBottom: 'var(--ws-zone-gap)' }}>
+                    <MissionMeter
+                      label="Economic Leakage Ratio"
+                      value={data.eda_metrics.economic_leakage_ratio} max={100}
+                      tone="leak" decimals={1}
+                      sublabel="share of achievable value leaked (100 − EDE)" />
+                  </div>
+                )}
                 {/* Recorded-period money only. The 7/30/365-day linear
                     extrapolations were removed (PL-1.0 LR §5 / SPEC-QA Q9). */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 420px))', justifyContent: 'start', gap: 'var(--ws-card-gap)' }}>

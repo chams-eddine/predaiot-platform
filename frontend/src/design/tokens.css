@@ -191,15 +191,28 @@
      pdm-etch    = a real cryptographic artifact materializing (Ed25519 present).
      pdm-leak-pulse = a live loss indicator on the affected edge.
    ============================================================================ */
+/* — Two-layer color law (ratified Phase 3) —
+   --pds-*  = the ANALYSIS layer: calmer chroma tuned for long reading of dense
+              numeric tables (recover #2FD69B, loss #FF5C7A, warn #F3B24C).
+   --pdm-*  = the MISSION-CONTROL / LIVE-MOTION layer: higher chroma that reads
+              against the deepest ink at a glance and survives motion blur
+              (optimal #00FA9A, leak #FF3366). Use --pdm-* ONLY on moving /
+              live-bound elements (flows, meters, the mission banner, the canvas);
+              use --pds-* for static analysis surfaces. The two are deliberately
+              distinct, not a duplication — a resting KPI and a streaming particle
+              should not be the same green. Every --pdm-* has a --pds-* sibling. */
 :root {
   /* Mission-Control surfaces (motion-layer panels sit on the deepest ink) */
   --pdm-void: #0B0F19;
   --pdm-panel: #111520;
-  /* Motion semantics */
-  --pdm-optimal: #00FA9A;   /* optimal flow / captured value / verified */
-  --pdm-leak: #FF3366;      /* execution gap / missed arbitrage / leak */
+  /* Motion semantics (MissionColors) — sibling of the --pds-* analysis token */
+  --pdm-optimal: #00FA9A;   /* optimal flow / captured value  · sib --pds-recover */
+  --pdm-leak: #FF3366;      /* execution gap / missed arbitrage · sib --pds-loss */
+  --pdm-warning: #FFC857;   /* caution in motion (brighter)     · sib --pds-warn */
+  --pdm-verified: #00E5FF;  /* cryptographic verification cyan  · Ed25519 seal-in-motion */
   --pdm-optimal-glow: rgba(0, 250, 154, 0.45);
   --pdm-leak-glow: rgba(255, 51, 102, 0.45);
+  --pdm-verified-glow: rgba(0, 229, 255, 0.40);
 }
 
 @keyframes pdm-flow { to { stroke-dashoffset: -48; } }

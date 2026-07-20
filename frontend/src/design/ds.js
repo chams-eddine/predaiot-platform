@@ -4,6 +4,8 @@
 // single source of truth stays in tokens.css (theming works automatically).
 // ============================================================================
 export const v = (name) => `var(--pds-${name})`;
+// Mission-Control / live-motion layer resolver (see tokens.css "two-layer color law").
+export const vm = (name) => `var(--pdm-${name})`;
 
 export const PDS = {
   // surfaces
@@ -32,6 +34,17 @@ export const PDS = {
   // elevation / motion
   shadow1: v('shadow-1'), shadow2: v('shadow-2'), glowAccent: v('glow-accent'), glowLoss: v('glow-loss'),
   ease: v('ease'), easeOut: v('ease-out'), dur: v('dur'), durFast: v('dur-fast'), durSlow: v('dur-slow'),
+};
+
+// — Mission-Control layer (the high-chroma "live-motion" palette) —
+// Use ONLY on moving / live-bound elements: flows, meters, the mission banner,
+// the command canvas. Static analysis surfaces stay on PDS. This is the JS
+// mirror of the --pdm-* tokens so motion components never hard-code hexes.
+export const MC = {
+  void: vm('void'), panel: vm('panel'),
+  optimal: vm('optimal'), leak: vm('leak'), warning: vm('warning'), verified: vm('verified'),
+  optimalGlow: vm('optimal-glow'), leakGlow: vm('leak-glow'), verifiedGlow: vm('verified-glow'),
+  mono: v('font-mono'),
 };
 
 // — Semantic color resolvers (economic meaning drives color) —
