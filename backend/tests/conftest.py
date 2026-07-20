@@ -16,9 +16,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import main  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from app.core.ratelimit import limiter  # noqa: E402  (shared limiter moved out of main in step 6)
 
 main.Base.metadata.create_all(bind=main.engine)
-main.limiter.enabled = False  # deterministic; we hammer endpoints on purpose
+limiter.enabled = False  # deterministic; we hammer endpoints on purpose
 
 
 @pytest.fixture(scope="session")

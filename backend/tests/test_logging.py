@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """Access-log middleware characterization: proves app/core/logging.py still
 records one APIAccessLog row per /api/v1/* request after the extraction."""
-import main
+from app.core.config import SessionLocal
 from app.models import APIAccessLog
 
 
 def _count():
-    db = main.SessionLocal()
+    db = SessionLocal()
     try:
         return db.query(APIAccessLog).count()
     finally:
