@@ -10,7 +10,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, Response
 from typing import Optional, Dict, Any
 import hashlib as _hashlib
-import base64 as _base64
 import eda_metrics  # versioned, asset-agnostic DQI / Audit Confidence (pure module)
 from datetime import datetime
 
@@ -29,7 +28,7 @@ from app.core.config import engine, SessionLocal  # noqa: E402
 # ORM models + Base now live in app/models/tables.py (refactor step 2B).
 from app.models import (  # noqa: E402
     Base, TrialLead, User, AuditRecord,
-    EconomicState, Decision, CertificateRecord,
+    EconomicState, Decision,
 )
 
 # Pure literal constants now live in app/core/constants.py (refactor step 2A).
@@ -218,6 +217,7 @@ from app.api.tenancy import router as tenancy_router  # noqa: E402
 from app.api.records import router as records_router  # noqa: E402
 from app.api.decisions import router as decisions_router  # noqa: E402
 from app.api.live import router as live_router  # noqa: E402
+from app.api.certificates import router as certificates_router  # noqa: E402
 app.include_router(security_router)
 app.include_router(health_router)
 app.include_router(legacy_router)
@@ -226,6 +226,7 @@ app.include_router(tenancy_router)
 app.include_router(records_router)
 app.include_router(decisions_router)
 app.include_router(live_router)
+app.include_router(certificates_router)
 
 
 # CORS — allow_origins is now an explicit list from ALLOWED_ORIGINS env
@@ -388,6 +389,8 @@ from app.services.telemetry_service import _live_decision_core  # noqa: E402
 # Central calculation engine now in app/services/audit_service.py (orchestrator;
 # refactor step 3, service 5 part 3).
 from app.services.audit_service import process_calculation  # noqa: E402
+# PDF renderer import-back (the certificates segment cut swept the original line).
+from app.services.report_service import _build_audit_pdf  # noqa: E402
 
 # ==========================================
 # 7. API Endpoints  (UNCHANGED CORE + universal file parser + trial gate)
@@ -934,9 +937,6 @@ async def inspect_file(file: UploadFile = File(...)):
 # the certificate is HONESTLY issued as unsigned — never a fake signature.
 # Certificate trust service now lives in app/services/certificate_service.py
 # (refactor step 3, service 2). CRYPTO FROZEN — moved byte-for-byte.
-from app.services.certificate_service import (  # noqa: E402
-    _build_certificate,
-)
 
 
 
@@ -1212,98 +1212,7 @@ async def mqtt_status(lead: TrialLead = Depends(require_trial_or_user)):
 # ==========================================
 
 
-@app.get("/api/v1/certificate")
-async def get_certificate_for_latest(lead: TrialLead = Depends(require_trial_or_user)):
-    """
-    Returns an Economic Decision Certificate for the caller's most recent
-    audit. Gated on the trial token per the tenant-isolation fix.
-    """
-    data = _latest_by_token.get(lead.token)
-    if not data or data.get("dq_score") is None:
-        return JSONResponse(status_code=404, content={"detail": "No audit has been run yet."})
-    return _build_certificate(data)
-
-
-@app.post("/api/v1/certificate")
-async def generate_certificate_for_audit(data: AuditResponse):
-    """Generate a certificate for a provided audit result."""
-    return _build_certificate(data.dict())
-
-
-@app.get("/api/v1/metrics/registry")
-async def metrics_registry():
-    """
-    Public, ungated self-description of every versioned quality metric
-    (name, version, equation, inputs, outputs, dependencies, validation
-    rules). No customer data. Enables independent reproduction of DQI /
-    Audit Confidence from the Data Quality Manifest.
-    """
-    return {
-        "registry_version": "1.0",
-        "metrics": eda_metrics.METRIC_REGISTRY,
-        "grade_scale": {lo: g for lo, g, _ in eda_metrics._GRADE_BANDS},
-        "note": "Grade cut-points are a declared normative scale, not empirical "
-                "constants; the numeric value is the primary reproducible quantity.",
-    }
-
-
-@app.get("/api/v1/certificate/verify/{cert_id}")
-async def verify_certificate(cert_id: str):
-    """
-    Public verification portal endpoint (C3) — the target of the certificate
-    QR code. Deliberately UNGATED and deliberately minimal: it confirms the
-    certificate's existence, integrity, signature and revocation state plus
-    the software versions that produced it. It never returns customer
-    identity, asset names, or economic figures.
-    """
-    db = SessionLocal()
-    try:
-        rec = db.query(CertificateRecord).filter_by(cert_id=cert_id.strip()).first()
-    finally:
-        db.close()
-    if rec is None:
-        return JSONResponse(status_code=404, content={
-            "certificate_id": cert_id, "valid": False,
-            "reason": "No certificate with this ID exists in the registry."})
-
-    signature_ok = None  # None = issued unsigned (disclosed), True/False when signed
-    if rec.signature_b64 and rec.public_key_b64:
-        try:
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-            pub = Ed25519PublicKey.from_public_bytes(_base64.b64decode(rec.public_key_b64))
-            pub.verify(_base64.b64decode(rec.signature_b64), rec.payload_sha256.encode())
-            signature_ok = True
-        except Exception:
-            signature_ok = False
-
-    return {
-        "certificate_id":      rec.cert_id,
-        "valid":               (not rec.revoked) and (signature_ok is not False),
-        "revoked":             rec.revoked,
-        "revocation_reason":   rec.revocation_reason,
-        "signature_status":    ("VERIFIED" if signature_ok else
-                                "INVALID" if signature_ok is False else
-                                "UNSIGNED — issued without a signing key"),
-        "payload_sha256":      rec.payload_sha256,
-        "dataset_sha256":      rec.input_sha256,
-        "audit_scope":         {"asset_type": rec.asset_type, "audit_period": rec.audit_period},
-        # Quality grades only — never the underlying customer economics.
-        "data_quality_grade":  rec.dqi_grade,
-        "confidence_grade":    rec.confidence_grade,
-        "methodology_version": rec.methodology_ver,
-        "engine_version":      rec.engine_ver,
-        "solver_version":      rec.solver_ver,
-        "issued_at":           rec.issued_at.isoformat() + "Z",
-        "verified_at":         datetime.utcnow().isoformat() + "Z",
-    }
-
-
-# ==========================================
-# Audit-report PDF (letterhead overlay)
-# ==========================================
-# Report rendering service now lives in app/services/report_service.py
-# (refactor step 3, service 3). OUTPUT FROZEN — moved byte-for-byte.
-from app.services.report_service import _build_audit_pdf  # noqa: E402
+# -> app/api/certificates.py (Router Extraction, step 6).
 
 
 
