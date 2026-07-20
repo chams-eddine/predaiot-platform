@@ -71,9 +71,25 @@ FROZEN = {
 _FRAMEWORK = {"/docs", "/docs/oauth2-redirect", "/openapi.json", "/redoc"}
 
 
+def _walk(routes):
+    """Yield leaf routes, resolving containers. fastapi 0.139/starlette 1.3 wraps
+    include_router() output in an _IncludedRouter (path=None) whose routes live on
+    .original_router — without this walk, extracted routers would be invisible to
+    the guard while still serving traffic."""
+    for r in routes:
+        orig = getattr(r, "original_router", None)
+        if orig is not None:
+            yield from _walk(orig.routes)
+            continue
+        if getattr(r, "path", None) is None and getattr(r, "routes", None):
+            yield from _walk(r.routes)
+            continue
+        yield r
+
+
 def _current_routes():
     out = set()
-    for r in main.app.routes:
+    for r in _walk(main.app.routes):
         path = getattr(r, "path", None)
         if not path or path in _FRAMEWORK:
             continue
