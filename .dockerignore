@@ -11,6 +11,8 @@ frontend/dist
 landing/.next
 .git
 .github
-**/smoke_*.py
-**/_*.py
+backend/smoke_*.py
+# Root-level throwaway scripts only — NOT **/_*.py, which would exclude
+# app/services/ingestion/_primitives.py from the image (runtime breakage).
+backend/_*.py
 docs
