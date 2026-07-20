@@ -307,7 +307,7 @@ from app.core.logging import _client_ip, _api_access_log, _security_log  # noqa:
 # prep) so routers share them without importing main (no import cycle).
 from app.core.ratelimit import limiter, register_rate_limiter  # noqa: E402
 from app.core.state import (  # noqa: E402
-    _BOOT_ID, _BOOT_TIME, _latest_by_token, _EMPTY_LATEST, shared_audits,
+    _latest_by_token, _EMPTY_LATEST, shared_audits,
 )
 
 
@@ -317,7 +317,9 @@ register_rate_limiter(app)
 # ── API routers (extracted from main.py; Router Extraction, step 6). Registered
 # here, BEFORE the catch-all StaticFiles mount at "/" at the end of this file. ──
 from app.api.security import router as security_router  # noqa: E402
+from app.api.health import router as health_router  # noqa: E402
 app.include_router(security_router)
+app.include_router(health_router)
 
 
 # CORS — allow_origins is now an explicit list from ALLOWED_ORIGINS env
@@ -2104,7 +2106,7 @@ async def get_latest_live_data(lead: TrialLead = Depends(require_trial_or_user))
 # Certificate trust service now lives in app/services/certificate_service.py
 # (refactor step 3, service 2). CRYPTO FROZEN — moved byte-for-byte.
 from app.services.certificate_service import (  # noqa: E402
-    _CERT_KEY_ENV, _cert_signing_key, _build_certificate,
+    _build_certificate,
 )
 
 
@@ -2602,101 +2604,7 @@ async def ai_enhance(request: Dict[str, Any] = Body(...)):
 # that intercepts anything not matched by an earlier route.)
 # ==========================================
 
-# Register /health FIRST so it isn't shadowed by the static mount below.
-def _build_version() -> str:
-    """Deployed build identity. Render injects RENDER_GIT_COMMIT at build time; a
-    baked VERSION file (Dockerfile / on-prem image) is the fallback; 'unknown' only
-    in a bare checkout. Makes deploys verifiable via GET /version instead of
-    inferring from boot time (deployment-maturity fix)."""
-    sha = (os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("GIT_COMMIT")
-           or os.environ.get("SOURCE_VERSION"))
-    if not sha:
-        try:
-            _vf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION")
-            if os.path.exists(_vf):
-                with open(_vf, encoding="utf-8") as _f:
-                    sha = _f.read().strip()
-        except Exception:
-            sha = None
-    return sha or "unknown"
-
-
-@app.get("/health")
-def health():
-    return {"ok": True}
-
-
-@app.get("/version")
-def version():
-    """Deployed build identity — deterministic deploy verification."""
-    from app.core.versions import ENGINE_VERSION
-    return {
-        "service": "predaiot-backend",
-        "engine_version": ENGINE_VERSION,
-        "git_commit": _build_version(),
-        "boot_id": _BOOT_ID,
-        "boot_time": _BOOT_TIME.isoformat() + "Z",
-    }
-
-
-@app.get("/health/db")
-def health_db():
-    """
-    Direct evidence of the storage backend — no inference, no credentials.
-    dialect 'sqlite' = ephemeral (data lost on redeploy); 'postgresql' =
-    persistent. Row counts double as a persistence signal across deploys.
-    """
-    info = {
-        "boot_id": _BOOT_ID,
-        "boot_time": _BOOT_TIME.isoformat() + "Z",
-        "dialect": engine.dialect.name,
-        "persistent": engine.dialect.name != "sqlite",
-        "database_url_configured": bool(os.environ.get("DATABASE_URL")),
-        "auth_secret_configured": bool(os.environ.get("PREDAIOT_AUTH_SECRET")),
-        "cert_signing_key_configured": bool(os.environ.get("PREDAIOT_CERT_SIGNING_KEY")),
-    }
-    _sk, _ = _cert_signing_key()
-    info["cert_signing_key_status"] = (
-        "valid" if _sk else
-        ("present_but_invalid" if os.environ.get(_CERT_KEY_ENV) else "absent"))
-    if info["cert_signing_key_status"] == "present_but_invalid":
-        try:
-            import cryptography as _cg_check  # noqa: F401
-            _lib_ok = True
-        except ImportError:
-            info["cert_signing_key_problem"] = "cryptography_library_not_installed"
-            _lib_ok = False
-        # Corruption class only — never the value. Same normalisation as the loader.
-        raw = os.environ.get(_CERT_KEY_ENV, "") if _lib_ok else ""
-        cleaned = "".join(raw.strip().strip('"').strip("'").split())
-        if _lib_ok:
-            try:
-                seed = _base64.b64decode(cleaned + "=" * (-len(cleaned) % 4))
-                info["cert_signing_key_problem"] = (
-                    f"decodes_to_{len(seed)}_bytes_need_32 (value length {len(cleaned)} chars)")
-            except Exception:
-                info["cert_signing_key_problem"] = (
-                    f"not_valid_base64 (value length {len(cleaned)} chars)")
-    try:
-        with engine.connect() as conn:
-            try:
-                info["alembic_version"] = conn.exec_driver_sql(
-                    "SELECT version_num FROM alembic_version").scalar()
-            except Exception:
-                info["alembic_version"] = None
-            for t in ("users", "organizations", "assets", "certificate_registry",
-                      "audit_records", "economic_states", "decisions", "decision_events",
-                      "outcomes", "governance_records", "live_events", "live_states",
-                      "reconciliations"):
-                try:
-                    info[f"rows_{t}"] = conn.exec_driver_sql(
-                        f"SELECT count(*) FROM {t}").scalar()
-                except Exception:
-                    info[f"rows_{t}"] = None
-        info["status"] = "connected"
-    except Exception as e:
-        info["status"] = f"error: {type(e).__name__}"
-    return info
+# /health, /version, /health/db -> app/api/health.py (Router Extraction, step 6).
 
 
 try:
