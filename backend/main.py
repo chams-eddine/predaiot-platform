@@ -17,7 +17,6 @@ import hashlib as _hashlib
 import base64 as _base64
 import eda_metrics  # versioned, asset-agnostic DQI / Audit Confidence (pure module)
 import canonical_event  # EDA-EVENT-1.0 — the single normalization contract (pure)
-from sqlalchemy import text
 from datetime import datetime, timedelta
 
 # ── Version identity (chain of custody, C2) → app/core/versions.py (refactor 3).
@@ -31,7 +30,7 @@ from app.core.versions import (  # noqa: E402
 # DB engine / session / URL now live in app/core/config.py (refactor step 2A).
 # Imported back so every `engine` / `SessionLocal` / `DATABASE_URL` call site and
 # the fault-tolerant startup handler remain unchanged.
-from app.core.config import DATABASE_URL, engine, SessionLocal, CONSULTATION_BOOKING_URL  # noqa: E402
+from app.core.config import engine, SessionLocal, CONSULTATION_BOOKING_URL  # noqa: E402
 # ORM models + Base now live in app/models/tables.py (refactor step 2B).
 from app.models import (  # noqa: E402
     Base, TrialLead, Organization, User, Asset, AuditRecord,
@@ -63,8 +62,7 @@ TRIAL_DURATION_DAYS = 7
 # ==========================================
 # Pydantic schemas now live in app/schemas/ (refactor step 3, schemas-first).
 from app.schemas import (  # noqa: E402
-    AssetSpecs, AuditRequest, DecisionRecord,
-    AuditResponse, HistoricalResponse, TrialStartRequest,
+    AssetSpecs, AuditRequest, AuditResponse, TrialStartRequest,
     TrialStartResponse, TrialStatusResponse, RegisterRequest, LoginRequest,
     AssetCreateRequest, MemberCreateRequest, MemberRoleRequest, DecisionTransitionRequest,
     OutcomeRequest, GovernanceRequest, LiveIngestRequest, ReconcileRequest,
@@ -307,7 +305,7 @@ from app.core.logging import _client_ip, _api_access_log, _security_log  # noqa:
 # prep) so routers share them without importing main (no import cycle).
 from app.core.ratelimit import limiter, register_rate_limiter  # noqa: E402
 from app.core.state import (  # noqa: E402
-    _latest_by_token, _EMPTY_LATEST, shared_audits,
+    _latest_by_token,
 )
 
 
@@ -318,8 +316,10 @@ register_rate_limiter(app)
 # here, BEFORE the catch-all StaticFiles mount at "/" at the end of this file. ──
 from app.api.security import router as security_router  # noqa: E402
 from app.api.health import router as health_router  # noqa: E402
+from app.api.legacy import router as legacy_router  # noqa: E402
 app.include_router(security_router)
 app.include_router(health_router)
+app.include_router(legacy_router)
 
 
 # CORS — allow_origins is now an explicit list from ALLOWED_ORIGINS env
@@ -2057,44 +2057,8 @@ async def inspect_file(file: UploadFile = File(...)):
     except Exception as e:
         return JSONResponse(status_code=500, content={"detail": str(e)})
 
-@app.get("/api/historical", response_model=HistoricalResponse)
-async def get_historical_data():
-    db = SessionLocal()
-    try:
-        if "sqlite" in DATABASE_URL:
-            return HistoricalResponse(history_log=[])
-        result = db.execute(text(
-            "SELECT DATE(timestamp) AS day, SUM(economic_gap) as daily_gap "
-            "FROM audit_logs WHERE timestamp > NOW() - INTERVAL '30 days' "
-            "GROUP BY DATE(timestamp) ORDER BY day DESC"
-        ))
-        return HistoricalResponse(history_log=[
-            DecisionRecord(day=row.day.strftime("%Y-%m-%d"), daily_gap=round(row.daily_gap, 2))
-            for row in result if row.daily_gap
-        ])
-    finally:
-        db.close()
-
-@app.post("/api/share")
-async def create_share_link(data: AuditResponse):
-    token = str(uuid.uuid4())
-    shared_audits[token] = data.dict()
-    return {"share_url": f"/share/{token}"}
-
-@app.get("/share/{token}")
-async def get_shared_audit(token: str):
-    if token in shared_audits:
-        return shared_audits[token]
-    return JSONResponse(status_code=404, content={"detail": "Report link expired or not found"})
-
-@app.get("/api/latest")
-async def get_latest_live_data(lead: TrialLead = Depends(require_trial_or_user)):
-    """
-    Returns the caller's most recent audit result. Gated on the trial token
-    per the tenant-isolation fix — previously this endpoint returned the
-    process-global `latest_live_result` and leaked between callers.
-    """
-    return _latest_by_token.get(lead.token, _EMPTY_LATEST)
+# /api/historical, /api/share, /share/{token}, /api/latest → app/api/legacy.py
+# (Router Extraction, step 6). mqtt/status stays with the MQTT bridge below.
 
 # ==========================================
 # NEW: EDA Credit Rating
