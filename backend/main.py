@@ -1,11 +1,8 @@
 import os
-import re
 import uuid
 import json
 import asyncio
 import secrets
-import urllib.request
-import urllib.error
 import pandas as pd
 from io import StringIO
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Body, Depends, HTTPException, Request
@@ -17,7 +14,7 @@ import hashlib as _hashlib
 import base64 as _base64
 import eda_metrics  # versioned, asset-agnostic DQI / Audit Confidence (pure module)
 import canonical_event  # EDA-EVENT-1.0 — the single normalization contract (pure)
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # ── Version identity (chain of custody, C2) → app/core/versions.py (refactor 3).
 from app.core.versions import (  # noqa: E402
@@ -30,10 +27,10 @@ from app.core.versions import (  # noqa: E402
 # DB engine / session / URL now live in app/core/config.py (refactor step 2A).
 # Imported back so every `engine` / `SessionLocal` / `DATABASE_URL` call site and
 # the fault-tolerant startup handler remain unchanged.
-from app.core.config import engine, SessionLocal, CONSULTATION_BOOKING_URL  # noqa: E402
+from app.core.config import engine, SessionLocal  # noqa: E402
 # ORM models + Base now live in app/models/tables.py (refactor step 2B).
 from app.models import (  # noqa: E402
-    Base, TrialLead, Organization, User, Asset, AuditRecord,
+    Base, TrialLead, User, Asset, AuditRecord,
     EconomicState, Decision, DecisionEvent, Outcome, GovernanceRecord,
     LiveEvent, LiveState, Reconciliation, CertificateRecord,
 )
@@ -50,7 +47,6 @@ from app.core.constants import (  # noqa: E402
 
 
 
-TRIAL_DURATION_DAYS = 7
 
 # NOTE: Base.metadata.create_all() is intentionally NOT called here at import time.
 # It is registered as a FastAPI startup event below (after `app` is created), so that
@@ -62,9 +58,7 @@ TRIAL_DURATION_DAYS = 7
 # ==========================================
 # Pydantic schemas now live in app/schemas/ (refactor step 3, schemas-first).
 from app.schemas import (  # noqa: E402
-    AssetSpecs, AuditRequest, AuditResponse, TrialStartRequest,
-    TrialStartResponse, TrialStatusResponse, RegisterRequest, LoginRequest,
-    AssetCreateRequest, MemberCreateRequest, MemberRoleRequest, DecisionTransitionRequest,
+    AssetSpecs, AuditRequest, AuditResponse, AssetCreateRequest, MemberCreateRequest, MemberRoleRequest, DecisionTransitionRequest,
     OutcomeRequest, GovernanceRequest, LiveIngestRequest, ReconcileRequest,
 )
 
@@ -98,105 +92,15 @@ from app.schemas import (  # noqa: E402
 # Set via env. mailto fallback so the CTA always resolves to *something*.
 # CONSULTATION_BOOKING_URL → app/core/config.py (refactor step 2B)
 
-_EMAIL_SHAPE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
-
-def _push_lead_to_airtable(token: str) -> bool:
-    """
-    Fire-and-forget CRM sync, designed to run inside FastAPI BackgroundTasks.
-    Re-fetches the lead by token (so we get fresh field values + can mark
-    crm_synced on success without sharing a session with the request handler).
-
-    Env: AIRTABLE_API_KEY required; AIRTABLE_BASE_ID defaults to the brief's
-    base (appeUbnHpGamghy8q); AIRTABLE_LEADS_TABLE defaults to "Leads".
-    Expected table fields: Email, Asset Name, Token, Trial Started, Source.
-
-    CRM down must never block trial creation — this returns False rather than
-    raising on any failure.
-    """
-    api_key = os.environ.get("AIRTABLE_API_KEY")
-    if not api_key:
-        return False
-
-    db = SessionLocal()
-    try:
-        lead = db.query(TrialLead).filter(TrialLead.token == token).first()
-        if lead is None:
-            return False
-
-        base_id = os.environ.get("AIRTABLE_BASE_ID", "appeUbnHpGamghy8q")
-        table   = os.environ.get("AIRTABLE_LEADS_TABLE", "Leads")
-        payload = json.dumps({
-            "fields": {
-                "Email":         lead.email,
-                "Asset Name":    lead.asset_name or "",
-                "Token":         lead.token,
-                "Trial Started": lead.created_at.isoformat() + "Z",
-                "Source":        "PREDAIOT diagnostic trial",
-            }
-        }).encode("utf-8")
-
-        url = f"https://api.airtable.com/v0/{base_id}/{urllib.request.quote(table)}"
-        req = urllib.request.Request(
-            url, data=payload, method="POST",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type":  "application/json",
-            },
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                ok = 200 <= resp.status < 300
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
-            print(f"[trial] Airtable sync failed (non-fatal): {type(e).__name__}: {e}")
-            return False
-
-        if ok:
-            lead.crm_synced = True
-            db.commit()
-        return ok
-    finally:
-        db.close()
-
-
-def _create_trial_lead(email: str, asset_name: Optional[str]) -> TrialLead:
-    """Persist a new trial token (does not push to Airtable — caller decides)."""
-    db = SessionLocal()
-    try:
-        now = datetime.utcnow()
-        lead = TrialLead(
-            token=secrets.token_urlsafe(24),
-            email=email.strip().lower(),
-            asset_name=(asset_name or "").strip() or None,
-            created_at=now,
-            expires_at=now + timedelta(days=TRIAL_DURATION_DAYS),
-            audit_run_count=0,
-            crm_synced=False,
-        )
-        db.add(lead)
-        db.commit()
-        db.refresh(lead)
-        return lead
-    finally:
-        db.close()
-
-
+# Trial-lead helpers (_EMAIL_SHAPE, _push_lead_to_airtable, _create_trial_lead,
+# _bump_audit_count, TRIAL_DURATION_DAYS) -> app/services/trial_service.py (step 6).
+from app.services.trial_service import _bump_audit_count  # noqa: E402
 # Auth DI dependencies now live in app/core/dependencies.py (refactor step 2B).
 from app.core.dependencies import (  # noqa: E402
-    require_trial_token, require_user, require_role, require_audit_runner, require_trial_or_user,
+    require_user, require_role, require_audit_runner, require_trial_or_user,
 )
 
 
-def _bump_audit_count(token: str) -> None:
-    """Background-task helper. Increments audit_run_count after a successful audit."""
-    db = SessionLocal()
-    try:
-        lead = db.query(TrialLead).filter(TrialLead.token == token).first()
-        if lead is not None:
-            lead.audit_run_count = (lead.audit_run_count or 0) + 1
-            db.commit()
-    finally:
-        db.close()
 
 
 # ==========================================
@@ -208,7 +112,7 @@ def _bump_audit_count(token: str) -> None:
 # Auth primitives (JWT + bcrypt) now live in app/core/security.py (refactor 2A).
 from app.core.security import (  # noqa: E402
     _ROLES,
-    _hash_password, _verify_password, _issue_jwt,
+    _hash_password,
 )
 
 
@@ -317,9 +221,11 @@ register_rate_limiter(app)
 from app.api.security import router as security_router  # noqa: E402
 from app.api.health import router as health_router  # noqa: E402
 from app.api.legacy import router as legacy_router  # noqa: E402
+from app.api.auth import router as auth_router  # noqa: E402
 app.include_router(security_router)
 app.include_router(health_router)
 app.include_router(legacy_router)
+app.include_router(auth_router)
 
 
 # CORS — allow_origins is now an explicit list from ALLOWED_ORIGINS env
@@ -490,114 +396,7 @@ from app.services.audit_service import process_calculation  # noqa: E402
 # ---- Trial Gate endpoints --------------------------------------------------
 from fastapi import BackgroundTasks  # local import keeps the imports block tidy
 
-@app.post("/api/v1/trial/start", response_model=TrialStartResponse)
-@limiter.limit("20/hour")
-async def start_trial(request: Request, req: TrialStartRequest, background: BackgroundTasks):
-    """
-    Start a 7-day free diagnostic. Returns a trial_token that the frontend
-    sends as X-Trial-Token on subsequent /api/v1/audit calls.
-    Lead is pushed to Airtable in the background (best-effort).
-    """
-    email = (req.email or "").strip().lower()
-    if not _EMAIL_SHAPE.match(email):
-        raise HTTPException(status_code=400, detail="Please provide a valid work email.")
-    lead = _create_trial_lead(email, req.asset_name)
-    background.add_task(_push_lead_to_airtable, lead.token)
-    return TrialStartResponse(
-        token=lead.token,
-        expires_at=lead.expires_at.isoformat() + "Z",
-        booking_url=CONSULTATION_BOOKING_URL,
-    )
-
-
-@app.get("/api/v1/trial/status", response_model=TrialStatusResponse)
-async def trial_status(lead: TrialLead = Depends(require_trial_token)):
-    """Lightweight token-validity check for the frontend on page load."""
-    return TrialStatusResponse(
-        email=lead.email,
-        asset_name=lead.asset_name,
-        expires_at=lead.expires_at.isoformat() + "Z",
-        audit_run_count=lead.audit_run_count,
-        is_expired=lead.expires_at < datetime.utcnow(),
-    )
-
-
-# ---- Sprint 1: account + organization + asset registry ---------------------
-
-
-
-
-
-
-def _slugify(name: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "org"
-    return s[:40]
-
-
-@app.post("/api/v1/auth/register")
-@limiter.limit("5/minute")
-async def auth_register(request: Request, req: RegisterRequest):  # noqa: ARG001
-    email = req.email.strip().lower()
-    if "@" not in email or len(req.password) < 8:
-        raise HTTPException(status_code=422, detail={"code": "invalid_input",
-                            "message": "Valid email and a password of at least 8 characters are required."})
-    db = SessionLocal()
-    try:
-        if db.query(User).filter(User.email == email).first():
-            raise HTTPException(status_code=409, detail={"code": "email_taken",
-                                "message": "An account with this email already exists. Sign in instead."})
-        base = _slugify(req.organization)
-        slug = base
-        n = 1
-        while db.query(Organization).filter(Organization.slug == slug).first():
-            n += 1
-            slug = f"{base}-{n}"
-        org = Organization(name=req.organization.strip() or email, slug=slug)
-        db.add(org)
-        db.flush()
-        user = User(org_id=org.id, email=email,
-                    password_hash=_hash_password(req.password), role="owner")
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-        _security_log("auth.register", actor=email, org_id=org.id,
-                      object_ref=f"org:{org.slug}")
-        return {"token": _issue_jwt(user), "email": user.email, "role": user.role,
-                "organization": {"id": org.id, "name": org.name, "slug": org.slug}}
-    finally:
-        db.close()
-
-
-@app.post("/api/v1/auth/login")
-@limiter.limit("10/minute")
-async def auth_login(request: Request, req: LoginRequest):  # noqa: ARG001
-    email = req.email.strip().lower()
-    db = SessionLocal()
-    try:
-        user = db.query(User).filter(User.email == email).first()
-        if user is None or not _verify_password(req.password, user.password_hash):
-            _security_log("auth.login.failed", actor=email)
-            raise HTTPException(status_code=401, detail={"code": "bad_credentials",
-                                "message": "Email or password is incorrect."})
-        _security_log("auth.login.ok", actor=email, org_id=user.org_id)
-        org = db.query(Organization).filter(Organization.id == user.org_id).first()
-        return {"token": _issue_jwt(user), "email": user.email, "role": user.role,
-                "organization": {"id": org.id, "name": org.name, "slug": org.slug} if org else None}
-    finally:
-        db.close()
-
-
-@app.get("/api/v1/auth/me")
-async def auth_me(user: User = Depends(require_user)):
-    db = SessionLocal()
-    try:
-        org = db.query(Organization).filter(Organization.id == user.org_id).first()
-        n_assets = db.query(Asset).filter(Asset.org_id == user.org_id).count()
-        return {"email": user.email, "role": user.role,
-                "organization": {"id": org.id, "name": org.name, "slug": org.slug} if org else None,
-                "assets": n_assets}
-    finally:
-        db.close()
+# trial/* + auth/* endpoints -> app/api/auth.py (Router Extraction, step 6).
 
 
 def _asset_dict(a: "Asset") -> dict:
