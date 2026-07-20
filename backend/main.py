@@ -2,7 +2,6 @@ import os
 import uuid
 import json
 import asyncio
-import secrets
 import pandas as pd
 from io import StringIO
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Body, Depends, HTTPException, Request
@@ -30,7 +29,7 @@ from app.core.versions import (  # noqa: E402
 from app.core.config import engine, SessionLocal  # noqa: E402
 # ORM models + Base now live in app/models/tables.py (refactor step 2B).
 from app.models import (  # noqa: E402
-    Base, TrialLead, User, Asset, AuditRecord,
+    Base, TrialLead, User, AuditRecord,
     EconomicState, Decision, DecisionEvent, Outcome, GovernanceRecord,
     LiveEvent, LiveState, Reconciliation, CertificateRecord,
 )
@@ -58,7 +57,7 @@ from app.core.constants import (  # noqa: E402
 # ==========================================
 # Pydantic schemas now live in app/schemas/ (refactor step 3, schemas-first).
 from app.schemas import (  # noqa: E402
-    AssetSpecs, AuditRequest, AuditResponse, AssetCreateRequest, MemberCreateRequest, MemberRoleRequest, DecisionTransitionRequest,
+    AssetSpecs, AuditRequest, AuditResponse, DecisionTransitionRequest,
     OutcomeRequest, GovernanceRequest, LiveIngestRequest, ReconcileRequest,
 )
 
@@ -97,7 +96,7 @@ from app.schemas import (  # noqa: E402
 from app.services.trial_service import _bump_audit_count  # noqa: E402
 # Auth DI dependencies now live in app/core/dependencies.py (refactor step 2B).
 from app.core.dependencies import (  # noqa: E402
-    require_user, require_role, require_audit_runner, require_trial_or_user,
+    require_user, require_audit_runner, require_trial_or_user,
 )
 
 
@@ -110,10 +109,6 @@ from app.core.dependencies import (  # noqa: E402
 # on every audit endpoint via a linked TrialLead row ("acct-<user_id>").
 # ==========================================
 # Auth primitives (JWT + bcrypt) now live in app/core/security.py (refactor 2A).
-from app.core.security import (  # noqa: E402
-    _ROLES,
-    _hash_password,
-)
 
 
 
@@ -222,10 +217,12 @@ from app.api.security import router as security_router  # noqa: E402
 from app.api.health import router as health_router  # noqa: E402
 from app.api.legacy import router as legacy_router  # noqa: E402
 from app.api.auth import router as auth_router  # noqa: E402
+from app.api.tenancy import router as tenancy_router  # noqa: E402
 app.include_router(security_router)
 app.include_router(health_router)
 app.include_router(legacy_router)
 app.include_router(auth_router)
+app.include_router(tenancy_router)
 
 
 # CORS — allow_origins is now an explicit list from ALLOWED_ORIGINS env
@@ -399,121 +396,7 @@ from fastapi import BackgroundTasks  # local import keeps the imports block tidy
 # trial/* + auth/* endpoints -> app/api/auth.py (Router Extraction, step 6).
 
 
-def _asset_dict(a: "Asset") -> dict:
-    return {"id": a.id, "name": a.name, "asset_type": a.asset_type,
-            "capacity_mw": a.capacity_mw, "currency": a.currency,
-            "specs": (json.loads(a.specs_json) if a.specs_json else None),
-            "created_at": a.created_at.isoformat() + "Z"}
-
-
-@app.post("/api/v1/assets")
-async def create_asset(req: AssetCreateRequest,
-                       user: User = Depends(require_role("admin", "asset_manager"))):
-    db = SessionLocal()
-    try:
-        a = Asset(org_id=user.org_id, name=req.name.strip(),
-                  asset_type=req.asset_type, capacity_mw=req.capacity_mw,
-                  currency=req.currency,
-                  specs_json=(json.dumps(req.specs) if req.specs else None))
-        db.add(a)
-        db.commit()
-        db.refresh(a)
-        _security_log("asset.create", actor=user.email, org_id=user.org_id,
-                      object_ref=f"asset:{a.id}")
-        return _asset_dict(a)
-    finally:
-        db.close()
-
-
-@app.get("/api/v1/assets")
-async def list_assets(user: User = Depends(require_user)):
-    db = SessionLocal()
-    try:
-        rows = (db.query(Asset).filter(Asset.org_id == user.org_id)
-                .order_by(Asset.created_at.desc()).all())
-        return {"assets": [_asset_dict(a) for a in rows]}
-    finally:
-        db.close()
-
-
-# ---- Sprint 2: RBAC — org user management ----------------------------------
-
-
-
-
-@app.post("/api/v1/org/users")
-async def org_add_member(req: MemberCreateRequest,
-                         user: User = Depends(require_role("admin"))):
-    """Owner/admin adds an org member. The password is returned ONCE."""
-    email = req.email.strip().lower()
-    if "@" not in email:
-        raise HTTPException(status_code=422, detail={"code": "invalid_email",
-                            "message": "A valid email is required."})
-    if req.role not in _ROLES:
-        raise HTTPException(status_code=422, detail={"code": "invalid_role",
-                            "message": f"Role must be one of: {', '.join(_ROLES)}."})
-    if req.role == "owner":
-        raise HTTPException(status_code=422, detail={"code": "invalid_role",
-                            "message": "Ownership is transferred, not granted at creation."})
-    pw = req.password or secrets.token_urlsafe(12)
-    if len(pw) < 8:
-        raise HTTPException(status_code=422, detail={"code": "weak_password",
-                            "message": "Password must be at least 8 characters."})
-    db = SessionLocal()
-    try:
-        if db.query(User).filter(User.email == email).first():
-            raise HTTPException(status_code=409, detail={"code": "email_taken",
-                                "message": "An account with this email already exists."})
-        member = User(org_id=user.org_id, email=email,
-                      password_hash=_hash_password(pw), role=req.role)
-        db.add(member)
-        db.commit()
-        db.refresh(member)
-        _security_log("org.member.create", actor=user.email, org_id=user.org_id,
-                      object_ref=f"user:{member.id}|role:{member.role}")
-        return {"email": member.email, "role": member.role,
-                "temporary_password": (None if req.password else pw),
-                "note": "Share the temporary password securely; it is not stored in clear and cannot be shown again."}
-    finally:
-        db.close()
-
-
-@app.get("/api/v1/org/users")
-async def org_list_members(user: User = Depends(require_user)):
-    db = SessionLocal()
-    try:
-        rows = (db.query(User).filter(User.org_id == user.org_id)
-                .order_by(User.created_at.asc()).all())
-        return {"users": [{"id": u.id, "email": u.email, "role": u.role,
-                           "created_at": u.created_at.isoformat() + "Z"} for u in rows]}
-    finally:
-        db.close()
-
-
-@app.patch("/api/v1/org/users/{member_id}")
-async def org_change_role(member_id: int, req: MemberRoleRequest,
-                          user: User = Depends(require_role("admin"))):
-    if req.role not in _ROLES or req.role == "owner":
-        raise HTTPException(status_code=422, detail={"code": "invalid_role",
-                            "message": "Role must be a non-owner role."})
-    db = SessionLocal()
-    try:
-        m = (db.query(User).filter(User.id == member_id,
-                                   User.org_id == user.org_id).first())
-        if m is None:
-            raise HTTPException(status_code=404, detail={"code": "member_not_found",
-                                "message": "No such member in your organization."})
-        if m.role == "owner":
-            raise HTTPException(status_code=403, detail={"code": "forbidden",
-                                "message": "The owner role cannot be changed here."})
-        old_role = m.role
-        m.role = req.role
-        db.commit()
-        _security_log("org.member.role_change", actor=user.email, org_id=user.org_id,
-                      object_ref=f"user:{m.id}|{old_role}->{req.role}")
-        return {"id": m.id, "email": m.email, "role": m.role}
-    finally:
-        db.close()
+# assets + org/users endpoints -> app/api/tenancy.py (Router Extraction, step 6).
 
 
 # ---- Sprint 2: Audit History + Economic Memory (L3, blueprint §3) ----------
