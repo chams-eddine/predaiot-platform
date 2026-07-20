@@ -227,6 +227,66 @@ const COLUMN_GUIDE = [
   },
 ];
 
+// ── Audit-in-progress panel (SPEC-IX loading experience) ────────────────────
+// Shown while the certified engine audits an uploaded file. HONEST by design:
+// the backend does not stream stage events, so this shows the real pipeline as
+// an indeterminate sequence + a true elapsed timer — no fabricated percentages.
+const AUDIT_STAGES = [
+  ['01', 'Parse & resolve columns',      '80+ naming variants · unit & timestamp auto-detection'],
+  ['02', 'Data-quality screening',       'sensor validity · gaps · comms flags → DQI evidence'],
+  ['03', 'Optimal-dispatch benchmark',   'MILP over every interval — certified CBC solver'],
+  ['04', 'Gap attribution & findings',   'root causes · action plan · certificate payload'],
+];
+const AuditProgress = ({ fileName }) => {
+  const [secs, setSecs] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setSecs((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const mm = Math.floor(secs / 60), ss = String(secs % 60).padStart(2, '0');
+  return (
+    <div style={{ borderBottom: `1px solid ${DS.border}`, background: DS.bgRaised }}>
+      <style>{`
+        @keyframes pdPulse { 0%,100% { opacity: .30 } 50% { opacity: 1 } }
+        @keyframes pdSweep { 0% { transform: translateX(-100%) } 100% { transform: translateX(340%) } }
+      `}</style>
+      <div style={{ maxWidth: 760, margin: '0 auto', padding: '26px 40px 30px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+          <span style={{ color: DS.cyan, fontSize: 11, fontWeight: 700, letterSpacing: '0.14em' }}>
+            AUDIT IN PROGRESS
+          </span>
+          <span style={{ color: DS.sub, fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>
+            elapsed {mm}:{ss}
+          </span>
+        </div>
+        <div style={{ color: DS.text, fontSize: 15, fontWeight: 700, marginBottom: 16 }}>
+          {fileName || 'Your data'} — every dispatch decision is being audited against its optimal counterfactual
+        </div>
+        {/* indeterminate sweep — motion without a fabricated % */}
+        <div style={{ position: 'relative', height: 3, background: DS.border, borderRadius: 2, overflow: 'hidden', marginBottom: 18 }}>
+          <div style={{ position: 'absolute', top: 0, left: 0, height: '100%', width: '30%',
+                        background: DS.cyan, borderRadius: 2, animation: 'pdSweep 1.6s ease-in-out infinite' }} />
+        </div>
+        <div style={{ display: 'grid', gap: 10 }}>
+          {AUDIT_STAGES.map(([n, title, sub], i) => (
+            <div key={n} style={{ display: 'flex', gap: 14, alignItems: 'baseline',
+                                  animation: 'pdPulse 2.4s ease-in-out infinite',
+                                  animationDelay: `${i * 0.35}s` }}>
+              <span style={{ color: DS.cyan, fontSize: 11, fontWeight: 700, minWidth: 20 }}>{n}</span>
+              <span style={{ color: DS.text, fontSize: 13, fontWeight: 600, minWidth: 210 }}>{title}</span>
+              <span style={{ color: DS.dim, fontSize: 11 }}>{sub}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ color: DS.dim, fontSize: 11, marginTop: 16, lineHeight: 1.7 }}>
+          The optimal-dispatch benchmark is a full mathematical optimization, not a heuristic —
+          typically 5–20&nbsp;s, up to ~90&nbsp;s for high-resolution multi-day files.
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const FileUploadZone = ({ onFile, loading }) => {
   const [dragging, setDragging] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
@@ -1175,6 +1235,7 @@ export default function App() {
   const [actionError, setActionError]     = useState(null);   // SPEC-IX: no silent dead ends
   const [notice, setNotice]               = useState(null);   // SPEC-IX: quiet confirmations, not alert()
   const [uploading, setUploading]         = useState(false);
+  const [uploadingName, setUploadingName] = useState('');   // shown in AuditProgress
   const [shareLink, setShareLink]         = useState('');
   const [activeSection, setActiveSection] = useState('exec');
   const [showMethodology, setShowMethodology] = useState(false);
@@ -1481,6 +1542,7 @@ export default function App() {
   const handleFile = async (file) => {
     if (!requireTrial()) return;
     setUploading(true);
+    setUploadingName(file.name);
     setShowUpload(false);
     const fd = new FormData();
     fd.append('file', file);
@@ -1941,6 +2003,9 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           <FileUploadZone onFile={handleFile} loading={uploading} />
         </div>
       )}
+
+      {/* ── AUDIT-IN-PROGRESS (loading experience while the engine solves) ── */}
+      {uploading && <AuditProgress fileName={uploadingName} />}
 
       <div style={{ display: 'flex' }}>
         {/* ── SIDEBAR — persistent on desktop, drawer on mobile ── */}
