@@ -9,6 +9,7 @@
 import React from 'react';
 import { PDS, opportunityColor, fmtMoney, fmtPct } from '../design/ds';
 import { Panel, SectionShell, StatusDot } from '../design/components';
+import RecoveryCounter from '../motion/RecoveryCounter';
 
 const num = (x) => (x == null || Number.isNaN(Number(x)) ? null : Number(x));
 
@@ -55,6 +56,18 @@ export default function ActionPlan({ data }) {
       action={experimental.length > 0
         ? `${experimental.length} experimental action${experimental.length === 1 ? '' : 's'} are shown for exploration only — not part of EDA Standard v1.0 and not quantified.`
         : undefined}>
+      {/* SPEC-MI · MI-3 RecoveryCounter — the attributed total ACCRUES cause by
+          cause; each increment is one real ledger bucket, so the segments sum to
+          `attributed` by construction (governance cross-cut excluded, as in the
+          standfirst above). */}
+      <div style={{ maxWidth: 640, marginBottom: 'var(--ws-card-gap)' }}>
+        <RecoveryCounter
+          currency={currency}
+          items={quantified
+            .filter((o) => o.name !== 'Operator override governance')
+            .map((o) => ({ name: o.name, gain: num(o.period_gain) || 0 }))}
+        />
+      </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--ws-card-gap)' }}>
         {quantified.map((op, i) => (
           <Recommendation key={op.name} op={op} rank={i + 1} currency={currency} lead={i === 0} />
