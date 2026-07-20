@@ -20,6 +20,11 @@ const LiveCaptureScore  = lazy(() => chartsModule().then((m) => ({ default: m.Li
 import { ChartSkeleton } from './instruments/theme';
 import EnergyFlowNetwork from './motion/EnergyFlowNetwork';
 import DigitalFingerprint from './motion/DigitalFingerprint';
+import DecisionEngine from './motion/DecisionEngine';
+import MissionStatusBanner from './motion/MissionStatusBanner';
+import LeakageRadar from './motion/LeakageRadar';
+import EconomicHealthOrb from './motion/EconomicHealthOrb';
+import PredictiveTimeline from './motion/PredictiveTimeline';
 
 // ══════════════════════════════════════════════════════════════════════
 // TRIAL GATE — 7-day free diagnostic token (lead capture)
@@ -2137,6 +2142,12 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
               {ingestionNotes && (
                 <IngestionNotesBanner notes={ingestionNotes} onDismiss={() => setIngestionNotes(null)} />
               )}
+              {/* SPEC-MI · MI-8 Mission Status Banner — every badge from a real
+                  field (engine ver / n decisions / solver / gap / DQI+confidence
+                  grades / risk / cert seal). */}
+              <div style={{ marginBottom: 'var(--ws-card-gap, 20px)' }}>
+                <MissionStatusBanner data={data} certificate={certificate} />
+              </div>
               <ExecutiveCommandCenter data={data} log={log} live={dataSource === 'live'}
                 onOpenLive={() => setActiveSection('live')} />
             </Workspace>
@@ -2220,6 +2231,13 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   <div style={{ fontSize: 14, color: PDS.text2 }}>Run an audit to populate the Decision Audit Trail.</div>
                 ) : (
                   <>
+                    {/* SPEC-MI · MI-2 Decision Engine — the 288 decisions stream
+                        through the optimizer as particles colored by their REAL
+                        gap_step verdict, converging to the true leaked/optimal
+                        counts. */}
+                    <div style={{ marginBottom: PDS.s5 }}>
+                      <DecisionEngine log={log} currency={data.currency} />
+                    </div>
                     <div style={{ display: 'flex', gap: PDS.s6, rowGap: PDS.s3, flexWrap: 'wrap', marginBottom: PDS.s5 }}>
                       {stats.map((f) => (
                         <div key={f.label}>
@@ -2321,6 +2339,11 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   <div style={{ fontSize: 14, color: PDS.text2 }}>Run an audit to decompose leakage by root cause.</div>
                 ) : (
                   <Zone row="primary">
+                    {/* SPEC-MI · MI-7 Leakage Radar — one beam per REAL root_cause;
+                        beam length = its share of positive gap; hover = exact USD. */}
+                    <div style={{ marginBottom: 20 }}>
+                      <LeakageRadar causes={rcs} currency={data.currency} />
+                    </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                       {rcs.map((rc, i) => (
                         <div key={rc.category} style={{ display: 'flex', gap: 18, alignItems: 'baseline' }}>
@@ -2371,6 +2394,14 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
             return (
               <SectionShell kicker="Counterfactual Simulation" title="What Would Have Happened"
                 question="What would optimal dispatch have earned?" lead={lead}>
+                {/* SPEC-MI · MI-6 Predictive Timeline — two REAL cumulative curves
+                    (captured Σedv_actual vs optimal Σedv_optimal) drawn over the
+                    audited window; the "future" is explicitly NOT projected. */}
+                {log.length > 0 && (
+                  <div style={{ maxWidth: 680, marginBottom: 'var(--ws-card-gap)' }}>
+                    <PredictiveTimeline log={log} currency={data.currency} />
+                  </div>
+                )}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 360px))', justifyContent: 'start', gap: 'var(--ws-card-gap)' }}>
                   {money.map((f) => (
                     <Panel key={f.label} pad={PDS.s5}>
@@ -2423,6 +2454,18 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                 {!m ? (
                   <div style={{ fontSize: 14, color: PDS.text2 }}>Run an audit to compute the decision-quality metrics.</div>
                 ) : (
+                  <>
+                  {/* SPEC-MI · MI-5 Economic Health Orb — the requested physical
+                      asset-health orb has NO backing data (PREDAIOT audits economic
+                      decisions, not hardware); refused to fabricate. Three REAL
+                      rings instead: DQI · Audit Confidence · Economic Efficiency. */}
+                  <div style={{ marginBottom: 'var(--ws-zone-gap)' }}>
+                    <EconomicHealthOrb
+                      dq={(data.data_quality_index || {}).value}
+                      confidence={(data.audit_confidence || {}).value}
+                      efficiency={(m.economic_decision_efficiency || 0) / 100}
+                    />
+                  </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px,100%), 1fr))', gap: 'var(--ws-card-gap)' }}>
                     {metrics.map((metric) => (
                       <Panel key={metric.label} pad={PDS.s5}>
@@ -2439,6 +2482,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                       </Panel>
                     ))}
                   </div>
+                  </>
                 )}
                 <div style={{ marginTop: 'var(--ws-zone-gap)' }}>
                   <DataQualityPanel dqi={data.data_quality_index} ac={data.audit_confidence} fr={data.forecast_reliability} />
