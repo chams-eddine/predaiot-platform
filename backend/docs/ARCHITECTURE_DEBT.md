@@ -23,7 +23,7 @@ Legend — Risk: 🔴 Critical · 🟠 High · 🟡 Medium · 🟢 Low.
 | D5b | **`_security_log` (writes SecurityAuditLog) in `core/logging`** | 🟢 | Needed a shared home below cert+main; core.logging already owns audit-log writes | **P9** → `infrastructure/` or a security repository | Security |
 | D6 | **Ledger-CSV built inline in the route handler** (not in `report_service`) | 🟢 | It's endpoint code; moves with the endpoints | **P5 Routers** → `report_service` | Reporting |
 | D7 | **In-process state / singletons in `main.py`** (`_latest_by_token`, `_BOOT_ID`, `limiter`, live WS state) | 🔴 | Existing runtime behaviour; not touched during structural extraction | **P4/P9** — externalize to Redis; **blocks horizontal scaling today** | Infrastructure |
-| D8 | **`main.py` ~3.0k lines** (55 routes still inline; static mount must stay last) | 🟠 | Routers phase not started; extraction order was core→models→schemas→services first | **P5 Routers** → `api/` `APIRouter`s; `main.py` → ~200-line bootstrap | Architecture |
+| D8 | **`main.py` 510 L** — MOSTLY RESOLVED (Router Extraction: 10 routers / 53 routes in `app/api/`); remainder = composition root + middleware + startup + the live-streaming cluster (`/ws/live`, `/live/step`, MQTT bridge sharing rebound simulator state) | 🟢 | Live-streaming cluster shares mutable module state; moves as one cohesive unit | extract live-streaming cluster (with its state) → `api/streaming.py` + a state seam; `main.py` → ~250-line bootstrap | Architecture |
 | D9 | **`core/versions.py` imports `pulp`** (for `SOLVER_VERSION`) | 🟢 | `SOLVER_VERSION = pulp.__version__` needs the lib | **P9** — inject via config/build metadata | Infrastructure |
 | ~~D10~~ | ~~**No CI-enforced SAST/DAST/coverage gate / IaC**~~ | ✅ | RESOLVED (Production Safety phase): CI now gates ruff + bandit + pip-audit + coverage-floor + arch_graph --check + docker-build; render.yaml IaC + Dockerfile added | done | DevEx |
 | D11 | **No repository/domain/infrastructure layers yet**; services still mix orchestration + persistence + rules | 🟠 | Current phase is service extraction, not layering | **P6** | Architecture |
@@ -51,4 +51,4 @@ Legend — Risk: 🔴 Critical · 🟠 High · 🟡 Medium · 🟢 Low.
 - PDF output frozen — layout hash + `pdf_size` + ledger CSV byte-identical (timestamps normalized, documented).
 - No API/route/schema/DB/output change. Every step gated by the committed pytest suite + golden + twin + perf + security battery.
 
-_Last updated: Production Safety phase complete (CI gates, deps pinned+CVE-fixed, /version, IaC, Docker). Next: Router Extraction (D8). `main.py` ~2,410 L._
+_Last updated: Router Extraction COMPLETE (10 routers / 53 routes in `app/api/`; ratelimit+state seams in `app/core`; trial_service extracted). `main.py` **510 L** (from 6,157 at program start, −92%). Next: single deploy, then Repository Layer (step 7)._
