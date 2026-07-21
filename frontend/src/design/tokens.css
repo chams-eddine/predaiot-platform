@@ -257,11 +257,67 @@
   --mission-ease:       var(--pds-ease-out);
   --mission-dur:        var(--pds-dur);
   --mission-dur-fast:   var(--pds-dur-fast);
+  --mission-dur-slow:   var(--pds-dur-slow);
   /* Typography */
   --mission-font-mono:  var(--pds-font-mono);
   --mission-font-sans:  var(--pds-font-sans);
+
+  /* — Type scale (Phase 3.3) — stop hardcoding font-size literals — */
+  --mission-fs-hero:    clamp(30px, 3.4vw, 46px);   /* the one big figure per view */
+  --mission-fs-figure:  clamp(24px, 2.4vw, 34px);   /* KPI money / counters */
+  --mission-fs-title:   clamp(22px, 2vw, 30px);     /* section titles */
+  --mission-fs-body:    15px;                        /* prose / leads */
+  --mission-fs-label:   11px;                        /* kickers / meter labels */
+  --mission-fs-micro:   10px;                        /* provenance / captions */
+  --mission-fw-figure:  800;
+  --mission-fw-strong:  700;
+  --mission-fw-body:    500;
+  --mission-track-kicker: 0.2em;
 }
 
+/* ============================================================================
+   TYPOGRAPHY DNA (Phase 3.3) — three layers, one law each:
+     ENGINEERING (mono, tabular) — money, %, hashes, MW, SOC, decision IDs;
+       anything that aligns in columns or animates. Tabular figures are locked
+       so digits NEVER reflow mid-motion (the mission-number rule).
+     EXECUTIVE (sans) — prose, headings, labels.
+     KICKER — the small uppercase label voice.
+   Additive utility layer: new Mission components opt in; existing .pds-num /
+   .pdm-mono are unchanged (both already tabular).
+   ============================================================================ */
+.mission-num, .mission-eng {
+  font-family: var(--mission-font-mono);
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: 'tnum' 1, 'lnum' 1;   /* belt-and-suspenders: no digit jump in motion */
+  letter-spacing: -0.01em;
+}
+.mission-text   { font-family: var(--mission-font-sans); }
+.mission-kicker {
+  font-family: var(--mission-font-sans);
+  font-size: var(--mission-fs-label);
+  letter-spacing: var(--mission-track-kicker);
+  text-transform: uppercase;
+  font-weight: var(--mission-fw-strong);
+  color: var(--mission-text-dim);
+}
+
+/* ============================================================================
+   MISSION MOTION LANGUAGE (Phase 3.4) — the closed causal vocabulary.
+   Law: PREDAIOT has NO decorative motion (no fade/slide/zoom for their own
+   sake). Every animation is a physical metaphor for a real economic event, and
+   binds to real audit data (MI-0). The complete vocabulary — do not add a verb
+   without a bound economic meaning:
+     ARRIVES  value/content enters ............ pds-rise      (edv, KPIs)
+     GROWS    value accrues upward ............ MissionMeter fill · RecoveryCounter
+     FLOWS    energy moves between nodes ...... pdm-flow-fast (optimal) / -slow (leak)
+     LEAKS    a live loss pulses on its edge .. pdm-leak-pulse
+     ETCHES   a cryptographic seal materializes  pdm-etch      (Ed25519 present)
+     DRAWS    a real curve is inscribed ....... pdmDraw       (cumulative edv)
+     SPREADS  decisions stream through solver .. DecisionEngine particles
+     PULSES   a genuinely live signal ......... pds-pulse     (live data only)
+   Timing/easing come from --mission-dur* / --mission-ease. All honor
+   prefers-reduced-motion (guards below).
+   ============================================================================ */
 @keyframes pdm-flow { to { stroke-dashoffset: -48; } }
 @keyframes pdm-leak-pulse {
   0%, 100% { opacity: 0.9; r: 4; }

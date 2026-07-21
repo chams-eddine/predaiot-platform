@@ -12,6 +12,9 @@
 export { MC, PDS, gradeColor, riskColor, decisionColor, severityColor,
          verdictColor, lifecycleColor, opportunityColor, fmtMoney, fmtPct } from './ds';
 
+// — Mission atoms (new in Phase 3.5 — the two primitives the library lacked) —
+export { MissionLabel, MissionMetric } from './missionAtoms';
+
 // — Structural primitives (from the design system; renamed for the Mission API) —
 export {
   Panel as MissionPanel,
