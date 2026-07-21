@@ -14,7 +14,7 @@ from typing import Dict
 
 from app.knowledge.registry import load_packs
 from app.domain.canonical.model import (
-    CapabilityRef, Constraint, Intent, Equipment, Process, Facility, FacilityProfile,
+    CapabilityRef, Constraint, Intent, Equipment, Process, Facility, ResolvedProfile,
 )
 
 
@@ -45,8 +45,8 @@ def _resolve_intent(intent_id: str, intents: Dict[str, object]) -> Intent:
     )
 
 
-def compose(profile: FacilityProfile) -> Facility:
-    """Compose a detected FacilityProfile into the CIM graph."""
+def compose(profile: ResolvedProfile) -> Facility:
+    """Compose a resolved facility view into the CIM graph."""
     caps = _capability_index()
     intents = _intent_index()
 

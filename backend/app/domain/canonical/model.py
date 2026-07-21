@@ -75,9 +75,11 @@ class Facility:
     dt_hours: float = 1.0
 
 
-# ── Composer input (FUE output contract, S3) ────────────────────────────────
+# ── Composer input (the RESOLVED view of a FacilityProfile) ─────────────────
+# The evidence-based FacilityProfile (S3, canonical/profile.py) `.resolve()`s to
+# this plain, highest-confidence view — the exact shape the Composer needs.
 @dataclass
-class DetectedEquipment:
+class ResolvedEquipment:
     id: str
     capabilities: List[str]                       # capability pack ids, e.g. ["energy_storage"]
     specs: Dict[str, Any]                         # AssetSpecs fields
@@ -85,8 +87,8 @@ class DetectedEquipment:
 
 
 @dataclass
-class FacilityProfile:
-    equipment: List[DetectedEquipment]
+class ResolvedProfile:
+    equipment: List[ResolvedEquipment]
     intent: str = "arbitrage"
     currency: str = "USD"
     dt_hours: float = 1.0

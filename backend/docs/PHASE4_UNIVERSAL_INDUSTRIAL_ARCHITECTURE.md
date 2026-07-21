@@ -1,6 +1,10 @@
-# PREDAIOT Phase 4 — Universal Industrial Platform (Architecture RFC · rev 4)
+# PREDAIOT Phase 4 — Universal Industrial Platform (Architecture RFC · rev 5)
 
-**Status:** APPROVED. S1 + S1′ shipped (byte-identical, deployed). S2 in progress.
+**Status:** APPROVED. S1 + S1′ + S2 shipped (byte-identical, deployed). S3 in progress.
+**Rev 5 (2026-07-21):** the **Facility Understanding contract** (§2A) — S3 answers *"what is
+in front of me?"*, not *"what is the plant's name?"*. Four rules: FacilityProfile is its
+ONLY output · every inference is evidence-backed + confidence-scored (No Guess Without
+Evidence) · the Knowledge Graph stores knowledge not conclusions · Explainability is a test.
 **Rev 4 (2026-07-21):** adds the **Operational Intent** ontology tier — the objective a
 facility is operated for (arbitrage, peak-shaving, reserve, CO₂ reduction, maintenance, …),
 **independent of equipment**. Intent influences ONLY constraint generation + `CIM.to_wire()`;
@@ -220,6 +224,44 @@ Engine / CIM contract / Mission Control change in none of these cases.
 
 ---
 
+## 2A. Facility Understanding — the S3 contract (four rules)
+
+S3 (the **Facility Understanding Engine**) answers **"what is in front of me?"** Its job is
+*understanding*, not analysis. Four inviolable rules:
+
+**Rule 1 — FacilityProfile is S3's ONLY output.** Not an audit, recommendation, decision, or
+optimization — those live downstream of `to_wire()`. S3 produces exactly one artifact: a
+`FacilityProfile`.
+
+**Rule 2 — Evidence-based + confidence-scored (No Guess Without Evidence).** Every element is
+an `Inference {value, confidence, source, evidence[], rule?}` — never a bare value. When the
+evidence is weak, S3 keeps the *distribution* and admits ignorance rather than guessing:
+
+```yaml
+facility_type:
+  value: steel_melting        # or, when unproven:
+  confidence: 0.97            #   candidates: [Battery Storage 0.63, Microgrid 0.29, Unknown 0.08]
+  source: ontology
+  evidence: [transformer_30MVA, electric_arc_furnace, CRT_tariff]
+  rule: OR-27
+```
+
+`Unknown` is a first-class, legitimate outcome. A confident wrong answer is worse than an
+honest low-confidence one in an industrial setting.
+
+**Rule 3 — The Knowledge Graph stores knowledge, not conclusions.** It holds
+`Electric Arc Furnace —requires→ High Current`, `—supports→ Steel Melting`. It NEVER holds
+"best operating strategy" — that is an economic decision, and belongs to the frozen engine.
+
+**Rule 4 — Explainability is a test, not a feature.** `FacilityProfile.explain()` must trace
+every inference back to the evidence + ontology rules that produced it
+(`Batch Melting ← Equipment ← Signals ← Rated Power ← Rule #27`). The **Explainability Test**
+asserts every element in a produced profile is traceable; an inference that cannot explain
+itself does not understand the facility and fails CI.
+
+The Composer consumes `FacilityProfile.resolve()` (the highest-confidence interpretation),
+carrying the confidence forward. S3 changes no engine, API, or wire contract.
+
 ## 3. Migration roadmap
 
 | Stage | Deliverable | Engine? | Golden | Status |
@@ -227,7 +269,7 @@ Engine / CIM contract / Mission Control change in none of these cases.
 | **S1** | `app/knowledge/` + registry + byte-identical alias extraction | no | identical | ✅ deployed (3801073) |
 | **S1′** | **Ontology reconciliation:** per-kind `PackSchema` (7 kinds); recast the shipped pack into a `capability: energy_storage` pack + a `recognition: legacy_signal_aliases` (tier signal) carrying the alias bundle verbatim; registry merges signal aliases. **Byte-identical** — identity SHAs unchanged | no | **identical** | **THIS TURN** |
 | **S2** | `domain/canonical/` graph CIM (Facility⊃Process⊃Equipment, +Intent) + Composer + `to_wire()`; `intent` pack kind + default `arbitrage`; BESS graph (intent: arbitrage) → `to_wire()` identity on a golden fixture | no | identical | **THIS TURN** |
-| **S3** | `services/facility/` FUE + `graph.py` IKG; `/audit/inspect` returns FacilityProfile (additive) | no | unchanged | |
+| **S3** | evidence-based `FacilityProfile` (Inference{value,confidence,source,evidence,rule}) + `.explain()`/`.resolve()`; `knowledge/graph.py` IKG (knowledge, not conclusions); `services/facility/` FUE (No-Guess). Explainability + No-Guess tests. `/audit/inspect` FacilityProfile is a later increment | no | unchanged | **THIS TURN (core)** |
 | **S4** | Author equipment/capability/process/kpi/constraint/units packs + `recognition tier:facility` labels (steel, cement, …) + per-industry baselines | no | new baselines | |
 | **S5** | Auto-Mapping UX ("Detected: Steel Plant 94% · review") + profile labels | no | FE snapshot | |
 | **S6** | F2 multi-asset composition end-to-end | no | new | |

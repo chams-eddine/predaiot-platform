@@ -8,7 +8,7 @@ unchanged.
 """
 from app.schemas import AssetSpecs
 from app.domain.canonical import (
-    compose, to_wire, FacilityProfile, DetectedEquipment, Facility, Process,
+    compose, to_wire, ResolvedProfile, ResolvedEquipment, Facility, Process,
     Equipment, CapabilityRef, Intent,
 )
 from app.services.optimization_service import run_optimizer
@@ -30,8 +30,8 @@ def _time_series():
 
 def _bess_profile():
     asset, ts = _bess_asset(), _time_series()
-    return FacilityProfile(
-        equipment=[DetectedEquipment(id="battery", capabilities=["energy_storage"],
+    return ResolvedProfile(
+        equipment=[ResolvedEquipment(id="battery", capabilities=["energy_storage"],
                                      specs=asset.model_dump(), time_series=ts)],
         intent="arbitrage", dt_hours=1.0,
     )
