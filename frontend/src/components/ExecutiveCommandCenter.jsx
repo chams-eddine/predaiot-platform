@@ -10,6 +10,7 @@
 import React, { lazy, Suspense } from 'react';
 import { PDS, gradeColor, riskColor, opportunityColor, fmtMoney, fmtPct } from '../design/ds';
 import { Panel, EvidenceBadge, StatusDot } from '../design/components';
+import { facilityName } from '../presentation/ontology/TerminologyResolver';
 import { Zone } from '../workspace/Workspace';
 import { ChartSkeleton } from '../instruments/theme';
 import PrimeCounter from '../motion/PrimeCounter';
@@ -112,11 +113,11 @@ export default function ExecutiveCommandCenter({ data, log, live, onOpenLive }) 
           <div style={{ flex: 2, minWidth: 300 }}>
             <div style={{ fontSize: 'clamp(26px, 2.4vw, 38px)', fontWeight: 800, color: PDS.text,
                           letterSpacing: '-0.02em', lineHeight: 1.15 }}>
-              {data.asset_name || 'Energy Asset'}
+              {data.asset_name || facilityName(data.facility_profile)}
             </div>
             <div style={{ fontSize: 16, color: PDS.text2, lineHeight: 1.75, marginTop: 12,
                           maxWidth: 'var(--pds-prose-max)' }}>
-              Over {period}, this {data.asset_type || 'asset'} operated at{' '}
+              Over {period}, this {data.facility_profile ? facilityName(data.facility_profile) : (data.asset_type || 'asset')} operated at{' '}
               <span style={{ color: riskColor(data.risk_level), fontWeight: 700 }}>
                 {ecfPct != null ? `${ecfPct.toFixed(1)}%` : 'an unmeasured share'} of its achievable economic optimum
               </span>

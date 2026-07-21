@@ -11,7 +11,6 @@ import React from 'react';
 import { MC } from '../design/ds';
 import { MissionMetric } from '../design/missionAtoms';
 import MissionStatusBanner from './MissionStatusBanner';
-import EnergyFlowNetwork from './EnergyFlowNetwork';
 import LeakageRadar from './LeakageRadar';
 import PredictiveTimeline from './PredictiveTimeline';
 import DigitalFingerprint from './DigitalFingerprint';
@@ -198,13 +197,10 @@ export default function MissionControl({ data, log = [], certificate }) {
                 tag={topo.length ? `${(topo[0].label || '').toUpperCase()} → ${(topo[topo.length - 1].label || '').toUpperCase()}` : 'GRID·BESS·LOAD'}
                 span={narrow ? 'auto' : 'span 12 / span 12'} minH={0}>
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr)', gap: 6 }}>
-              {topo.length ? (
-                <DigitalTwinRenderer topology={topo} hasLeak={hasLeak}
-                  caption={hasLeak ? 'ECONOMIC LEAK ON THE DECISION EDGE' : 'FLOW AT ECONOMIC OPTIMUM'} />
-              ) : (
-                <EnergyFlowNetwork hasLeak={hasLeak} leakEdge="bess-load" width={520} height={140}
-                  caption={hasLeak ? 'ECONOMIC LEAK ON DISPATCH EDGE' : 'FLOW AT ECONOMIC OPTIMUM'} />
-              )}
+              {/* Always the ontology renderer — it falls back to a GENERIC graph
+                  (never a battery schematic) when the backend sent no topology. */}
+              <DigitalTwinRenderer topology={topo} hasLeak={hasLeak}
+                caption={hasLeak ? 'ECONOMIC LEAK ON THE DECISION EDGE' : 'FLOW AT ECONOMIC OPTIMUM'} />
             </div>
           </Cell>
 

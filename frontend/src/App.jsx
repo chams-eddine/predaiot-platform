@@ -18,13 +18,14 @@ const LiveGapFlow       = lazy(() => chartsModule().then((m) => ({ default: m.Li
 const LiveCaptureScore  = lazy(() => chartsModule().then((m) => ({ default: m.LiveCaptureScore })));
 
 import { ChartSkeleton } from './instruments/theme';
-import EnergyFlowNetwork from './motion/EnergyFlowNetwork';
 import DigitalFingerprint from './motion/DigitalFingerprint';
 import DecisionEngine from './motion/DecisionEngine';
 import LeakageRadar from './motion/LeakageRadar';
 import EconomicHealthOrb from './motion/EconomicHealthOrb';
 import PredictiveTimeline from './motion/PredictiveTimeline';
 import MissionControl from './motion/MissionControl';
+import DigitalTwinRenderer from './presentation/ontology/DigitalTwinRenderer';
+import { hasCapability } from './presentation/ontology/TerminologyResolver';
 // Mission API facade (single import for the Mission-Control composition layer).
 import { MissionMeter } from './design/mission';
 
@@ -848,7 +849,7 @@ function TrialGate({ busy, error, onSubmit, onDismiss, onSignIn, onRegister, ini
           <input
             style={inputStyle}
             type="text"
-            placeholder="Asset name (optional) — e.g. Ibri 2 BESS"
+            placeholder="Facility name (optional) — e.g. your plant or site"
             value={assetName}
             onChange={(e) => setAssetName(e.target.value)}
             disabled={busy}
@@ -2204,9 +2205,9 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                     REAL verdict (MI-0): a leak edge appears iff the audited gap
                     is material (risk_level from the engine, never invented). */}
                 <div style={{ maxWidth: 640, marginBottom: 18 }}>
-                  <EnergyFlowNetwork
+                  <DigitalTwinRenderer
+                    topology={data.facility_profile?.topology || []}
                     hasLeak={data.risk_level !== 'Low'}
-                    leakEdge="bess-load"
                     caption={data.risk_level !== 'Low'
                       ? `ECONOMIC LEAK DETECTED — ${fmtMoney(data.total_gap_usd, data.currency)} UNREALIZED`
                       : 'FLOW AT ECONOMIC OPTIMUM'}
@@ -2284,7 +2285,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                           : { label: 'Minor leakage', color: '#F5945B' };
                         const rootCause = {
                           'Missed Arbitrage':   'Static dispatch rule — no market-responsive trigger',
-                          'Partial Capture':    'SOC constraint or partial execution — capacity available but under-utilised',
+                          'Partial Capture':    'Partial execution — capacity was available but under-utilised during a priced window',
                           'Over-Dispatch':      'Aggressive dispatch beyond MILP-optimal level',
                           'Correct Dispatch':   'Decision matched the optimal counterfactual',
                           'Correct Idle':       'Idle period was economically justified',
@@ -2306,10 +2307,13 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 10, marginBottom: 12 }}>
                               {[
                                 { label: 'Market price', v: `${dec.price} ${data.currency}/MWh`, c: PDS.warn },
-                                { label: 'Asset SOC', v: dec.soc != null ? `${(dec.soc*100).toFixed(0)}%` : '—', c: PDS.text2 },
+                                // State of Charge only when the ontology says the facility stores energy
+                                ...(hasCapability(data.facility_profile, 'energy_storage')
+                                  ? [{ label: 'State of Charge', v: dec.soc != null ? `${(dec.soc*100).toFixed(0)}%` : '—', c: PDS.text2 }] : []),
                                 { label: 'Optimal action', v: `${dec.optimal_action} MW`, c: PDS.recover },
                                 { label: 'Actual action', v: (dec.actual_action||0) < 0.5 ? 'Idle' : `${dec.actual_action} MW`, c: (dec.actual_action||0) < 0.5 ? PDS.loss : PDS.text },
-                                { label: 'Curtailment', v: dec.curtailment_mw ? `${dec.curtailment_mw} MW` : '—', c: '#F5945B' },
+                                // Curtailment only when the data carries it (intermittent generation)
+                                ...(dec.curtailment_mw ? [{ label: 'Curtailment', v: `${dec.curtailment_mw} MW`, c: '#F5945B' }] : []),
                               ].map((f) => (
                                 <div key={f.label}>
                                   <div className="pds-kicker" style={{ marginBottom: 3 }}>{f.label}</div>
@@ -2741,7 +2745,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                       { fact: 'Operator overrides recorded', v: log.filter(r => r.operator_override).length },
                       { fact: 'Overrides with positive gap', v: log.filter(r => r.operator_override && (r.gap_step || 0) > 0).length },
                       { fact: 'Steps with forecast value', v: `${(m?.forecast_utilization_index ?? 0).toFixed(0)}%` },
-                      { fact: 'Steps with SoC telemetry', v: `${log.length ? ((log.filter(r => r.soc != null).length / log.length) * 100).toFixed(0) : 0}%` },
+                      { fact: 'Steps with state telemetry', v: `${log.length ? ((log.filter(r => r.soc != null).length / log.length) * 100).toFixed(0) : 0}%` },
                       { fact: 'Risk band', v: (data.risk_level || '—') },
                     ].map(({ fact, v }, i, arr) => (
                       <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 0', borderBottom: i < arr.length - 1 ? `1px solid ${PDS.hairline}` : 'none' }}>
@@ -3286,7 +3290,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                 ['3. Economic Decision Gap™ — The Core Innovation',
                   'Rather than comparing equipment performance, PREDAIOT compares decisions. For every dispatch interval, the engine computes Optimal Decision vs. Actual Decision. The difference is the Economic Decision Gap™ — value destroyed by sub-optimal operational decisions despite technically healthy equipment. This is the foundation of the patent-pending methodology.'],
                 ['4. Root Cause Intelligence',
-                  'Every dollar of leakage is automatically traced back to its operational cause: fixed dispatch thresholds, incorrect charging windows, missed arbitrage, curtailment losses, forecast errors, or reserve market exclusion. PREDAIOT identifies the decision responsible — not just the symptom.'],
+                  'Every dollar of leakage is automatically traced back to its operational cause: fixed operating thresholds, mistimed operating windows, missed price opportunities, curtailment losses, forecast errors, or reserve-market exclusion. PREDAIOT identifies the decision responsible — not just the symptom.'],
                 ['5. Economic Action Plan™',
                   'After identifying leakage, PREDAIOT derives each improvement opportunity directly from the decision ledger: the value shown is the sum of the gap over the ledger rows matching that opportunity\'s classification, with the exact filter published alongside the figure. Strategy directions that cannot be quantified from the audited data are listed separately as Experimental.'],
                 ['6. Universal Asset Intelligence',

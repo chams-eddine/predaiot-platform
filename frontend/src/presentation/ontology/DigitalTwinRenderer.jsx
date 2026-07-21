@@ -14,8 +14,16 @@ const KIND_COLOR = {
   node: 'var(--pds-text-2, #97A6BC)',
 };
 
+// When the backend sent no topology (legacy / profile-less audit), render a
+// GENERIC source→facility→load graph — never a battery-specific fallback.
+const GENERIC = [
+  { id: 'source', label: 'Source', kind: 'source' },
+  { id: 'facility', label: 'Facility', kind: 'equipment' },
+  { id: 'load', label: 'Load', kind: 'sink' },
+];
+
 export default function DigitalTwinRenderer({ topology = [], hasLeak = false, caption }) {
-  if (!topology.length) return null;
+  topology = topology && topology.length ? topology : GENERIC;
   const n = topology.length;
   const W = 640, H = 150, top = 60;
   const slot = W / n;

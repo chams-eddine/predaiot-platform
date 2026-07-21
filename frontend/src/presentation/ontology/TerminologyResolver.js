@@ -47,4 +47,12 @@ export function facilityConfidence(profile) {
   return profile?.facility_type?.confidence ?? null;
 }
 
+// Does the recognized facility have a given capability? Lets the UI show a
+// capability-specific instrument (e.g. State of Charge) ONLY when the ontology
+// says the facility has it — never guessed from asset type.
+export function hasCapability(profile, capId) {
+  return (profile?.equipment || []).some(
+    (e) => (e.capabilities || []).some((c) => c.value === capId));
+}
+
 export { titlecase };
