@@ -104,6 +104,12 @@ def _build_audit_pdf(audit: dict) -> bytes:
     asset_name    = audit.get("asset_name", "Energy Asset")
     asset_type    = audit.get("asset_type", "Generic")
     asset_id      = audit.get("asset_id") or asset_name
+    # Phase 5 — the report speaks about the facility the FUE RECOGNIZED, not a raw
+    # asset_type. Prefer facility_profile.facility_type; fall back to asset_type
+    # when nothing was recognized (Unknown) → byte-identical for storage/legacy.
+    _fp           = audit.get("facility_profile") or {}
+    _ft           = (_fp.get("facility_type") or {}).get("value")
+    scope_label   = _ft if (_ft and _ft != "Unknown") else asset_type
     asset_loc     = audit.get("asset_location") or CONFIDENTIAL
     client_comp   = audit.get("client_company") or CONFIDENTIAL
     period        = audit.get("audit_period_label", "—")
@@ -154,7 +160,7 @@ def _build_audit_pdf(audit: dict) -> bytes:
     y -= 11
     c.setFillColorRGB(*BODY_C)
     c.setFont("Helvetica", 9)
-    c.drawString(LEFT_X, y, f"{asset_id}  ·  {asset_type}  ·  {period}")
+    c.drawString(LEFT_X, y, f"{asset_id}  ·  {scope_label}  ·  {period}")
     c.drawString(RIGHT_X, y, issued_at)
 
     # ── Executive Summary block ────────────────────────────────────────
