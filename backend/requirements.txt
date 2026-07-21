@@ -28,7 +28,7 @@ slowapi==0.1.10
 # paho-mqtt      # MQTT bridge (Coverage Tasks 3.3)
 # pymodbus       # Modbus TCP polling adapter (future)
 # asyncua        # OPC-UA client (future)
-# PyYAML         # On-prem agent config parsing (future)
+PyYAML>=6.0            # Knowledge Pack loading (Phase 4 Layer 4)
 psycopg2-binary==2.9.10
 PyJWT==2.13.0
 bcrypt==4.3.0

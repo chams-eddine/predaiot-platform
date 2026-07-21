@@ -28,7 +28,7 @@ APP = os.path.join(ROOT, "app")
 # everything may depend on them downward. api is outermost.
 LAYER_RANK = {
     "api": 5, "services": 4, "domain": 3, "repositories": 2,
-    "core": 1, "utils": 1, "infrastructure": 1,
+    "core": 1, "utils": 1, "infrastructure": 1, "knowledge": 1,
     "models": 0, "schemas": 0,
 }
 # modules physically in services/ that are domain-tier by intent (tracked debt D1/D2)

@@ -20,6 +20,7 @@ graph TD
     repositories --> models
     services --> core
     services --> domain
+    services --> knowledge
     services --> models
     services --> repositories
     services --> schemas
@@ -32,10 +33,11 @@ graph TD
 |---|--:|--:|---|
 | __init__ | 1 | 6 | __init__ (6 L) |
 | api | 11 | 2286 | api.audit (733 L) |
-| services | 14 | 2612 | services.report_service (354 L) |
+| services | 14 | 2462 | services.report_service (354 L) |
 | domain | 2 | 462 | domain.economics (451 L) |
 | repositories | 2 | 75 | repositories.security_log (59 L) |
 | core | 9 | 436 | core.dependencies (153 L) |
+| knowledge | 3 | 153 | knowledge.registry (86 L) |
 | utils | 2 | 27 | utils.formatting (27 L) |
 | models | 2 | 411 | models.tables (402 L) |
 | schemas | 1 | 266 | schemas (266 L) |
@@ -45,5 +47,5 @@ graph TD
 - Hard violations (upward/circular): **0**
 - Peer edges (same-layer, tracked as debt D1/D11): **0**
 
-- Modules scanned: 44
+- Modules scanned: 47
 
