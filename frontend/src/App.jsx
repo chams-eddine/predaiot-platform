@@ -21,10 +21,10 @@ import { ChartSkeleton } from './instruments/theme';
 import EnergyFlowNetwork from './motion/EnergyFlowNetwork';
 import DigitalFingerprint from './motion/DigitalFingerprint';
 import DecisionEngine from './motion/DecisionEngine';
-import MissionStatusBanner from './motion/MissionStatusBanner';
 import LeakageRadar from './motion/LeakageRadar';
 import EconomicHealthOrb from './motion/EconomicHealthOrb';
 import PredictiveTimeline from './motion/PredictiveTimeline';
+import MissionControl from './motion/MissionControl';
 // Mission API facade (single import for the Mission-Control composition layer).
 import { MissionMeter } from './design/mission';
 
@@ -2144,11 +2144,12 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
               {ingestionNotes && (
                 <IngestionNotesBanner notes={ingestionNotes} onDismiss={() => setIngestionNotes(null)} />
               )}
-              {/* SPEC-MI · MI-8 Mission Status Banner — every badge from a real
-                  field (engine ver / n decisions / solver / gap / DQI+confidence
-                  grades / risk / cert seal). */}
-              <div style={{ marginBottom: 'var(--ws-card-gap, 20px)' }}>
-                <MissionStatusBanner data={data} certificate={certificate} />
+              {/* SPEC-MI · Mission Control HUD — the Economic Command console
+                  above the six-act briefing (augment, not replace). Composes the
+                  MI instruments; every element maps to a real audit field. The
+                  MI-8 status rail lives inside it, so no standalone banner here. */}
+              <div style={{ marginBottom: 'var(--ws-zone-gap, 32px)' }}>
+                <MissionControl data={data} log={log} certificate={certificate} />
               </div>
               <ExecutiveCommandCenter data={data} log={log} live={dataSource === 'live'}
                 onOpenLive={() => setActiveSection('live')} />
