@@ -63,6 +63,10 @@ class FacilityProfile:
     dt_hours: float = 1.0
     facility_id: str = "facility"
     unknowns: List[str] = field(default_factory=list)  # ungrounded columns/signals
+    # Ontology-driven digital-twin node chain (source → equipment → sink), built
+    # from the recognized archetype + equipment. The frontend RENDERS this — it
+    # never decides the topology (Phase 5 golden rule).
+    topology: List[Dict[str, Any]] = field(default_factory=list)
 
     # ── Rule 1: this is the only output; no audit/decision methods live here ──
 
@@ -107,6 +111,7 @@ class FacilityProfile:
                 "signals": {k: _inf(v) for k, v in e.signal_map.items()},
             } for e in self.equipment],
             "unknowns": list(self.unknowns),
+            "topology": list(self.topology),
             "traceable": self.is_fully_traceable(),
             "explanation": self.explain(),
         }

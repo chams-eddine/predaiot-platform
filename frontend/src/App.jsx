@@ -1526,11 +1526,16 @@ export default function App() {
   // Replaces the old flow which generated Math.random() data per click, labelled
   // it "Ibri 2", and bounced anonymous visitors into the email gate. The gate
   // now appears at the honest moment: "run it on YOUR data".
-  const runDemo = async () => {
+  const runDemo = async (fixture) => {
     setLoading(true);
     setShowUpload(false);
     try {
-      const r = await fetch('/demo_report.json');
+      // Ontology-driven demos: same audit engine, different facility_profile.
+      // ?demo=steel loads the steel fixture — proving the UI adapts with no code.
+      const name = (typeof fixture === 'string' && fixture)
+        || (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('demo'));
+      const path = name ? `/demo_report_${name}.json` : '/demo_report.json';
+      const r = await fetch(path);
       if (!r.ok) throw new Error(`fixture ${r.status}`);
       const demo = await r.json();
       setData(demo);

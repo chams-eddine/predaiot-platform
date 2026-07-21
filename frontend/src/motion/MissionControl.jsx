@@ -16,6 +16,8 @@ import LeakageRadar from './LeakageRadar';
 import PredictiveTimeline from './PredictiveTimeline';
 import DigitalFingerprint from './DigitalFingerprint';
 import MissionMeter from './MissionMeter';
+import DigitalTwinRenderer from '../presentation/ontology/DigitalTwinRenderer';
+import FacilityUnderstanding from '../presentation/ontology/FacilityUnderstanding';
 
 // Collapse the multi-column instrument grid to a single column on narrow
 // viewports (the radar/timeline need full width below tablet).
@@ -82,6 +84,9 @@ export default function MissionControl({ data, log = [], certificate }) {
   const ga = data.gap_attribution || {};
   const gap = Number(data.total_gap_usd) || 0;
   const hasLeak = gap > 0;
+  // Phase 5 — the ontology-driven understanding + twin (backend-provided).
+  const fp = data.facility_profile || null;
+  const topo = (fp && fp.topology) || [];
   const risk = data.risk_level || '—';
 
   // System-status master light — driven by risk_level (real).
@@ -182,11 +187,24 @@ export default function MissionControl({ data, log = [], certificate }) {
 
         {/* ── Instrument grid ────────────────────────────────────────── */}
         <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr' : 'repeat(12, 1fr)', gap: 12 }}>
-          <Cell label="Digital Twin · Economic Topology" tag="GRID·BESS·LOAD"
+          {/* Facility Understanding — ontology-driven, what the FUE recognized */}
+          {fp && (
+            <div style={{ gridColumn: narrow ? '1 / -1' : 'span 12 / span 12' }}>
+              <Cell label="Facility Understanding" tag="FUE"><FacilityUnderstanding profile={fp} compact /></Cell>
+            </div>
+          )}
+
+          <Cell label="Digital Twin · Economic Topology"
+                tag={topo.length ? `${(topo[0].label || '').toUpperCase()} → ${(topo[topo.length - 1].label || '').toUpperCase()}` : 'GRID·BESS·LOAD'}
                 span={narrow ? 'auto' : 'span 12 / span 12'} minH={0}>
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr)', gap: 6 }}>
-              <EnergyFlowNetwork hasLeak={hasLeak} leakEdge="bess-load" width={520} height={140}
-                caption={hasLeak ? 'ECONOMIC LEAK ON DISPATCH EDGE' : 'FLOW AT ECONOMIC OPTIMUM'} />
+              {topo.length ? (
+                <DigitalTwinRenderer topology={topo} hasLeak={hasLeak}
+                  caption={hasLeak ? 'ECONOMIC LEAK ON THE DECISION EDGE' : 'FLOW AT ECONOMIC OPTIMUM'} />
+              ) : (
+                <EnergyFlowNetwork hasLeak={hasLeak} leakEdge="bess-load" width={520} height={140}
+                  caption={hasLeak ? 'ECONOMIC LEAK ON DISPATCH EDGE' : 'FLOW AT ECONOMIC OPTIMUM'} />
+              )}
             </div>
           </Cell>
 

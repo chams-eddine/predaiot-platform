@@ -19,6 +19,35 @@ from app.domain.canonical.profile import (
 )
 
 
+def _humanize(x: str) -> str:
+    return " ".join(w.capitalize() for w in str(x).replace("_", " ").split())
+
+
+# Per-ARCHETYPE digital-twin templates (physics, not industry — the four engine
+# archetypes). "$equipment" = the recognized equipment node. Process packs will
+# enrich these with real multi-stage chains (S4 continuation) with no UI change.
+_ARCHETYPE_TOPOLOGY = {
+    "storage":      ["grid", "power_conversion_system", "$equipment", "load"],
+    "load":         ["grid", "transformer", "$equipment", "process"],
+    "intermittent": ["energy_source", "$equipment", "inverter", "grid"],
+    "dispatchable": ["fuel_input", "$equipment", "grid"],
+}
+
+
+def _build_topology(archetype, equip_node):
+    if not archetype:
+        return []
+    tmpl = _ARCHETYPE_TOPOLOGY.get(archetype, ["grid", "$equipment", "load"])
+    nodes = []
+    for i, t in enumerate(tmpl):
+        if t == "$equipment":
+            nodes.append({"id": equip_node["id"], "label": equip_node["label"], "kind": "equipment"})
+        else:
+            kind = "source" if i == 0 else "sink" if i == len(tmpl) - 1 else "node"
+            nodes.append({"id": t, "label": _humanize(t), "kind": kind})
+    return nodes
+
+
 def _assertion_to_inference(a: ConceptAssertion, source="pattern") -> Inference:
     return Inference(
         value=a.concept, confidence=a.confidence, source=source,
@@ -106,7 +135,19 @@ def understand(
 
     intent_inf = Inference(value=intent, confidence=1.0, source=intent_source, rule=None)
 
+    # Ontology-driven digital-twin topology (Phase 5) — keyed on the behavioral
+    # archetype; the equipment node is the recognized concept.
+    beh = next((ci for ci in capability_infs if g.archetype_of(ci.value)), None)
+    archetype = g.archetype_of(beh.value) if beh else None
+    if equip_as:
+        equip_node = {"id": identity.value, "label": _humanize(identity.value)}
+    elif beh is not None:
+        equip_node = {"id": beh.value, "label": _humanize(beh.value)}
+    else:
+        equip_node = {"id": "asset", "label": "Asset"}
+    topology = _build_topology(archetype, equip_node)
+
     return FacilityProfile(
         facility_type=facility_type, equipment=equipment, intent=intent_inf,
         currency=currency, dt_hours=dt_hours, facility_id=facility_id,
-        unknowns=list(extra_columns or []))
+        unknowns=list(extra_columns or []), topology=topology)
