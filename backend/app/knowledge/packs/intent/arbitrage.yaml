@@ -1,0 +1,11 @@
+# PREDAIOT Knowledge Pack — intent (Operational Intent).
+# The DEFAULT objective: price arbitrage. It is a no-op modifier — no extra
+# constraints, no wire-parameter reshaping — so it reproduces the engine's native
+# behavior exactly (the byte-identical BESS path). Other intents (peak_shaving,
+# reserve, co2_reduction, maintenance, …) are authored in S4 and add constraints /
+# wire_params declaratively. Intent never reaches the engine (Law 1).
+id: arbitrage
+kind: intent
+display_name: Price Arbitrage
+constraints: []
+wire_params: {}

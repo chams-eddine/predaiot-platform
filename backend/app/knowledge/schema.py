@@ -84,6 +84,15 @@ class ProcessPack(_Base):
     constraints: List[str] = []
 
 
+class IntentPack(_Base):
+    kind: Literal["intent"]
+    display_name: Optional[str] = None
+    # Operational Intent influences ONLY constraint generation + to_wire (Law 1).
+    # Declarative: the Composer/to_wire apply these generically (no `if intent ==`).
+    constraints: List[str] = []              # constraint pack ids this intent generates
+    wire_params: Dict[str, Any] = {}         # declarative params the adapter reads
+
+
 class RecognitionPack(_Base):
     kind: Literal["recognition"]
     tier: Literal["signal", "facility"]
@@ -98,7 +107,8 @@ class RecognitionPack(_Base):
 
 
 Pack = Annotated[
-    Union[UnitsPack, KpiPack, ConstraintPack, CapabilityPack, EquipmentPack, ProcessPack, RecognitionPack],
+    Union[UnitsPack, KpiPack, ConstraintPack, CapabilityPack, EquipmentPack, ProcessPack,
+          IntentPack, RecognitionPack],
     Field(discriminator="kind"),
 ]
 _PACK_ADAPTER: TypeAdapter = TypeAdapter(Pack)

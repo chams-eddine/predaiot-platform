@@ -1,9 +1,13 @@
-# PREDAIOT Phase 4 — Universal Industrial Platform (Architecture RFC · rev 3)
+# PREDAIOT Phase 4 — Universal Industrial Platform (Architecture RFC · rev 4)
 
-**Status:** APPROVED direction. S1 shipped. S1′ authorized (byte-identical). Gate before S2.
-**Rev 3 (2026-07-21):** adds the **Industrial Ontology Layer** — the platform models a
-strict abstraction ladder *Signal → Equipment → Capability → Process → Facility*.
-Industries are **emergent classifications**, never implementation units.
+**Status:** APPROVED. S1 + S1′ shipped (byte-identical, deployed). S2 in progress.
+**Rev 4 (2026-07-21):** adds the **Operational Intent** ontology tier — the objective a
+facility is operated for (arbitrage, peak-shaving, reserve, CO₂ reduction, maintenance, …),
+**independent of equipment**. Intent influences ONLY constraint generation + `CIM.to_wire()`;
+the engine stays unaware of it (Law 1 preserved).
+**Rev 3:** the **Industrial Ontology Layer** — abstraction ladder
+*Signal → Equipment → Capability → Process → Intent → Facility*. Industries are **emergent
+classifications**, never implementation units.
 **Rev 2:** facility-first capability composition (packs are knowledge sources, not industries).
 
 ### The Laws (inviolable, CI-enforced)
@@ -47,7 +51,7 @@ git history rev 1.)
 
 ### 2.1 The Industrial Ontology (the new spine)
 
-Five tiers. Each is a distinct level of abstraction; they must never be conflated.
+Six tiers. Each is a distinct level of abstraction; they must never be conflated.
 
 ```
   RAW SIGNALS      what the file literally contains (columns, sensors, tags, units)
@@ -57,15 +61,19 @@ Five tiers. Each is a distinct level of abstraction; they must never be conflate
   CAPABILITIES     what an equipment can do economically (a dispatch behavior or a modifier)
        ▲ enable
   PROCESSES        the industrial activity the equipment/capabilities serve
-       ▲ compose
+       ▲ serve
+  OPERATIONAL      the objective the site is operated for — arbitrage · min-cost ·
+  INTENT           max-throughput · peak-shaving · grid-support · reserve · CO₂-reduction ·
+                   maintenance · demand-response. INDEPENDENT of equipment.
+       ▲ frames
   FACILITY         the whole site
 ```
 
-Concrete ladders:
+Concrete ladders (signal → equipment → capability → process → intent → facility):
 
 ```
- Power Meter  →  Electric Arc Furnace  →  Flexible Load  →  Steel Melting  →  Steel Plant
- Battery PCS  →  Battery               →  Energy Storage →  Peak Shaving   →  Hybrid Solar Facility
+ Power Meter → Electric Arc Furnace → Flexible Load  → Steel Melting     → Min Cost     → Steel Plant
+ Battery PCS → Battery              → Energy Storage → Energy Time-Shift → Peak Shaving → Hybrid Solar Facility
 ```
 
 The **Facility Understanding Engine** climbs this ladder bottom-up (signals → … →
@@ -82,12 +90,13 @@ Upload → Facility Understanding Engine → Industrial Knowledge Graph
 
 - **FUE** parses any file, then grounds raw signals against the IKG to detect
   **equipment** and **capabilities** → `FacilityProfile {equipment[], capabilities[],
-  processes[], signal→canonical map, confidence, unknowns[]}`.
+  processes[], intent, signal→canonical map, confidence, unknowns[]}`.
 - **IKG** is the knowledge substrate (assembled from packs) both the FUE and Composer read.
 - **Composer** turns the profile into the graph CIM (Equipment → Capabilities → Processes
-  → Facility), property-driven.
+  → **Intent** → Facility), property-driven. Intent selects/parameterizes constraints and
+  shapes `to_wire()`; it never reaches the engine.
 - **CIM.to_wire()** flattens the graph to the frozen `AssetSpecs + time_series`. The engine
-  never learns the graph exists.
+  never learns the graph — or the intent — exists.
 
 ### 2.3 Capabilities — behavioral vs descriptive
 
@@ -98,7 +107,7 @@ Upload → Facility Understanding Engine → Industrial Knowledge Graph
 
 Behavioral capabilities → CIM assets (multiple ⇒ F2). Descriptive capabilities colour them.
 
-### 2.4 Knowledge Packs — seven single-tier kinds
+### 2.4 Knowledge Packs — eight single-tier kinds
 
 Every pack has a `kind` and describes exactly one ontology concern. Packs **reference**
 other concepts by id; they never inline another tier (no mixing).
@@ -111,6 +120,7 @@ other concepts by id; they never inline another tier (no mixing).
 | `capability` | Capability | behavioral/descriptive; `class`, `archetype`, contributions | kpi, constraint, units |
 | `equipment` | Equipment | an equipment class; terminology, the signal headers it is known by (`column_aliases`), `exhibits` | capability, kpi, constraint |
 | `process` | Process | a process template; stages + `couplings` | capability, equipment, kpi, constraint |
+| `intent` | Operational Intent | an operational objective; the constraints it generates + the `to_wire` params it shapes | constraint, units |
 | `recognition` | Signal / Facility | how to recognize a concept from raw data — `tier: signal` (header→canonical aliases) or `tier: facility` (signature → label, e.g. "Steel Plant") | — |
 
 > **No `industry` kind exists.** Industry recognition lives in `recognition` packs
@@ -127,13 +137,16 @@ therefore recognition and composition — automatically.
 ### 2.6 The Capability Composer
 
 Generic platform logic (not a pack). Composes **Equipment → Capabilities → Processes →
-Facility**, keying only on declared *properties*:
+Intent → Facility**, keying only on declared *properties*:
 
 1. Each recognized **equipment** → a CIM `Equipment` node; bind its signals to canonical fields.
 2. Its **behavioral** capabilities → a priced `Asset` with that capability's `archetype`.
 3. Its **descriptive** capabilities → merge `adds_constraints / adds_kpis / adds_units / labels`.
 4. Group equipment into **processes** (from `process` packs); the facility is the process set.
-5. ≥2 behavioral capabilities ⇒ ≥2 assets ⇒ **F2 multi-asset**, aggregated.
+5. Apply the facility **Intent**: merge its declared constraints + `to_wire` params onto the
+   assets (property-driven — no `if intent ==`). Default intent per archetype reproduces
+   today's behavior exactly (empty constraints, empty params).
+6. ≥2 behavioral capabilities ⇒ ≥2 assets ⇒ **F2 multi-asset**, aggregated.
 
 `Steel = Electric Arc Furnace + Rolling Mill + Flexible Load + Thermal` — assembled from
 those packs, never from a `steel` unit.
@@ -143,18 +156,30 @@ those packs, never from a `steel` unit.
 The CIM is a **graph**, not a flat spec:
 
 ```
-Facility
+Facility  (intent: Intent)
  └── Process[]
       └── Equipment[]
            ├── signals:      { canonical_field → source column }
-           ├── constraints:  [Constraint]
-           └── capabilities: [Capability]   # behavioral ⇒ a priced asset
+           ├── constraints:  [Constraint]     (from descriptive caps + intent)
+           └── capabilities: [Capability]     # behavioral ⇒ a priced asset
 ```
 
-`CIM.to_wire()` is the **sole** adapter to the frozen engine: it walks the graph and emits,
-per priced asset, the byte-identical `AssetSpecs + time_series` the engine reads today. For
-BESS the graph is Facility→(1 process)→(1 battery)→{energy_storage} → `to_wire()` = the
-current single spec = **identity**. The engine is unaware the graph exists (Law 1).
+`CIM.to_wire()` is the **sole** adapter to the frozen engine: it walks the graph, applies
+the intent's constraints/params, and emits per priced asset the byte-identical
+`AssetSpecs + time_series` the engine reads today. For BESS the graph is
+Facility(intent: arbitrage)→(1 process)→(1 battery)→{energy_storage} → `to_wire()` = the
+current single spec = **identity**. The engine is unaware the graph or the intent exists (Law 1).
+
+**Intent expressiveness (honest scope).** Intent shapes the audit ONLY through constraints +
+`to_wire` parameter reshaping — never the engine's objective function:
+- **I1 (in scope):** intents expressible as bounds / availability caps / reserve margins /
+  production targets / effective-price reshaping — e.g. CO₂ = carbon-adjusted price;
+  Maintenance = capped `p_max`; Reserve = withheld capacity; Demand Response / Max Throughput
+  = load-shift targets; Arbitrage / Min Cost = the archetype defaults. The engine solves its
+  SAME objective on reshaped inputs.
+- **I2 (out of scope — future engine RFC):** intents requiring a DIFFERENT objective function
+  (e.g. true demand-charge co-optimization). The Composer *surfaces* them; it does not solve
+  them — that would touch the engine and break Law 1.
 
 ### 2.8 Directory layout
 
@@ -170,7 +195,8 @@ app/knowledge/                    # foundation leaf (rank 1) — imports nothing
     capability/    energy_storage.yaml · flexible_load.yaml · dispatchable_generation.yaml
                    intermittent_generation.yaml · thermal.yaml · continuous_process.yaml …
     equipment/     battery.yaml · electric_arc_furnace.yaml · rolling_mill.yaml · kiln.yaml …
-    process/       steel_melting.yaml · peak_shaving.yaml …
+    process/       steel_melting.yaml · energy_time_shift.yaml …
+    intent/        arbitrage.yaml · peak_shaving.yaml · reserve.yaml · co2_reduction.yaml · maintenance.yaml …
     recognition/   legacy_signal_aliases.yaml (tier: signal) ; steel.yaml (tier: facility, S4)
 services/facility/                # Facility Understanding Engine (S3)
   understanding.py · fingerprints.py
@@ -200,7 +226,7 @@ Engine / CIM contract / Mission Control change in none of these cases.
 |-------|-------------|---------|--------|--------|
 | **S1** | `app/knowledge/` + registry + byte-identical alias extraction | no | identical | ✅ deployed (3801073) |
 | **S1′** | **Ontology reconciliation:** per-kind `PackSchema` (7 kinds); recast the shipped pack into a `capability: energy_storage` pack + a `recognition: legacy_signal_aliases` (tier signal) carrying the alias bundle verbatim; registry merges signal aliases. **Byte-identical** — identity SHAs unchanged | no | **identical** | **THIS TURN** |
-| **S2** | `domain/canonical/` graph CIM + Composer + `to_wire()`; BESS graph → identity on the golden fixture | no | identical | next |
+| **S2** | `domain/canonical/` graph CIM (Facility⊃Process⊃Equipment, +Intent) + Composer + `to_wire()`; `intent` pack kind + default `arbitrage`; BESS graph (intent: arbitrage) → `to_wire()` identity on a golden fixture | no | identical | **THIS TURN** |
 | **S3** | `services/facility/` FUE + `graph.py` IKG; `/audit/inspect` returns FacilityProfile (additive) | no | unchanged | |
 | **S4** | Author equipment/capability/process/kpi/constraint/units packs + `recognition tier:facility` labels (steel, cement, …) + per-industry baselines | no | new baselines | |
 | **S5** | Auto-Mapping UX ("Detected: Steel Plant 94% · review") + profile labels | no | FE snapshot | |
