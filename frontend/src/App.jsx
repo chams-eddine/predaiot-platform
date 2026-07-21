@@ -2120,7 +2120,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                 Live SCADA/EMS streaming · Batch file audit · EDPC Certification — all on one asset-agnostic engine.
               </div>
               <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
-                <BtnOutline color={DS.cyan} onClick={runDemo} disabled={loading}>
+                <BtnOutline color={DS.cyan} onClick={() => runDemo()} disabled={loading}>
                   {loading ? 'OPTIMIZING…' : 'RUN DEMO AUDIT'}
                 </BtnOutline>
                 <BtnOutline color={DS.optimal} onClick={() => setShowUpload(true)}>
@@ -2133,9 +2133,27 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   SEE THE MATH
                 </BtnOutline>
               </div>
-              <div style={{ color: DS.dim, fontSize: 10, marginTop: 24 }}>
-                Don&rsquo;t have data handy? RUN DEMO opens the certified reference audit &mdash; a synthetic
-                500&nbsp;MW BESS day computed by the live engine. Instant, no sign-up.
+              {/* Ontology demo selector — SAME engine + SAME frontend, different
+                  facility. Each fixture carries its own facility_profile; the UI
+                  adapts with no code change (Phase 5 acid test). */}
+              <div style={{ marginTop: 22 }}>
+                <div style={{ color: DS.dim, fontSize: 10, letterSpacing: '0.16em', marginBottom: 10 }}>
+                  OR EXPLORE A LIVE DEMO — SAME ENGINE, DIFFERENT FACILITY
+                </div>
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+                  {[['', 'Battery Storage'], ['steel', 'Steel Plant'], ['solar', 'Solar Farm']].map(([fx, lbl]) => (
+                    <button key={lbl} onClick={() => runDemo(fx)} disabled={loading}
+                      style={{ background: 'var(--pdm-panel)', border: `1px solid ${DS.border}`,
+                               color: DS.text, borderRadius: 999, padding: '7px 16px',
+                               cursor: loading ? 'default' : 'pointer', fontSize: 12, fontWeight: 600 }}>
+                      {lbl}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ color: DS.dim, fontSize: 10, marginTop: 20 }}>
+                Same certified engine, same interface — the platform recognizes each facility and adapts
+                its twin, terminology and report automatically. Instant, no sign-up.
               </div>
             </div>
           )}

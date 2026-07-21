@@ -1,0 +1,10 @@
+# PREDAIOT Knowledge Pack — capability (behavioral -> intermittent archetype).
+# Generation driven by an exogenous resource (irradiance/wind); the only economic
+# decision is curtailment. Solar/wind/run-of-river map here.
+id: intermittent_generation
+kind: capability
+class: behavioral
+archetype: intermittent
+signals: [actual_discharge, curtailment_mw]
+kpis: [capacity_factor, curtailment_ratio]
+constraints: [curtailment_limit]

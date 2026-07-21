@@ -1,0 +1,12 @@
+# PREDAIOT Knowledge Pack — Industrial Evidence Pattern (Level 2).
+# Generation + curtailment WITHOUT state-of-charge implies intermittent generation
+# (solar/wind), distinguishing it from storage. The `soc absent` predicate is the
+# discriminator; min_match 1.0 so a battery (which HAS soc) never matches here.
+id: solar_pv
+kind: pattern
+predicates:
+  - { fact: actual_discharge, op: present }
+  - { fact: curtailment_mw,   op: present }
+  - { fact: soc,              op: absent }
+implies:
+  - { concept: intermittent_generation, concept_kind: capability, min_match: 1.0, confidence: 0.88 }

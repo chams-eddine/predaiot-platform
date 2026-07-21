@@ -88,8 +88,8 @@ class Predicate(BaseModel):
     """One condition over a Level-1 Fact."""
     model_config = ConfigDict(extra="forbid")
     fact: str
-    op: Literal["gt", "ge", "lt", "le", "eq", "present"]
-    value: Any = None                        # unused for op == present
+    op: Literal["gt", "ge", "lt", "le", "eq", "present", "absent"]
+    value: Any = None                        # unused for op == present/absent
     weight: float = 1.0
 
 

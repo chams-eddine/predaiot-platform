@@ -47,6 +47,8 @@ def extract_facts(signal_map: Dict[str, str], specs: Dict[str, Any],
 
 def _match_predicate(pred, facts: Dict[str, Fact]) -> bool:
     f = facts.get(pred.fact)
+    if pred.op == "absent":
+        return f is None or not f.present
     if f is None or not f.present:
         return False
     if pred.op == "present":
