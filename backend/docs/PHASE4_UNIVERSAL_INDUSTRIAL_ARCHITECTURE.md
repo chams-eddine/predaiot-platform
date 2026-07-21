@@ -1,296 +1,232 @@
-# PREDAIOT Phase 4 — Universal Industrial Platform (Architecture RFC · rev 2)
+# PREDAIOT Phase 4 — Universal Industrial Platform (Architecture RFC · rev 3)
 
-**Status:** PROPOSED — no code beyond S1 (already shipped). Approval gate before S2.
-**Rev 2 (2026-07-21):** refined from *industry packs* to **facility-first capability
-composition** — the platform understands **facilities, not industries**. Industries
-become compositions of reusable capabilities, never `steel.yaml`.
-**Rule of law:** engine FROZEN · no `if industry ==` · **no `if capability ==`** ·
-packs are DATA (no logic) · golden tests byte-identical.
+**Status:** APPROVED direction. S1 shipped. S1′ authorized (byte-identical). Gate before S2.
+**Rev 3 (2026-07-21):** adds the **Industrial Ontology Layer** — the platform models a
+strict abstraction ladder *Signal → Equipment → Capability → Process → Facility*.
+Industries are **emergent classifications**, never implementation units.
+**Rev 2:** facility-first capability composition (packs are knowledge sources, not industries).
 
----
-
-## 0. Executive finding + the rev-2 principle
-
-The backend inspection proved the engine does **not** assume BESS mathematically —
-it routes on **physics archetype** (`_dispatch_mode → {storage | intermittent |
-dispatchable | load}`, `optimization_service.py:22-38`), with no industry branch,
-and the economic-findings domain is already asset-agnostic. Universalization is a
-**recognition + composition + mapping** problem, never an engine problem.
-
-**Rev-2 principle — understand facilities, not industries.** A real facility is not
-a member of a taxonomy; it is a *bundle of what it does*. A steel plant that also
-runs on-site solar and a battery is not "steel" — it is:
-
-```
-Steel Plant  =  Continuous Process  +  Thermal  +  Flexible Load  +  Dispatchable  (+ on-site PV + Storage)
-```
-
-So the platform recognizes **capabilities** and **equipment** from the data, and a
-facility *emerges* as their composition. "Industry" is only a **name we recognize
-for a common composition** — a label, never a behavior. This is strictly more
-powerful than per-industry packs: it handles hybrids, multi-process sites, and
-industries that do not exist yet, with the same primitives.
+### The Laws (inviolable, CI-enforced)
+1. **Immutable Engine.** The Economic Engine is frozen infrastructure. **Nothing outside
+   `CIM.to_wire()` may ever require a change inside the optimization engine.** If a future
+   industry needs engine code changed, *the architecture has failed*.
+2. **No name branching.** No `if industry ==`. No `if capability ==`. Control flow keys on
+   physics archetypes (engine) and declared properties (composer) — never on names.
+3. **One tier per pack.** Every Knowledge Pack describes exactly one ontology tier. Packs
+   are DATA (YAML, no logic).
+4. **Byte-identical.** The golden fingerprint and the `test_knowledge_pack_identity` SHAs
+   never move without an explicit, reviewed baseline change.
 
 ---
 
-## 1. BESS-assumption inventory (from rev 1 — still valid, condensed)
+## 0. Executive finding + governing principle
 
-The engine + economic domain are already universal; residual BESS-ness is:
-**vocabulary** (canonical field names `discharge/charge/soc/curtailment_mw`),
-**defaults** (`asset_type→storage`, BESS-sized numerics), **a monolithic alias
-table** (now extracted — §3 S1), **a 5-min heat-map label**, **no facility
-recognition**, and **a single-asset data model** (the one structural item, resolved
-by composition → F2). None requires editing the engine or the wire schema. Full
-table in git history of this file (rev 1).
+The engine already routes on **physics archetype** (`_dispatch_mode →
+{storage|intermittent|dispatchable|load}`), never industry — universalization is a
+recognition + composition problem, not an engine problem. Rev 2 made it *facility-first*;
+rev 3 makes the facility a **composition over a formal ontology**:
+
+> PREDAIOT is not a steel/cement analyzer. It is an **economic operating system for
+> industrial facilities**: discover a facility's equipment, capabilities, processes and
+> constraints from its data, then automatically compose a canonical economic model the
+> frozen engine can price. "Steel", "Cement" are labels for recurring compositions.
 
 ---
 
-## 2. Architecture — Facility-First, Capability-Composed
+## 1. BESS-assumption inventory (rev 1, still valid — condensed)
 
-### 2.1 The pipeline (your six stages, made precise)
+Engine + economic domain already universal. Residual BESS-ness = canonical field
+*vocabulary*, BESS-sized *defaults*, the *alias monolith* (extracted, S1), a 5-min
+heat-map label, *no facility recognition*, and a *single-asset data model* (resolved by
+the graph CIM + composition → F2). None touches the engine or wire schema. (Full table in
+git history rev 1.)
+
+---
+
+## 2. Architecture
+
+### 2.1 The Industrial Ontology (the new spine)
+
+Five tiers. Each is a distinct level of abstraction; they must never be conflated.
 
 ```
-   Upload
-     │        any file (csv/xlsx/scada/historian/erp/mes)
-     ▼
- ┌─────────────────────────────┐
- │ 1. Facility Understanding   │  parse + interpret signals; ground them against
- │    Engine (FUE)             │  the graph → detect EQUIPMENT + CAPABILITIES
- └─────────────┬───────────────┘  → FacilityProfile {equipment[], capabilities[],
-     │  queries │                     signal→canonical map, confidence, unknowns[]}
-     ▼          ▼
- ┌─────────────────────────────┐
- │ 2. Industrial Knowledge     │  the shared substrate, ASSEMBLED FROM PACKS:
- │    Graph (IKG)              │  Capability ↔ Equipment ↔ KPI ↔ Unit ↔ Signal ↔
- └─────────────┬───────────────┘  Constraint ↔ ProcessTemplate. Read by FUE + Composer.
-     │
-     ▼
- ┌─────────────────────────────┐
- │ 3. Capability Composer      │  GENERIC, property-driven: turns the detected
- │                             │  capabilities into a coherent facility model.
- └─────────────┬───────────────┘  Behavioral caps → assets (with archetypes);
-     │                              descriptive caps → constraints/KPIs/units/labels.
-     ▼
- ┌─────────────────────────────┐
- │ 4. Canonical Industrial     │  Asset[] · Process[] · Energy · Production ·
- │    Model (CIM)             │  Constraints · Economics · Decisions.
- └─────────────┬───────────────┘  CIM.to_wire() → the FROZEN AssetSpecs+time_series.
-     ▼
- ┌─────────────────────────────┐
- │ 5. Economic Engine (FROZEN) │  run_optimizer + economics.*  (never sees a
- └─────────────┬───────────────┘   facility, capability, or industry)
-     ▼
-        AuditResponse ──► Mission Control (labels resolved from the profile)
+  RAW SIGNALS      what the file literally contains (columns, sensors, tags, units)
+       ▲ abstracts to
+  EQUIPMENT        physical devices that emit those signals
+       ▲ exhibits
+  CAPABILITIES     what an equipment can do economically (a dispatch behavior or a modifier)
+       ▲ enable
+  PROCESSES        the industrial activity the equipment/capabilities serve
+       ▲ compose
+  FACILITY         the whole site
 ```
 
-The IKG is not a sequential transform so much as the **knowledge substrate** the
-FUE consults to *understand* and the Composer consults to *compose*. Both are
-generated from Knowledge Packs, so extending knowledge extends both at once.
+Concrete ladders:
 
-### 2.2 Capabilities — the reusable unit of industrial behavior
+```
+ Power Meter  →  Electric Arc Furnace  →  Flexible Load  →  Steel Melting  →  Steel Plant
+ Battery PCS  →  Battery               →  Energy Storage →  Peak Shaving   →  Hybrid Solar Facility
+```
 
-A **Capability** is a reusable, industry-independent unit of what a facility does.
-Two classes — the distinction is load-bearing:
+The **Facility Understanding Engine** climbs this ladder bottom-up (signals → … →
+facility). The **Capability Composer** builds the model top-down (facility ⊃ processes ⊃
+equipment ⊃ {signals, constraints, capabilities}). "Steel Plant" and "Hybrid Solar
+Facility" are the *emergent* top of each ladder — recognized, never hardcoded.
+
+### 2.2 The pipeline
+
+```
+Upload → Facility Understanding Engine → Industrial Knowledge Graph
+       → Capability Composer → Canonical Industrial Model → (FROZEN) Economic Engine
+```
+
+- **FUE** parses any file, then grounds raw signals against the IKG to detect
+  **equipment** and **capabilities** → `FacilityProfile {equipment[], capabilities[],
+  processes[], signal→canonical map, confidence, unknowns[]}`.
+- **IKG** is the knowledge substrate (assembled from packs) both the FUE and Composer read.
+- **Composer** turns the profile into the graph CIM (Equipment → Capabilities → Processes
+  → Facility), property-driven.
+- **CIM.to_wire()** flattens the graph to the frozen `AssetSpecs + time_series`. The engine
+  never learns the graph exists.
+
+### 2.3 Capabilities — behavioral vs descriptive
 
 | Class | Meaning | Maps to | Examples |
 |-------|---------|---------|----------|
-| **Behavioral** | *how an asset decides* — implies a dispatch archetype | one engine archetype | `energy_storage`→storage · `flexible_load`→load · `dispatchable_generation`→dispatchable · `intermittent_generation`→intermittent |
-| **Descriptive** | *what kind of process* — adds constraints / KPIs / units / labels, **no dispatch behavior** | archetype = null | `continuous_process` · `batch_process` · `thermal` · `electrochemical` · `cogeneration` |
+| **Behavioral** | *how an asset decides* | one engine archetype | `energy_storage`→storage · `flexible_load`→load · `dispatchable_generation`→dispatchable · `intermittent_generation`→intermittent |
+| **Descriptive** | *what kind of process* — adds constraints/KPIs/units/labels | archetype = null | `continuous_process` · `batch_process` · `thermal` · `electrochemical` · `cogeneration` |
 
-A facility's **behavioral** capabilities determine its asset decomposition and
-archetypes (→ possibly multi-asset, F2). Its **descriptive** capabilities enrich
-the CIM (thermal ramp constraints, kWh/ton KPIs, °C units, UI labels). This is why
-`Steel = Continuous + Thermal + Flexible Load (+ Dispatchable)` works: two
-descriptive modifiers colour a `load`-archetype asset (plus a `dispatchable` asset
-if on-site generation is present).
+Behavioral capabilities → CIM assets (multiple ⇒ F2). Descriptive capabilities colour them.
 
-### 2.3 Knowledge Packs, redefined — knowledge SOURCES, never industries
+### 2.4 Knowledge Packs — seven single-tier kinds
 
-A pack describes **one reusable thing**. It has a `kind`; it is pure YAML data,
-validated by a per-kind schema; it contains no logic and no industry.
+Every pack has a `kind` and describes exactly one ontology concern. Packs **reference**
+other concepts by id; they never inline another tier (no mixing).
 
-| Pack `kind` | Describes | Key fields |
-|-------------|-----------|-----------|
-| `capability` | a behavioral or descriptive capability | `class`, `archetype` (or null), `signals`, `column_aliases`, `kpis`, `constraints`, `adds_units` |
-| `equipment` | an equipment class | `exhibits: [capability…]`, `terminology`, `column_aliases`, `kpis`, `recognition` |
-| `units` | an engineering unit system + conversions | `units`, `conversions` |
-| `process_template` | a reusable process pattern | `stages`, `couplings` |
-| `constraint` | a constraint family | `parameters`, `applies_to` |
-| `composition` | **a named, recognizable bundle** ("Steel Plant") — **label + recognition only, ZERO behavior** | `display_name`, `typical_capabilities`, `typical_equipment` |
+| `kind` | Tier | Describes | References |
+|--------|------|-----------|-----------|
+| `units` | — | engineering units + conversions | — |
+| `kpi` | — | one KPI (name, formula, unit) | units |
+| `constraint` | — | one constraint family (params) | units |
+| `capability` | Capability | behavioral/descriptive; `class`, `archetype`, contributions | kpi, constraint, units |
+| `equipment` | Equipment | an equipment class; terminology, the signal headers it is known by (`column_aliases`), `exhibits` | capability, kpi, constraint |
+| `process` | Process | a process template; stages + `couplings` | capability, equipment, kpi, constraint |
+| `recognition` | Signal / Facility | how to recognize a concept from raw data — `tier: signal` (header→canonical aliases) or `tier: facility` (signature → label, e.g. "Steel Plant") | — |
 
-> **There is no `industry` pack kind.** "Steel" exists only as an optional
-> `composition` used to *label* and *boost recognition confidence* — the platform
-> audits the facility correctly even if no such composition exists.
+> **No `industry` kind exists.** Industry recognition lives in `recognition` packs
+> (`tier: facility`) as *labels + confidence*, carrying zero behavior.
 
-### 2.4 The Capability Composer — the second law of non-coupling
+### 2.5 The Industrial Knowledge Graph
 
-The Composer is **generic platform logic** (allowed to have logic; it is not a
-pack). Its inviolable rule mirrors "no `if industry ==`":
+Assembled at startup from packs (`knowledge/graph.py`). Nodes: Signal · Equipment ·
+Capability · Process · Facility-pattern · KPI · Unit · Constraint. Edges: *emits*,
+*exhibits*, *enables*, *composes*, *constrains*, *measured-by*. The FUE walks it upward to
+understand; the Composer walks it downward to compose. New packs extend the graph — and
+therefore recognition and composition — automatically.
 
-> **The Composer branches on capability PROPERTIES declared in pack data, never on
-> capability or industry NAMES.** No `if capability.id == "thermal"`. It reads
-> `capability.class`, `capability.archetype`, `capability.adds_constraints`, etc.
+### 2.6 The Capability Composer
 
-Algorithm (uniform for every facility, present and future):
-1. For each **behavioral** capability in the profile → instantiate a CIM `Asset`
-   with `capability.archetype`; bind its signals to the canonical action series.
-2. For each **descriptive** capability → merge its `adds_constraints / adds_kpis /
-   adds_units / labels` into the asset(s) it applies to.
-3. ≥2 behavioral capabilities → ≥2 CIM assets → **F2 multi-asset** audit, aggregated.
-4. `CIM.to_wire()` emits the byte-identical `AssetSpecs + time_series` per asset.
+Generic platform logic (not a pack). Composes **Equipment → Capabilities → Processes →
+Facility**, keying only on declared *properties*:
 
-**Three Laws of Non-Coupling** (all CI-enforced by `arch_graph` + schema):
-- **Engine** sees only archetypes.
-- **Composer** sees only capability *properties*.
-- **Packs** are data — no logic at all.
-Nobody, at any layer, branches on an industry or capability *name*.
+1. Each recognized **equipment** → a CIM `Equipment` node; bind its signals to canonical fields.
+2. Its **behavioral** capabilities → a priced `Asset` with that capability's `archetype`.
+3. Its **descriptive** capabilities → merge `adds_constraints / adds_kpis / adds_units / labels`.
+4. Group equipment into **processes** (from `process` packs); the facility is the process set.
+5. ≥2 behavioral capabilities ⇒ ≥2 assets ⇒ **F2 multi-asset**, aggregated.
 
-### 2.5 Worked example — Steel Plant, bottom-up
+`Steel = Electric Arc Furnace + Rolling Mill + Flexible Load + Thermal` — assembled from
+those packs, never from a `steel` unit.
+
+### 2.7 Canonical Industrial Model — graph-based
+
+The CIM is a **graph**, not a flat spec:
 
 ```
-upload (EAF_Power_kW, Tons_Produced, Energy_Price, PV_Output_MW, BESS_SOC…)
-  FUE grounds signals via IKG →
-    equipment:    electric_arc_furnace, rolling_mill, solar_array, battery
-    capabilities: {flexible_load(behavioral,load), thermal(desc),
-                   continuous_process(desc), intermittent_generation(behavioral,
-                   intermittent), energy_storage(behavioral,storage)}
-    → recognized composition "Steel Plant" @ 0.94 (label only)
-  Composer →
-    Asset A (load)         ← EAF+mill flexible load, +thermal/continuous constraints+KPIs
-    Asset B (intermittent) ← PV
-    Asset C (storage)      ← battery
-  to_wire → 3 frozen audits → aggregated (F2)
-  Mission Control → labels "Furnace Power", "kWh/ton", hides SoC on A, shows it on C
+Facility
+ └── Process[]
+      └── Equipment[]
+           ├── signals:      { canonical_field → source column }
+           ├── constraints:  [Constraint]
+           └── capabilities: [Capability]   # behavioral ⇒ a priced asset
 ```
 
-No `steel.yaml` decides any of this. Change the facility (drop the PV) and the
-model changes automatically — because it was never "steel," it was a composition.
+`CIM.to_wire()` is the **sole** adapter to the frozen engine: it walks the graph and emits,
+per priced asset, the byte-identical `AssetSpecs + time_series` the engine reads today. For
+BESS the graph is Facility→(1 process)→(1 battery)→{energy_storage} → `to_wire()` = the
+current single spec = **identity**. The engine is unaware the graph exists (Law 1).
 
-### 2.6 Module boundaries + directory layout (revised)
+### 2.8 Directory layout
 
 ```
-app/knowledge/                 # foundation leaf (rank 1) — imports nothing app-side
-  schema.py                    # per-KIND pack schemas (capability/equipment/units/…)
-  registry.py                  # discover + validate packs
-  graph.py                     # build the Industrial Knowledge Graph from packs (NEW)
+app/knowledge/                    # foundation leaf (rank 1) — imports nothing app-side
+  schema.py                       # per-kind pydantic pack schemas (discriminated on `kind`)
+  registry.py                     # discover + validate packs; merge signal aliases
+  graph.py                        # build the Industrial Knowledge Graph (S2/S3)
   packs/
-    capabilities/  energy_storage.yaml · flexible_load.yaml · dispatchable_generation.yaml
-                   intermittent_generation.yaml · continuous_process.yaml · thermal.yaml · …
-    equipment/     battery.yaml · electric_arc_furnace.yaml · rolling_mill.yaml · kiln.yaml · …
     units/         energy.yaml · mass.yaml
-    process_templates/  melt_cast_roll.yaml
-    compositions/  steel.yaml · cement.yaml   # recognition labels only (no behavior)
-services/facility/             # Facility Understanding Engine (NEW)
-  understanding.py             # parse (via ingestion) + recognize (via graph) → FacilityProfile
-  fingerprints.py
-domain/canonical/              # (NEW) — depends only on schemas + knowledge
-  model.py                     # CIM dataclasses
-  composer.py                  # Capability Composer (generic, property-driven)
-  to_wire.py                   # CIM → frozen AssetSpecs/time_series
+    kpi/           kwh_per_ton.yaml · round_trip_efficiency.yaml
+    constraint/    demand_charge.yaml · thermal_ramp.yaml · soc_limits.yaml
+    capability/    energy_storage.yaml · flexible_load.yaml · dispatchable_generation.yaml
+                   intermittent_generation.yaml · thermal.yaml · continuous_process.yaml …
+    equipment/     battery.yaml · electric_arc_furnace.yaml · rolling_mill.yaml · kiln.yaml …
+    process/       steel_melting.yaml · peak_shaving.yaml …
+    recognition/   legacy_signal_aliases.yaml (tier: signal) ; steel.yaml (tier: facility, S4)
+services/facility/                # Facility Understanding Engine (S3)
+  understanding.py · fingerprints.py
+domain/canonical/                 # graph CIM + composer + adapter (S2)
+  model.py · composer.py · to_wire.py
 ```
 
-Dependency law (extends `arch_graph`): `knowledge` imports nothing but stdlib +
-yaml + itself. Engine imports nothing from `knowledge / facility / canonical`.
-`domain/canonical` may read capability *properties* from `knowledge` (data), never
-the engine. CI fails on any violation.
+### 2.9 Faithfulness scope (unchanged)
 
-### 2.7 Faithfulness scope (unchanged, re-expressed through composition)
+F1 single-asset · **F2 multi-asset = the native Composer output** · **F3** cross-process
+co-optimization (`process.couplings`) is **out of scope** — it changes the optimization
+problem and would touch the engine (Law 1). The Composer *surfaces* couplings; it does not
+co-optimize across them in Phase 4.
 
-- **F1** — a facility with one behavioral capability (or aggregated whole-site
-  load) → single-asset audit. **No engine change. Ship.**
-- **F2** — multiple behavioral capabilities → multiple assets, aggregated. This is
-  now the *native* output of the Composer. **No engine change.**
-- **F3** — cross-process co-optimization (inventory/buffer coupling *between*
-  stages, e.g. `process_template.couplings`). **Requires new engine capability →
-  out of scope**, a future engine RFC. The Composer will detect and *surface*
-  couplings but will not co-optimize across them in Phase 4.
+### 2.10 Future-proof / long-term vision
 
-### 2.8 Future-proof (stronger under composition)
-
-A 2035 industry needs **no new pack at all** if its capabilities already exist —
-it is simply a new composition the FUE recognizes. If it introduces genuinely new
-industrial *behavior*, that is a new **capability pack** (still pure data). Only a
-fundamentally new *physics* (a 5th archetype) touches the engine — the rare,
-RFC-gated event. Engine / CIM / Mission Control change in none of these cases.
+A 2035 facility needs **no new pack** if its equipment/capabilities exist — it is a new
+composition the FUE recognizes. Genuinely new behavior = a new **capability** pack (data).
+Only new *physics* (a 5th archetype) touches the engine — the rare, RFC-gated event.
+Engine / CIM contract / Mission Control change in none of these cases.
 
 ---
 
-## 3. Migration roadmap (revised — incl. reconciling the shipped S1)
+## 3. Migration roadmap
 
 | Stage | Deliverable | Engine? | Golden | Status |
 |-------|-------------|---------|--------|--------|
-| **S1** | `app/knowledge/` + registry + byte-identical alias extraction | no | byte-identical | ✅ done + deployed (3801073) |
-| **S1′** | **Reconcile to facility-first:** per-`kind` PackSchema; recast the shipped `bess` pack as a **`capability: energy_storage`** pack still carrying the legacy alias bundle verbatim (rename, not re-order → byte-identical); `graph.py` assembles the IKG | no | **byte-identical** (same merged aliases; identity test still passes) | **next** |
-| **S2** | `domain/canonical/` CIM + Composer + `to_wire()`. BESS = one `energy_storage` behavioral cap → one storage asset → `to_wire()` identity on the golden fixture | no | byte-identical | after S1′ |
-| **S3** | `services/facility/` FUE + IKG recognition; `/audit/inspect` returns FacilityProfile {equipment, capabilities, composition-label, confidence, candidate_mappings, unknowns} (additive) | no | unchanged | |
-| **S4** | Author capability + equipment packs (thermal, flexible_load, continuous_process, EAF, kiln, electrolyzer, …) + composition labels (steel, cement, aluminium, chemical, water, food) + per-industry fixtures/baselines | no | new baselines | |
-| **S5** | Auto-Mapping UX in Mission Control ("Detected: Steel Plant 94% · review mapping") + profile-driven labels | no | FE snapshot | |
-| **S6** | F2 multi-asset composition wired end-to-end | no | new | |
+| **S1** | `app/knowledge/` + registry + byte-identical alias extraction | no | identical | ✅ deployed (3801073) |
+| **S1′** | **Ontology reconciliation:** per-kind `PackSchema` (7 kinds); recast the shipped pack into a `capability: energy_storage` pack + a `recognition: legacy_signal_aliases` (tier signal) carrying the alias bundle verbatim; registry merges signal aliases. **Byte-identical** — identity SHAs unchanged | no | **identical** | **THIS TURN** |
+| **S2** | `domain/canonical/` graph CIM + Composer + `to_wire()`; BESS graph → identity on the golden fixture | no | identical | next |
+| **S3** | `services/facility/` FUE + `graph.py` IKG; `/audit/inspect` returns FacilityProfile (additive) | no | unchanged | |
+| **S4** | Author equipment/capability/process/kpi/constraint/units packs + `recognition tier:facility` labels (steel, cement, …) + per-industry baselines | no | new baselines | |
+| **S5** | Auto-Mapping UX ("Detected: Steel Plant 94% · review") + profile labels | no | FE snapshot | |
+| **S6** | F2 multi-asset composition end-to-end | no | new | |
 
-**S1′ is the immediate next step** (it reflects this refinement in code) and is
-byte-identical — the `test_knowledge_pack_identity` SHAs must not move.
+Composition/facility-recognition packs remain **deferred to S4**.
 
 ---
 
-## 4. Risk analysis (updated)
+## 4. Risk · 5. Back-compat · 6. Performance · 7. Testing (deltas from rev 2)
 
-| Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|-----------|
-| Golden drift in S1′/S2 | Med | **Critical** | Same SHAs frozen; `to_wire()` identity on the golden fixture; `smoke_golden` + identity test gate |
-| **Recognition ambiguity** (compositional recognition is harder than a flat industry lookup) | **High** | Med | Recognition is advisory + confidence-scored + human-confirmed; the audit runs on detected *capabilities* even if the composition label is wrong/absent |
-| Composer grows industry-specific branches (the new forbidden thing) | Med | High | "No `if capability ==`" law; Composer reads only declared properties; code review + a lint/arch test |
-| A pack carries logic | Med | High | per-kind pydantic schemas (`extra=forbid`); YAML can't import |
-| Over-decomposition (too many tiny assets) | Med | Med | Composer aggregates by default; multi-asset only when behavioral caps genuinely differ |
-| F1/F2 mistaken for F3 | High | Med | Scoped in §2.7; couplings surfaced, not co-optimized |
+- **Risk:** ontology mis-tiering (a KPI inlined into equipment) → the per-kind schema
+  (`extra=forbid`) rejects it; reference-by-id is validated by the graph builder.
+  Recognition ambiguity stays advisory + confidence + human-confirm.
+- **Back-compat:** wire frozen; `energy_storage`+`legacy_signal_aliases` reproduce the S1
+  merged tables exactly → BESS byte-identical through S1′/S2.
+- **Performance:** packs + graph built once at startup; unchanged hot path.
+- **Testing:** `test_knowledge_pack_identity` SHAs unchanged (the S1′ gate); + a schema test
+  that every pack validates against exactly one kind; + (S2) `to_wire(compose(BESS))` ==
+  legacy wire on the golden fixture; + an arch test that engine/composer contain no
+  industry/capability *name* literals in control flow (Law 2).
 
-## 5. Backward-compatibility
+## 8. Assessment
 
-Wire contract frozen; all additions optional. BESS path stays byte-identical
-through S1′/S2 (`energy_storage` cap → storage asset → identity `to_wire()`).
-`/audit/inspect` gains fields only. Mission Control labels default to today's
-strings when a profile omits them. Certificates unaffected (same canonical bytes).
-
-## 6. Performance
-
-Packs + IKG built once at startup (O(#packs)). Recognition is O(#signals ×
-#graph-nodes) once per upload. Composer builds the CIM once per audit. `to_wire()`
-is a copy. The MILP solve remains the only cost center; its 45 s cap is untouched.
-Multi-asset (F2) is N independent solves — parallelizable, bounded by N.
-
-## 7. Testing strategy (updated)
-
-- **Invariant:** `test_knowledge_pack_identity` SHAs unchanged through S1′/S2; a
-  `test_bess_composition_identity` asserts `to_wire(compose(BESS profile))` == the
-  legacy wire input on the golden fixture.
-- **Capability tests:** each capability pack ⇒ a fixture asserting the Composer
-  produces the expected asset archetype + merged constraints/KPIs.
-- **Composition tests:** labelled facility fixtures (steel, hybrid steel+PV+BESS)
-  assert detected capabilities + composition label + confidence; adversarial hybrids
-  assert graceful multi-asset decomposition.
-- **Non-coupling tests (architecture):** `arch_graph` — no forbidden edges; a
-  source scan asserts the engine and Composer contain no industry/capability *name*
-  literals in control flow.
-- **Property test:** for any capability set, `to_wire(compose(...))` conforms to
-  `TimeStepData` and runs without a name branch.
-
-## 8. Architect's assessment of the refinement
-
-**This is the right call and it is strictly better.** Per-industry packs are a
-taxonomy that breaks on the first hybrid facility; capability composition models
-what facilities actually *are*, maps 1:1 onto the engine's archetypes, makes F2 the
-natural output, and future-proofs by recombination rather than enumeration.
-
-**The one honest trade-off:** compositional recognition is *harder* than a flat
-"steel.yaml" lookup — the FUE must infer capabilities from signals and may be
-ambiguous on messy real-world exports. Mitigated by: recognition is advisory +
-confidence-scored + human-confirmed, and the audit depends on **capabilities**
-(which are more robustly detectable from signals) rather than the industry label.
-
-**Cost to reconcile the shipped S1:** small and byte-identical — S1′ is a schema
-`kind` model + re-filing the `bess` pack as an `energy_storage` capability pack
-with the same alias bytes. The frozen SHAs do not move.
-
-**Decision needed before S1′:** whether `composition` label packs (steel, cement)
-ship in S1′ scaffolding (empty, for the recognition UX) or are deferred to S4 with
-the real per-industry work. I recommend deferring them to S4 — S1′ stays a pure,
-byte-identical reconciliation.
+The ontology is the right final abstraction: it turns PREDAIOT into an economic OS for
+facilities, makes hybrids (steel + battery + PV + desal) first-class without industry
+logic, and makes Law 1 (immutable engine) structurally enforceable — every future industry
+is absorbed at `CIM.to_wire()` or not at all. Cost to reconcile the shipped S1 is small and
+byte-identical (S1′). Proceeding with S1′ now.

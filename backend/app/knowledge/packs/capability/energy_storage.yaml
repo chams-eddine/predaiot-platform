@@ -1,0 +1,18 @@
+# PREDAIOT Knowledge Pack — capability (behavioral -> storage archetype).
+# Describes the storage capability; references kpi/constraint packs by id
+# (authored in S4). DATA ONLY (knowledge/schema.py CapabilityPack).
+id: energy_storage
+kind: capability
+class: behavioral
+archetype: storage
+signals:
+- actual_discharge
+- actual_charge
+- soc
+kpis:
+- round_trip_efficiency
+- throughput_mwh
+constraints:
+- soc_limits
+- power_limit
+- degradation

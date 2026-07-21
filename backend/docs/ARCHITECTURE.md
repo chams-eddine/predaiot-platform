@@ -37,7 +37,7 @@ graph TD
 | domain | 2 | 462 | domain.economics (451 L) |
 | repositories | 2 | 75 | repositories.security_log (59 L) |
 | core | 9 | 436 | core.dependencies (153 L) |
-| knowledge | 3 | 153 | knowledge.registry (86 L) |
+| knowledge | 3 | 202 | knowledge.schema (109 L) |
 | utils | 2 | 27 | utils.formatting (27 L) |
 | models | 2 | 411 | models.tables (402 L) |
 | schemas | 1 | 266 | schemas (266 L) |

@@ -48,7 +48,16 @@ def test_columns_module_sources_from_registry():
     assert C.ASSET_META_ALIASES == R.merged_asset_meta_aliases()
 
 
-def test_bess_reference_pack_loads_and_is_storage():
+def test_ontology_packs_load_by_kind():
     packs = R.load_packs()
-    assert "bess" in packs
-    assert packs["bess"].archetype == "storage"
+    # Storage capability (behavioral -> storage archetype), the descriptor.
+    assert "energy_storage" in packs
+    es = packs["energy_storage"]
+    assert es.kind == "capability" and es.capability_class == "behavioral"
+    assert es.archetype == "storage"
+    # Signal-tier recognition pack carries the (transitional) alias monolith.
+    assert "legacy_signal_aliases" in packs
+    rec = packs["legacy_signal_aliases"]
+    assert rec.kind == "recognition" and rec.tier == "signal"
+    # No industry-shaped pack remains (facilities, not industries).
+    assert "bess" not in packs

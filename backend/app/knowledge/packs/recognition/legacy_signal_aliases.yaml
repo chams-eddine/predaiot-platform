@@ -1,30 +1,10 @@
-# PREDAIOT Knowledge Pack — BESS (reference / default).
-# Phase 4 S1: carries the FULL current energy-sector alias tables VERBATIM
-# (extracted from app/services/ingestion/columns.py) so column resolution is
-# byte-identical. S4 will split per-industry packs; this stays the storage
-# archetype + default. DATA ONLY — no logic (validated by knowledge/schema.py).
-industry: bess
-display_name: Battery Energy Storage (reference / default pack)
-archetype: storage
-asset_family:
-- battery_energy_storage
-- pumped_hydro
-- thermal_storage
-recognition:
-  strong_signals:
-  - soc
-  - state_of_charge
-  - bess_discharge
-  - charge_mw
-  units_seen:
-  - MW
-  - MWh
-  - '%'
-  keywords:
-  - bess
-  - battery
-  - storage
-  - soc
+# PREDAIOT Knowledge Pack — recognition / tier: signal.
+# S1prime transitional carrier: the FULL header->canonical alias monolith,
+# byte-identical to the S1 tables. S4 redistributes header aliases to their
+# owning equipment packs. DATA ONLY (knowledge/schema.py RecognitionPack).
+id: legacy_signal_aliases
+kind: recognition
+tier: signal
 column_aliases:
   price:
   - price
@@ -343,19 +323,3 @@ asset_meta_aliases:
   - deg_cost
   - degradation_cost
   - wear_cost
-kpis:
-- round_trip_efficiency
-- cycles
-- throughput_mwh
-constraints:
-- soc_limits
-- power_limit
-- degradation
-defaults:
-  p_max: 50.0
-  e_max: 100.0
-  soc_init: 0.2
-  eta_ch: 0.95
-  eta_dis: 0.95
-  deg_cost: 5.0
-labels: {}
