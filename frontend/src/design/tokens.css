@@ -215,6 +215,53 @@
   --pdm-verified-glow: rgba(0, 229, 255, 0.40);
 }
 
+/* ============================================================================
+   MISSION LANGUAGE — semantic alias layer (Phase 3.2 · SPEC-MI)
+   The single, clean vocabulary new Mission components speak. ZERO new values:
+   every --mission-* points at the ONE source — either the --pds-* ANALYSIS layer
+   (calm, for reading) or the --pdm-* LIVE-MOTION layer (high chroma, for movement).
+   This is a NAMING layer over one source, not a third palette, and existing PDS
+   components are untouched (Mission* is a layer, never a replacement).
+   The only genuinely-new token is --mission-grid (the base spacing unit).
+   ============================================================================ */
+:root {
+  /* Surfaces */
+  --mission-bg:        var(--pds-bg-1);
+  --mission-void:      var(--pdm-void);
+  --mission-panel:     var(--pds-panel);
+  --mission-panel-2:   var(--pds-panel-2);
+  --mission-border:    var(--pds-border);
+  --mission-hairline:  var(--pds-hairline);
+  /* Text */
+  --mission-text:      var(--pds-text);
+  --mission-text-2:    var(--pds-text-2);
+  --mission-text-dim:  var(--pds-text-3);
+  /* Economic semantics — analysis (calm) */
+  --mission-accent:    var(--pds-accent);
+  /* Economic semantics — live-motion (high chroma) */
+  --mission-success:   var(--pdm-optimal);
+  --mission-warning:   var(--pdm-warning);
+  --mission-loss:      var(--pdm-leak);
+  --mission-verified:  var(--pdm-verified);
+  /* Glow */
+  --mission-glow-green: var(--pdm-optimal-glow);
+  --mission-glow-red:   var(--pdm-leak-glow);
+  --mission-glow-cyan:  var(--pdm-verified-glow);
+  /* Radius */
+  --mission-radius:     var(--pds-r-lg);
+  --mission-radius-sm:  var(--pds-r-sm);
+  --mission-radius-pill: var(--pds-r-pill);
+  /* Grid (the one new token) + elevation + motion */
+  --mission-grid:       8px;
+  --mission-elevation:  var(--pds-shadow-2);
+  --mission-ease:       var(--pds-ease-out);
+  --mission-dur:        var(--pds-dur);
+  --mission-dur-fast:   var(--pds-dur-fast);
+  /* Typography */
+  --mission-font-mono:  var(--pds-font-mono);
+  --mission-font-sans:  var(--pds-font-sans);
+}
+
 @keyframes pdm-flow { to { stroke-dashoffset: -48; } }
 @keyframes pdm-leak-pulse {
   0%, 100% { opacity: 0.9; r: 4; }
