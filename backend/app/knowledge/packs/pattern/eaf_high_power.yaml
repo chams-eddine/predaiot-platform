@@ -1,0 +1,16 @@
+# PREDAIOT Knowledge Pack — Industrial Evidence Pattern (Level 2).
+# The classic expert signature: a big transformer + 33 kV primary + >20 MW rated
+# power TOGETHER suggest an Electric Arc Furnace. No single fact proves it; the
+# BUNDLE does. Full match ⇒ EAF (0.82). Drop one required fact ⇒ the conclusion
+# downgrades to the more general High Power Furnace (0.54, need more evidence) —
+# it never keeps asserting EAF (Pattern Stability / No Guess Without Evidence).
+id: eaf_high_power
+kind: pattern
+predicates:
+  - { fact: transformer_mva, op: gt, value: 25 }
+  - { fact: voltage_primary, op: eq, value: 33000 }
+  - { fact: rated_power_mw,  op: gt, value: 20 }
+implies:
+  - { concept: electric_arc_furnace, concept_kind: equipment, min_match: 1.0, confidence: 0.82 }
+  - { concept: high_power_furnace,   concept_kind: equipment, min_match: 0.6, confidence: 0.54,
+      needs_more_evidence: true }

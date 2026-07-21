@@ -84,6 +84,33 @@ class ProcessPack(_Base):
     constraints: List[str] = []
 
 
+class Predicate(BaseModel):
+    """One condition over a Level-1 Fact."""
+    model_config = ConfigDict(extra="forbid")
+    fact: str
+    op: Literal["gt", "ge", "lt", "le", "eq", "present"]
+    value: Any = None                        # unused for op == present
+    weight: float = 1.0
+
+
+class Implication(BaseModel):
+    """What a pattern implies at a given match completeness. Most-specific has the
+    highest `min_match`; a partial match falls back to the more general concept."""
+    model_config = ConfigDict(extra="forbid")
+    concept: str
+    concept_kind: Literal["equipment", "capability"] = "equipment"
+    min_match: float = 1.0                   # fraction of predicate weight required
+    confidence: float = 0.5
+    needs_more_evidence: bool = False
+
+
+class PatternPack(_Base):
+    kind: Literal["pattern"]
+    # Industrial Evidence Pattern (Level 2): a bundle of evidence, not a rule.
+    predicates: List[Predicate] = []
+    implies: List[Implication] = []
+
+
 class IntentPack(_Base):
     kind: Literal["intent"]
     display_name: Optional[str] = None
@@ -108,7 +135,7 @@ class RecognitionPack(_Base):
 
 Pack = Annotated[
     Union[UnitsPack, KpiPack, ConstraintPack, CapabilityPack, EquipmentPack, ProcessPack,
-          IntentPack, RecognitionPack],
+          PatternPack, IntentPack, RecognitionPack],
     Field(discriminator="kind"),
 ]
 _PACK_ADAPTER: TypeAdapter = TypeAdapter(Pack)

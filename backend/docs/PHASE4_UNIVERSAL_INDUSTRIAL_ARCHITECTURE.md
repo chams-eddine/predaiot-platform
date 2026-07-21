@@ -1,6 +1,12 @@
-# PREDAIOT Phase 4 — Universal Industrial Platform (Architecture RFC · rev 5)
+# PREDAIOT Phase 4 — Universal Industrial Platform (Architecture RFC · rev 6)
 
-**Status:** APPROVED. S1 + S1′ + S2 shipped (byte-identical, deployed). S3 in progress.
+**Status:** APPROVED. S1 + S1′ + S2 + S3 shipped (byte-identical, deployed). S4 in progress.
+**Rev 6 (2026-07-21):** adds **Industrial Evidence Patterns** (§2B) — the layer between
+Facts and Concepts. Industrial knowledge is not `Rule #27`; it is `Evidence A + B + C →
+Pattern → Possible Equipment`. Three knowledge levels (Facts → Patterns → Concepts), and a
+**Pattern Stability Test**: removing one piece of evidence must DOWNGRADE the conclusion to a
+more general concept ("Possible High Power Furnace 0.54, need more evidence"), never keep
+asserting the specific one (EAF). S4 is Industrial Knowledge Engineering, not YAML authoring.
 **Rev 5 (2026-07-21):** the **Facility Understanding contract** (§2A) — S3 answers *"what is
 in front of me?"*, not *"what is the plant's name?"*. Four rules: FacilityProfile is its
 ONLY output · every inference is evidence-backed + confidence-scored (No Guess Without
@@ -262,6 +268,61 @@ itself does not understand the facility and fails CI.
 The Composer consumes `FacilityProfile.resolve()` (the highest-confidence interpretation),
 carrying the confidence forward. S3 changes no engine, API, or wire contract.
 
+## 2B. Industrial Evidence Patterns (S4) — the three knowledge levels
+
+Understanding must not jump from raw facts straight to concepts. Between them sits the way
+industrial experts actually reason: **a bundle of evidence forms a pattern**. A 30 MVA
+transformer alone proves nothing; a 30 MVA transformer **+** 33 kV primary **+** >20 MW
+rated power **together** form the pattern that suggests an Electric Arc Furnace.
+
+**Three levels of knowledge (the S4 knowledge base):**
+
+```
+  Level 1  FACTS      transformer_mva=30 · voltage_primary=33000 · rated_power_mw=27 · signal:soc
+  Level 2  PATTERNS   EAF_HIGH_POWER · UTILITY_BATTERY · PV_INVERTER_CLUSTER
+  Level 3  CONCEPTS   Electric Arc Furnace · Steel Melting · Peak Shaving · Cement Grinding
+```
+
+The understanding path becomes **Facts → Patterns → Concepts → FacilityProfile** — never
+Facts → Concepts directly.
+
+**The Knowledge Graph gains a first-class Evidence-Patterns layer:**
+
+```
+Industrial Knowledge Graph
+├── Ontology          (Signal/Equipment/Capability/Process/Intent/Facility, from packs)
+├── Evidence Patterns (weighted predicates over Facts → implied concepts)   ← NEW
+├── Recognition Rules (signal→canonical aliases; facility-signature labels)
+└── Capability Map    (equipment —exhibits→ capability —archetype→ engine)
+```
+
+An Evidence Pattern (`kind: pattern`, data only) declares predicates over Facts and, by how
+completely they match, implies a **specific** or a **more general** concept:
+
+```yaml
+kind: pattern
+id: eaf_high_power
+predicates:
+  - { fact: transformer_mva,  op: gt, value: 25 }
+  - { fact: voltage_primary,  op: eq, value: 33000 }
+  - { fact: rated_power_mw,   op: gt, value: 20 }
+implies:                                   # most-specific first
+  - { concept: electric_arc_furnace, concept_kind: equipment, min_match: 1.0, confidence: 0.82 }
+  - { concept: high_power_furnace,   concept_kind: equipment, min_match: 0.6, confidence: 0.54,
+      needs_more_evidence: true }
+```
+
+The matcher computes `match_ratio = matched / total`, then asserts the most-specific
+`implies` whose `min_match ≤ match_ratio` (confidence scaled by the ratio); below every
+threshold it asserts nothing (No-Guess). Full evidence ⇒ *Electric Arc Furnace 0.82*;
+transformer + voltage but **no rated power** ⇒ *High Power Furnace 0.54, need more evidence*
+— never EAF. Every assertion is an `Inference` carrying the matched facts as evidence.
+
+**Pattern Stability Test (new gate):** for a pattern with a specific + a general implication,
+removing one required fact must move the conclusion from the specific concept to the general
+one (with lower confidence + `needs_more_evidence`), and must NOT keep asserting the specific
+concept. This is the No-Guess rule made testable at the pattern level.
+
 ## 3. Migration roadmap
 
 | Stage | Deliverable | Engine? | Golden | Status |
@@ -270,7 +331,7 @@ carrying the confidence forward. S3 changes no engine, API, or wire contract.
 | **S1′** | **Ontology reconciliation:** per-kind `PackSchema` (7 kinds); recast the shipped pack into a `capability: energy_storage` pack + a `recognition: legacy_signal_aliases` (tier signal) carrying the alias bundle verbatim; registry merges signal aliases. **Byte-identical** — identity SHAs unchanged | no | **identical** | **THIS TURN** |
 | **S2** | `domain/canonical/` graph CIM (Facility⊃Process⊃Equipment, +Intent) + Composer + `to_wire()`; `intent` pack kind + default `arbitrage`; BESS graph (intent: arbitrage) → `to_wire()` identity on a golden fixture | no | identical | **THIS TURN** |
 | **S3** | evidence-based `FacilityProfile` (Inference{value,confidence,source,evidence,rule}) + `.explain()`/`.resolve()`; `knowledge/graph.py` IKG (knowledge, not conclusions); `services/facility/` FUE (No-Guess). Explainability + No-Guess tests. `/audit/inspect` FacilityProfile is a later increment | no | unchanged | **THIS TURN (core)** |
-| **S4** | Author equipment/capability/process/kpi/constraint/units packs + `recognition tier:facility` labels (steel, cement, …) + per-industry baselines | no | new baselines | |
+| **S4** | **Industrial Knowledge Engineering:** the Evidence-Patterns layer (`kind: pattern` + Facts extractor + matcher; Facts→Patterns→Concepts) + Pattern Stability Test; then author equipment/capability/process/pattern/facility-recognition packs per industry (steel, cement, …) + baselines | no | S3 recognition evolves (pattern-based) | **THIS TURN (pattern engine + EAF/BESS demo)** |
 | **S5** | Auto-Mapping UX ("Detected: Steel Plant 94% · review") + profile labels | no | FE snapshot | |
 | **S6** | F2 multi-asset composition end-to-end | no | new | |
 

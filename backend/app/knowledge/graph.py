@@ -19,16 +19,27 @@ from app.knowledge.registry import load_packs
 
 @dataclass
 class KnowledgeGraph:
-    # capability id -> knowledge about it
+    """Four knowledge layers (rev 6). Ontology = {capabilities, equipment, intents};
+    Evidence Patterns = {patterns}; Recognition Rules = {facility_patterns} + the
+    signal aliases (registry); Capability Map = equipment→exhibits + capability→archetype."""
+    # ── Ontology ──
     capabilities: Dict[str, dict] = field(default_factory=dict)   # {class, archetype, signals:set}
     equipment: Dict[str, dict] = field(default_factory=dict)      # {exhibits:[...], aliases:{...}}
     intents: Dict[str, dict] = field(default_factory=dict)        # {constraints, wire_params}
+    # ── Evidence Patterns (Level 2) ──
+    patterns: Dict[str, object] = field(default_factory=dict)     # id -> PatternPack (predicates+implies)
+    # ── Recognition Rules (facility signatures) ──
     facility_patterns: Dict[str, dict] = field(default_factory=dict)  # {display_name, caps, equip}
 
     # ── knowledge queries (relationships only — never conclusions) ──
     def archetype_of(self, cap_id: str) -> Optional[str]:
         c = self.capabilities.get(cap_id)
         return c["archetype"] if c else None
+
+    def capabilities_of_equipment(self, equip_id: str) -> List[str]:
+        """Capability Map: which capabilities an equipment exhibits."""
+        e = self.equipment.get(equip_id)
+        return list(e["exhibits"]) if e else []
 
     def capabilities_from_signals(self, present: Set[str]) -> List[Tuple[str, Set[str], int]]:
         """Which capabilities do the present canonical fields imply? Returns
@@ -68,6 +79,8 @@ def build_graph() -> KnowledgeGraph:
             g.equipment[pack.id] = {"exhibits": list(pack.exhibits), "aliases": dict(pack.column_aliases)}
         elif pack.kind == "intent":
             g.intents[pack.id] = {"constraints": list(pack.constraints), "wire_params": dict(pack.wire_params)}
+        elif pack.kind == "pattern":
+            g.patterns[pack.id] = pack
         elif pack.kind == "recognition" and pack.tier == "facility":
             g.facility_patterns[pack.id] = {
                 "display_name": pack.display_name or pack.id,

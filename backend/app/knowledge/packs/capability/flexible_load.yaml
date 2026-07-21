@@ -1,0 +1,10 @@
+# PREDAIOT Knowledge Pack — capability (behavioral -> load archetype).
+# A facility that consumes energy to meet a production target; the decision is
+# WHEN to consume. This is the steel/cement/aluminium/chemical archetype.
+id: flexible_load
+kind: capability
+class: behavioral
+archetype: load
+signals: [actual_charge]
+kpis: [specific_energy]
+constraints: [production_target, demand_charge]

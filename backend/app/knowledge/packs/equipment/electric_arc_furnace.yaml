@@ -1,0 +1,12 @@
+# PREDAIOT Knowledge Pack — equipment (Level-3 concept).
+# The concept the eaf_high_power evidence pattern implies. It EXHIBITS the
+# flexible_load (behavioral → load archetype) and thermal (descriptive)
+# capabilities — so recognizing an EAF yields those capabilities via the
+# Capability Map. No column_aliases here yet (S4 alias redistribution updates the
+# frozen baseline deliberately); recognition is via facts/patterns, not headers.
+id: electric_arc_furnace
+kind: equipment
+exhibits: [flexible_load, thermal]
+terminology: [eaf, arc furnace, melt shop, ladle]
+kpis: [tap_to_tap_time, kwh_per_ton]
+constraints: [demand_charge, thermal_ramp]

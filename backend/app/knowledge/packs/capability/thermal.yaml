@@ -1,0 +1,11 @@
+# PREDAIOT Knowledge Pack — capability (descriptive modifier, no archetype).
+# A thermal process: adds thermal constraints/KPIs/units; it does NOT decide
+# dispatch behavior (archetype: null). Colours a behavioral asset (e.g. an EAF's
+# flexible_load) — it never becomes an independently priced asset on its own.
+id: thermal
+kind: capability
+class: descriptive
+archetype: null
+kpis: [specific_energy_kwh_per_ton, thermal_efficiency]
+constraints: [thermal_ramp, min_temperature]
+adds_units: [degC, kWh/t]

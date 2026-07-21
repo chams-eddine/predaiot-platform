@@ -1,0 +1,11 @@
+# PREDAIOT Knowledge Pack — recognition / tier: facility.
+# The facility LABEL "Steel Plant": a named composition, recognized when the
+# typical capabilities/equipment are present. Carries ZERO behavior (Rule 3) —
+# it names, it does not decide. The audit runs on the capabilities even if this
+# label is absent.
+id: steel
+kind: recognition
+tier: facility
+display_name: Steel Plant
+typical_capabilities: [flexible_load, thermal]
+typical_equipment: [electric_arc_furnace]

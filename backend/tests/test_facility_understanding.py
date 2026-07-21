@@ -38,10 +38,10 @@ def test_understands_bess_with_evidence():
     prof = _bess_profile()
     caps = prof.equipment[0].capabilities
     assert len(caps) == 1 and caps[0].value == "energy_storage"
-    assert caps[0].confidence == 1.0                       # all 3 signals present
+    assert caps[0].confidence >= 0.9                        # battery_storage pattern, full match
     ev = {str(e) for e in caps[0].evidence}
     assert {"actual_discharge", "actual_charge", "soc"} <= ev
-    assert caps[0].source == "signal" and caps[0].rule == "CAP-SIGNAL-MATCH"
+    assert caps[0].source == "pattern" and caps[0].rule == "PATTERN:battery_storage"
 
 
 # ── No Guess Without Evidence ────────────────────────────────────────────────
@@ -67,7 +67,7 @@ def test_profile_is_fully_traceable_and_explains():
     prof = _bess_profile()
     assert prof.is_fully_traceable()
     text = prof.explain()
-    assert "energy_storage" in text and "Unknown" in text and "← signal" in text
+    assert "energy_storage" in text and "Unknown" in text and "PATTERN:battery_storage" in text
 
 
 def test_explainability_gate_catches_unevidenced_guess():
@@ -96,7 +96,7 @@ def test_graph_stores_knowledge_not_conclusions():
     g = build_graph()
     assert g.archetype_of("energy_storage") == "storage"
     field_names = {f.name for f in fields(g)}
-    assert field_names == {"capabilities", "equipment", "intents", "facility_patterns"}
+    assert field_names == {"capabilities", "equipment", "intents", "patterns", "facility_patterns"}
     blob = " ".join(field_names) + " " + " ".join(d for d in dir(g) if not d.startswith("_"))
     for forbidden in ("strateg", "recommend", "decision", "audit", "optimi"):
         assert forbidden not in blob.lower()

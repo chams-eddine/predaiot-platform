@@ -1,0 +1,13 @@
+# PREDAIOT Knowledge Pack — Industrial Evidence Pattern (Level 2).
+# A charge/discharge/state-of-charge signal signature implies the energy_storage
+# capability. Expresses the S3 signal→capability recognition as a first-class
+# pattern (Facts → Patterns → Concepts). Partial evidence (2 of 3) still implies
+# storage — there is no more-specific alternative to downgrade to.
+id: battery_storage
+kind: pattern
+predicates:
+  - { fact: soc,              op: present }
+  - { fact: actual_charge,    op: present }
+  - { fact: actual_discharge, op: present }
+implies:
+  - { concept: energy_storage, concept_kind: capability, min_match: 0.66, confidence: 0.95 }
