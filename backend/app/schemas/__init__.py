@@ -177,6 +177,11 @@ class AuditResponse(BaseModel):
     audit_confidence: Optional[Dict[str, Any]] = None
     forecast_reliability: Optional[Dict[str, Any]] = None
     data_quality_manifest: Optional[Dict[str, Any]] = None
+    # Phase 4 S6 — the Facility Understanding Engine's evidence-backed profile
+    # (what the platform recognized BEFORE auditing: equipment, capabilities,
+    # facility hypothesis, each with confidence + evidence). Advisory / presentation
+    # only — the engine input is unchanged; None for legacy JSON audits.
+    facility_profile: Optional[Dict[str, Any]] = None
     decision_log: List[DecisionRecord]
     # Extended EDA sections
     asset_name: Optional[str] = "Energy Asset"

@@ -258,6 +258,7 @@ async def audit_from_file(
             return JSONResponse(status_code=400, content={
                 "detail": "The file parsed but contains no data rows (header only?)."})
         raw_shape = df.shape  # provenance: as-parsed dimensions (C2 manifest)
+        raw_columns = list(df.columns)  # original headers (before internal rename)
 
         # Resolve column aliases (exact → fuzzy)
         col_info = _resolve_columns_verbose(list(df.columns))
@@ -379,6 +380,26 @@ async def audit_from_file(
 
         result = process_calculation(asset, time_series, dt_hours=dt_hours,
                                      currency=currency or "USD")
+
+        # ── Phase 4 S6 — Facility Understanding Engine on the ingested data ──
+        # Runs the Facts→Patterns→Concepts chain and attaches an evidence-backed
+        # FacilityProfile for the frontend to adapt to. ADVISORY / presentation
+        # only: the engine input above is unchanged (byte-identical). A failure
+        # here must never break the audit.
+        try:
+            from app.services.facility import understand as _understand
+            _signal_fields = ("price", "actual_discharge", "actual_charge", "soc",
+                              "grid_demand", "curtailment_mw", "forecast_price")
+            _profile = _understand(
+                signal_map={k: v for k, v in col_map.items() if k in _signal_fields},
+                specs=asset.dict(), time_series=time_series,
+                extra_columns=[c for c in raw_columns if c not in col_map.values()],
+                currency=currency or "USD", dt_hours=dt_hours,
+                facility_id=(asset.asset_name or "facility"),
+            )
+            result.facility_profile = _profile.to_dict()
+        except Exception as _fe:
+            print(f"[understand] WARNING: facility understanding failed (audit unaffected): {_fe}")
 
         input_sha256 = _hashlib.sha256(contents).hexdigest()
 

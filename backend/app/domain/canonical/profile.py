@@ -90,6 +90,27 @@ class FacilityProfile:
         """Rule 4 gate: every inference must trace to evidence or an explicit default."""
         return all(inf.is_traceable() for inf in self.all_inferences())
 
+    def to_dict(self) -> dict:
+        """JSON-safe understanding for the API / frontend (structured + explanation).
+        Carries the recognition, not the raw time series."""
+        def _inf(i: Inference) -> dict:
+            return {"value": i.value, "confidence": i.confidence, "source": i.source,
+                    "rule": i.rule, "evidence": [str(e) for e in i.evidence],
+                    "alternatives": [{"value": a.value, "confidence": a.confidence}
+                                     for a in i.alternatives]}
+        return {
+            "facility_type": _inf(self.facility_type),
+            "intent": _inf(self.intent),
+            "equipment": [{
+                "identity": _inf(e.identity),
+                "capabilities": [_inf(c) for c in e.capabilities],
+                "signals": {k: _inf(v) for k, v in e.signal_map.items()},
+            } for e in self.equipment],
+            "unknowns": list(self.unknowns),
+            "traceable": self.is_fully_traceable(),
+            "explanation": self.explain(),
+        }
+
     def explain(self) -> str:
         """Human-readable traceability — every inference → evidence + rule."""
         def _line(label: str, inf: Inference, indent: int = 0) -> str:
