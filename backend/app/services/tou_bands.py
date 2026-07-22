@@ -23,6 +23,34 @@ Currency: Nama rates are Bz/kWh; 1 Bz/kWh = 1 OMR/MWh, and band_kWh × Bz/kWh / 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+# Guidance the UI/API MUST surface wherever a facility declares its shiftability.
+# It must reflect THIS plant's reality — not an industry benchmark or optimism —
+# and it is always optional (blank ⇒ Theoretical-only).
+FLEXIBILITY_GUIDANCE = (
+    "Operational shiftability (0–1): the fraction of THIS facility's peak-period load "
+    "that can realistically be moved to off-peak, given its OWN operating pattern "
+    "(shift schedules, continuous processes, thermal/product buffering). It must reflect "
+    "this plant's real operational limits — NOT an industry benchmark, and NOT an "
+    "optimistic guess. Leave it blank to receive only the data-derived Theoretical "
+    "Opportunity (the ceiling); the Recoverable Opportunity is reported only when you "
+    "declare this value."
+)
+
+
+def validate_flexibility(value: Optional[float]) -> Optional[float]:
+    """None passes through (not declared). A declared value must be a real number in
+    [0,1]. Raises ValueError otherwise (the caller maps it to a 422)."""
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("flexibility_factor must be a number in [0,1], or blank.")
+    if not (0.0 <= v <= 1.0):
+        raise ValueError("flexibility_factor must be between 0 and 1 (fraction of peak "
+                         "load realistically shiftable), or blank for Theoretical-only.")
+    return v
+
 
 @dataclass
 class TouBandResult:

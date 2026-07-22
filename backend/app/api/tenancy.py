@@ -16,6 +16,7 @@ from app.core import authz
 from app.core.dependencies import require_role, require_user
 from app.repositories.security_log import _security_log
 from app.core.security import _ROLES, _hash_password
+from app.services.tou_bands import FLEXIBILITY_GUIDANCE, validate_flexibility
 from app.models import Asset, User
 from app.schemas import AssetCreateRequest, MemberCreateRequest, MemberRoleRequest
 
@@ -26,17 +27,25 @@ def _asset_dict(a: "Asset") -> dict:
     return {"id": a.id, "name": a.name, "asset_type": a.asset_type,
             "capacity_mw": a.capacity_mw, "currency": a.currency,
             "specs": (json.loads(a.specs_json) if a.specs_json else None),
+            # Declared operational shiftability; None ⇒ Theoretical-only opportunity.
+            "flexibility_factor": a.flexibility_factor,
+            "flexibility_guidance": FLEXIBILITY_GUIDANCE,
             "created_at": a.created_at.isoformat() + "Z"}
 
 
 @router.post("/api/v1/assets")
 async def create_asset(req: AssetCreateRequest,
                        user: User = Depends(require_role("admin", "asset_manager"))):
+    try:
+        flex = validate_flexibility(req.flexibility_factor)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail={"code": "invalid_flexibility",
+                            "message": str(e), "guidance": FLEXIBILITY_GUIDANCE})
     db = SessionLocal()
     try:
         a = Asset(org_id=user.org_id, name=req.name.strip(),
                   asset_type=req.asset_type, capacity_mw=req.capacity_mw,
-                  currency=req.currency,
+                  currency=req.currency, flexibility_factor=flex,
                   specs_json=(json.dumps(req.specs) if req.specs else None))
         db.add(a)
         db.commit()

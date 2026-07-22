@@ -220,6 +220,9 @@ def _apply_additive_migrations(bind_engine):
         "trial_leads": [
             ("user_id", "INTEGER"),
         ],
+        "assets": [
+            ("flexibility_factor", "FLOAT"),
+        ],
     }
     with bind_engine.connect() as conn:
         for table, cols in _EXPECTED.items():

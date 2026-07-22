@@ -85,6 +85,12 @@ class Asset(Base):
     capacity_mw = Column(Float, nullable=True)
     currency = Column(String, nullable=True)
     specs_json = Column(String, nullable=True)
+    # Operational shiftability ∈ [0,1] — the fraction of THIS facility's peak load
+    # that can realistically move to off-peak, given its own operating pattern. A
+    # DECLARED per-facility input (never a platform constant); NULL ⇒ not declared,
+    # so a load audit reports only the data-derived Theoretical Opportunity, never a
+    # Recoverable figure. See services/tou_bands.FLEXIBILITY_GUIDANCE.
+    flexibility_factor = Column(Float, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 

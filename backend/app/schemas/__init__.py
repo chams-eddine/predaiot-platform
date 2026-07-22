@@ -246,6 +246,14 @@ class AssetCreateRequest(BaseModel):
     capacity_mw: Optional[float] = None
     currency: Optional[str] = None
     specs: Optional[Dict[str, Any]] = None
+    # Operational shiftability ∈ [0,1] — a DECLARED per-facility input (blank ⇒
+    # Theoretical-only). See services/tou_bands.FLEXIBILITY_GUIDANCE.
+    flexibility_factor: Optional[float] = None
+
+
+class FacilityFlexibilityRequest(BaseModel):
+    # Set (0–1) or clear (null) this facility's operational shiftability.
+    flexibility_factor: Optional[float] = None
 
 class MemberCreateRequest(BaseModel):
     email: str

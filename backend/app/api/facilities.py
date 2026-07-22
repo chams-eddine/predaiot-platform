@@ -15,11 +15,43 @@ from app.core.config import SessionLocal
 from app.core import authz
 from app.core.dependencies import require_user, require_facility_access
 from app.repositories.security_log import _security_log
+from app.services.tou_bands import FLEXIBILITY_GUIDANCE, validate_flexibility
 from app.models import Asset, User, FacilityMembership
-from app.schemas import FacilityMemberRequest
+from app.schemas import FacilityMemberRequest, FacilityFlexibilityRequest
 from app.api.tenancy import _asset_dict
 
 router = APIRouter()
+
+
+@router.patch("/api/v1/facilities/{facility_id}/flexibility")
+async def set_facility_flexibility(
+    facility_id: int, req: FacilityFlexibilityRequest,
+    user: User = Depends(require_facility_access(authz.MANAGE_FACILITY)),
+):
+    """Declare (0–1) or clear (null) this facility's operational shiftability — the
+    fraction of peak load it can REALISTICALLY move to off-peak. It must reflect the
+    plant's own reality, not a benchmark or a guess; blank ⇒ the audit reports only
+    the data-derived Theoretical Opportunity (never a Recoverable figure)."""
+    try:
+        flex = validate_flexibility(req.flexibility_factor)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail={"code": "invalid_flexibility",
+                            "message": str(e), "guidance": FLEXIBILITY_GUIDANCE})
+    db = SessionLocal()
+    try:
+        a = (db.query(Asset)
+             .filter(Asset.id == facility_id, Asset.org_id == user.org_id).first())
+        if a is None:
+            raise HTTPException(status_code=404, detail={"code": "facility_not_found",
+                                "message": "No such facility in your organization."})
+        a.flexibility_factor = flex
+        db.commit()
+        db.refresh(a)
+        _security_log("facility.flexibility.set", actor=user.email, org_id=user.org_id,
+                      object_ref=f"facility:{facility_id}|flexibility:{flex}")
+        return _asset_dict(a)
+    finally:
+        db.close()
 
 
 @router.get("/api/v1/facilities")

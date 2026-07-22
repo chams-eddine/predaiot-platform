@@ -19,6 +19,14 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.core.ratelimit import limiter  # noqa: E402  (shared limiter moved out of main in step 6)
 
 main.Base.metadata.create_all(bind=main.engine)
+# Mirror production startup: create_all makes missing TABLES but never adds new
+# COLUMNS to a pre-existing table, so run the same idempotent additive-column
+# migration the app runs on boot (the non-context-manager TestClient skips the
+# startup event). Keeps a persistent test SQLite in sync with the models.
+try:
+    main._apply_additive_migrations(main.engine)
+except Exception as _e:  # pragma: no cover
+    print(f"[conftest] additive migration warn: {_e}")
 limiter.enabled = False  # deterministic; we hammer endpoints on purpose
 
 
