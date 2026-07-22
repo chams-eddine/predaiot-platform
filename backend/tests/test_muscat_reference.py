@@ -2,18 +2,18 @@
 """Muscat Steel Melting Co. — permanent reference regression (spec Part 7).
 
 Ground truth = the hand-validated audit DELIVERED to the client (Apr–Jun 2026,
-91 days of real EAF/LRF data cross-checked against Nama invoices). The platform's
-TOU band-level analysis, with the delivered report's disclosed flexibility factor
-(0.44), must reproduce the delivered figures:
+91 days of real EAF/LRF data cross-checked against Nama invoices). Tests the THREE
+layers PREDAIOT must expose (owner-ratified):
 
-    C_actual  ≈ 1,051,080 OMR   (billed, energy + non-energy charges)
-    Gap       ≈    94,597 OMR   (3-month, recoverable at 0.44 flexibility)
-    DQ        ≈    0.91
-    ALP       ≈   378,389 OMR/year
+  1. Actual Cost           — the bill: C_actual ≈ 1,051,080 OMR.
+  2. Theoretical Opportunity — data-derived ceiling ≈ 214,796 OMR (DQ ≈ 0.80).
+  3. Recoverable Opportunity — ONLY with a DECLARED, facility-specific flexibility
+     factor (Muscat = 0.44, an INPUT, not a platform constant):
+     Gap ≈ 94,597 OMR (3-mo) · DQ ≈ 0.91 · ALP ≈ 378,389 OMR/yr.
 
-It also pins the data-derived THEORETICAL CEILING (full band shift, 214,796 OMR)
-and the Night-Peak band share (19.5%–21.5%) as a corroborating finding. If the
-platform's output drifts from these, a load-audit change has regressed — do not ship.
+No-Fabrication guard: with NO flexibility declared, the Recoverable layer is None —
+the platform never invents an operational assumption. 0.44 lives here as a test
+INPUT; it is nowhere in PREDAIOT's engine/analysis logic.
 """
 from app.services.tou_bands import analyze_tou_bands
 
@@ -30,42 +30,52 @@ _RATES = {
     "ntpk": [16, 46, 46], "wepk": [16, 28, 28],
 }
 _BILLED_C_ACTUAL = 1_051_080.410      # OMR, actual bill (incl. non-energy charges)
-_FLEXIBILITY = 0.44                   # delivered report's stated shiftability
-
-_R = analyze_tou_bands(_BANDS, _RATES, off_peak_key="off",
-                       flexibility_factor=_FLEXIBILITY,
-                       c_actual_billed=_BILLED_C_ACTUAL)
+_MUSCAT_FLEXIBILITY = 0.44            # facility-specific DECLARED input (from the delivered report)
 
 
 def _close(a, b, tol_pct=1.5):
     return abs(a - b) <= abs(b) * tol_pct / 100.0
 
 
-def test_total_consumption_matches():
-    assert _R.total_kwh == 44_569_610                       # exact — validates band inputs
+# ── Layer 1 — Actual Cost ───────────────────────────────────────────────────
+def test_layer1_actual_cost():
+    r = analyze_tou_bands(_BANDS, _RATES, c_actual_billed=_BILLED_C_ACTUAL)
+    assert r.total_kwh == 44_569_610                       # exact — validates band inputs
+    assert _close(r.c_actual, 1_051_080, 0.1)
+    assert _close(r.c_actual_energy, 1_016_060, 0.5)
+    assert r.non_energy_charges > 0                        # billed − energy = fixed/demand charges
 
 
-def test_c_actual_billed():
-    assert _close(_R.c_actual, 1_051_080, 0.1)
-    # the billed total exceeds energy-only by the non-energy (fixed/demand) charges
-    assert _close(_R.c_actual_energy, 1_016_060, 0.5)
-    assert _R.non_energy_charges > 0
+# ── Layer 2 — Theoretical Opportunity (data-derived; no flexibility needed) ──
+def test_layer2_theoretical_ceiling_is_data_derived():
+    r = analyze_tou_bands(_BANDS, _RATES, c_actual_billed=_BILLED_C_ACTUAL)  # NO flexibility
+    assert _close(r.theoretical_opportunity, 214_796, 0.5)
+    assert _close(r.theoretical_dq, 0.796, 2)             # (1,051,080 − 214,796)/1,051,080
+    assert _close(r.theoretical_alp, 859_185, 0.5)
 
 
-def test_theoretical_ceiling_is_data_derived():
-    # Full band shift to off-peak — no operational judgment. ~21% of energy cost.
-    assert _close(_R.theoretical_ceiling_gap, 214_796, 0.5)
+# ── No-Fabrication guard — no declared flexibility ⇒ no Recoverable layer ────
+def test_no_flexibility_means_no_recoverable_layer():
+    r = analyze_tou_bands(_BANDS, _RATES, c_actual_billed=_BILLED_C_ACTUAL)
+    assert r.flexibility_factor is None
+    assert r.flexibility_source == "not_provided"
+    assert r.recoverable_opportunity is None
+    assert r.recoverable_dq is None and r.recoverable_alp is None
 
 
-def test_delivered_gap_dq_alp():
-    # Recoverable (at 0.44 flexibility) reproduces the delivered client figures.
-    assert _close(_R.recoverable_gap, 94_597, 1.5)          # ≈ 94,597 OMR (3-month)
-    assert _close(_R.dq, 0.91, 1.5)                         # ≈ 0.91
-    assert _close(_R.alp, 378_389, 1.5)                     # ≈ 378,389 OMR/year
-    assert _R.annualization_factor == 4.0                   # quarterly → annual (not ×365 on 1 day)
+# ── Layer 3 — Recoverable Opportunity (with DECLARED facility flexibility) ───
+def test_layer3_recoverable_reproduces_delivered_figures():
+    r = analyze_tou_bands(_BANDS, _RATES, c_actual_billed=_BILLED_C_ACTUAL,
+                          flexibility_factor=_MUSCAT_FLEXIBILITY)
+    assert r.flexibility_source == "declared" and r.flexibility_factor == 0.44
+    assert _close(r.recoverable_opportunity, 94_597, 1.5)  # ≈ 94,597 OMR (3-month)
+    assert _close(r.recoverable_dq, 0.91, 1.5)             # ≈ 0.91
+    assert _close(r.recoverable_alp, 378_389, 1.5)         # ≈ 378,389 OMR/year
+    assert r.annualization_factor == 4.0                   # quarterly → annual (not ×365 on 1 day)
 
 
 def test_night_peak_band_share_corroborating_finding():
+    r = analyze_tou_bands(_BANDS, _RATES, c_actual_billed=_BILLED_C_ACTUAL)
     # Directly computable from the band data; spec: 19.5% (May) to 21.5% (June).
-    assert _close(_R.night_peak_month_shares[1], 0.195, 3)  # May
-    assert _close(_R.night_peak_month_shares[2], 0.215, 3)  # June
+    assert _close(r.night_peak_month_shares[1], 0.195, 3)  # May
+    assert _close(r.night_peak_month_shares[2], 0.215, 3)  # June

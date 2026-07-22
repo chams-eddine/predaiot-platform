@@ -105,6 +105,29 @@ earns **revenue** while a consumption asset avoids **cost**:
 - **Scope:** LOAD archetype only. Generation DQ is unchanged. `AC`'s Model-Consistency
   `M` still reads `dq_raw`; for loads `dq_raw = C_optimal/C_actual ≤ 1 ⟹ M = 1`.
 
+### 2B. Load opportunity — three layers (No Fabrication of operational assumptions)
+
+A load audit reports **three explicitly-separated layers** (`services/tou_bands.py`):
+
+  1. **Actual Cost** — the bill (`C_actual`, energy + non-energy/demand charges).
+  2. **Theoretical Opportunity** — the MAXIMUM saving, derived ENTIRELY from the data
+     (shift every non-off-peak kWh to that period's off-peak rate, capacity permitting).
+     No operational judgment. A **ceiling**, not a target (`DQ_theoretical`).
+  3. **Recoverable Opportunity** — the realistic saving after operational limits:
+     `Theoretical × flexibility_factor`.
+
+- **`flexibility_factor` is a facility-specific DECLARED INPUT**, never a constant in
+  PREDAIOT. It expresses how much load the plant can actually shift (a near-24/7 mill
+  can move far less than a batch process). Different facilities ⇒ different values.
+- **No hidden assumption:** if the flexibility factor is **not declared**, the
+  Recoverable layer is **not computed** (`None`) — the platform never invents an
+  operational assumption. The engine/analysis compute only data-derived facts; the one
+  operational input is always explicit and per-facility.
+- **Muscat Steel reference** (`tests/test_muscat_reference.py`, permanent): Actual
+  1,051,080 OMR; Theoretical 214,796 OMR (DQ 0.80); Recoverable 94,597 OMR / DQ 0.91 /
+  ALP 378,389 OMR-yr **at the delivered report's declared flexibility 0.44** (a test
+  input, not platform logic).
+
 ## 3. Forecast Reliability — `EDA-FR-1.0-experimental` (REPORT-ONLY)
 
     FR = 1 − min(1, MAPE),   MAPE = mean( |forecast − price| / max(|price|, ε) )
