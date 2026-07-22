@@ -76,6 +76,35 @@ Confidence in the audit **process** — independent of forecast accuracy.
 - **Edge/failure:** unproven solver ⟹ INDETERMINATE (no invented penalty for an
   unknown MIP gap). `DQI None` (direct-JSON audit) ⟹ AC falls back to `M`.
 
+## 2A. Decision Quality (DQ) — archetype-aware definition (Phase 2 amendment)
+
+DQ measures how close the *actual* operation was to the *cost/value-optimal* one.
+Its algebraic form depends on the physics archetype, because a generation asset
+earns **revenue** while a consumption asset avoids **cost**:
+
+    Generation (storage / intermittent / dispatchable) — value/revenue space:
+        DQ = EDV_actual / EDV_optimal          (unchanged; v1 definition)
+        where EDV = (price − marginal_cost) · dispatch
+
+    Load (consumption — furnaces, motors, pumps, electrolyzers, desalination) —
+    COST space:
+        DQ = C_optimal / C_actual              (Phase 2)
+        C_x = Σ_t price(t) · load_x(t) · Δt
+        C_optimal = min-cost delivery of the SAME total energy, reallocated to the
+                    cheapest feasible hours (capacity-constrained greedy fill).
+
+- **Bounds:** load DQ ∈ [0,1] by construction — the cheapest-hours reallocation can
+  never cost MORE than actual, so `C_optimal ≤ C_actual`. DQ=1 ⟺ perfect timing.
+- **Economic Gap is invariant:** `G = C_actual − C_optimal ≡ EDV_optimal − EDV_actual`
+  (the savings gap), because total energy is conserved so the peak-price reference
+  terms cancel in aggregate. Only the DQ *ratio* differs between the two spaces.
+- **Why the amendment:** the v1 savings-ratio (`EDV_act/EDV_opt`, value-vs-worst-hour)
+  and the cost-ratio answer different questions for a load. The cost-ratio is the
+  definition used in the hand-validated Muscat Steel Melting Co. audit (DQ 0.91), and
+  is the intuitive "what fraction of the theoretical-minimum bill did you achieve?".
+- **Scope:** LOAD archetype only. Generation DQ is unchanged. `AC`'s Model-Consistency
+  `M` still reads `dq_raw`; for loads `dq_raw = C_optimal/C_actual ≤ 1 ⟹ M = 1`.
+
 ## 3. Forecast Reliability — `EDA-FR-1.0-experimental` (REPORT-ONLY)
 
     FR = 1 − min(1, MAPE),   MAPE = mean( |forecast − price| / max(|price|, ε) )

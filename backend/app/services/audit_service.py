@@ -54,6 +54,10 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
     dt_hours = float(dt_hours) if dt_hours and dt_hours > 0 else 1.0
     optimal_actions, optimal_charges = run_optimizer_full(asset, time_series_list, dt_hours=dt_hours)
     total_edv_opt, total_edv_act = 0.0, 0.0
+    # Cost-space totals for the LOAD archetype (Phase 2, Reference Manual amendment):
+    # DQ is defined as C_optimal / C_actual for a consumption asset. Accumulated here
+    # for load; ignored by the generation/storage tracks.
+    total_c_opt, total_c_act = 0.0, 0.0
     decision_log = []
     db = SessionLocal() if save_to_db else None
 
@@ -89,6 +93,9 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
             if is_load:
                 edv_opt_step = (peak_price - price) * opt_dis * dt_hours
                 edv_act_step = (peak_price - price) * act_dis * dt_hours
+                # Cost-space totals for the load DQ (C_optimal / C_actual).
+                total_c_opt += price * opt_dis * dt_hours
+                total_c_act += price * act_dis * dt_hours
             elif is_storage:
                 # Reference Manual Vol II Ch 3: J = [P·P_dis − P·P_ch]·Δt − C_deg.
                 # Charging is paid for at the market price — omitting it (the
@@ -158,6 +165,22 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
     dq_score_raw = dq_score
     dq_score = max(0.0, min(1.0, dq_score))
     total_gap = total_edv_opt - total_edv_act
+
+    # ── Reference Manual amendment (Phase 2) — LOAD archetype ONLY ──────────
+    # For a consumption asset, DQ is the COST ratio C_optimal / C_actual (the
+    # definition used in the hand-validated Muscat Steel audit), not the savings
+    # ratio. Bounded [0,1] by construction (cheapest-hours reallocation can never
+    # cost MORE than actual). The Economic Gap is the cost gap C_actual − C_optimal,
+    # which is identically the savings gap already in total_gap (total energy is
+    # conserved, so the peak-price terms cancel). Storage / intermittent /
+    # dispatchable DQ are UNCHANGED.
+    if is_load:
+        if total_c_act > _EDV_EPS:
+            dq_score_raw = total_c_opt / total_c_act
+            dq_score = max(0.0, min(1.0, dq_score_raw))
+        else:
+            dq_score_raw = dq_score = 1.0
+        total_gap = total_c_act - total_c_opt
 
     # ── Gap Attribution per Reference Manual Ch 8.2 ─────────────────────
     # G_total = G_forecast + G_execution. d_rec = what the MILP recommends
