@@ -635,7 +635,10 @@ async def inspect_file(file: UploadFile = File(...)):
         # Classification preview: operational → economic audit; engineering →
         # facility understanding only (nameplate file, no time-series).
         file_kind = _classify_upload(col_map)
-        return {
+        # _json_safe: nameplate/engineering files have sparse rows, so sample_row
+        # (and other cells) can carry NaN — not JSON-compliant. Sanitize NaN→null
+        # and numpy scalars before returning (same discipline as /audit/file).
+        return JSONResponse(content=_json_safe({
             "file_columns":         list(df.columns),
             "rows":                 len(df),
             "resolved_mapping":     col_map,
@@ -652,7 +655,7 @@ async def inspect_file(file: UploadFile = File(...)):
             "will_succeed":         file_kind == "operational",
             "will_understand":      file_kind == "engineering",
             "sample_row":           df.iloc[0].to_dict() if len(df) > 0 else {},
-        }
+        }))
     except Exception as e:
         return JSONResponse(status_code=500, content={"detail": str(e)})
 

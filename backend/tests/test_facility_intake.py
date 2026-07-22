@@ -83,3 +83,47 @@ def test_unrecognized_nameplate_still_succeeds_as_unknown():
     assert r["recognized"] is False
     assert r["facility_type"] == "Unknown"
     assert r["guidance"]["operational_data_required"] is True
+
+
+# ── Endpoint-level: the exact prod path (auth-free inspect + gated audit/file) ──
+_NAMEPLATE_CSV = (
+    "Equipment,Rated (MW),Transformer (MVA),Voltage Primary (V),Voltage Secondary Range (V)\n"
+    "Transformer,,30,33000,700-1100\n"
+    "Electric Arc Furnace,27,,,\n"
+)
+
+
+def _client():
+    from fastapi.testclient import TestClient
+    from main import app
+    return app, TestClient(app)
+
+
+def test_inspect_endpoint_classifies_engineering_and_is_json_safe():
+    # Regression: a sparse nameplate row carries NaN; the inspect response must
+    # sanitize NaN→null (not 500). This reproduces the reported production error.
+    _app, c = _client()
+    r = c.post("/api/v1/audit/inspect",
+               files={"file": ("steel_nameplate.csv", _NAMEPLATE_CSV, "text/csv")})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["file_kind"] == "engineering"
+    assert d["will_understand"] is True and d["will_succeed"] is False
+
+
+def test_audit_file_endpoint_returns_facility_understanding():
+    # The full upload path: an engineering file must NOT 400; it returns a 200
+    # facility_understanding result (recognized Steel Plant), no economic engine.
+    from app.core.dependencies import require_audit_runner
+    app, c = _client()
+    app.dependency_overrides[require_audit_runner] = lambda: object()
+    try:
+        r = c.post("/api/v1/audit/file",
+                   files={"file": ("steel_nameplate.csv", _NAMEPLATE_CSV, "text/csv")})
+    finally:
+        app.dependency_overrides.pop(require_audit_runner, None)
+    assert r.status_code == 200
+    d = r.json()
+    assert d["mode"] == "facility_understanding"
+    assert d["facility_type"] == "Steel Plant"
+    assert "decision_log" not in d and "total_gap_usd" not in d
