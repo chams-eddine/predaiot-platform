@@ -1,0 +1,51 @@
+# PREDAIOT Knowledge Pack — recognition / tier: signal.
+# Authored from REAL data (a Muscat steel plant daily power-consumption export)
+# through the Knowledge Engineering Workflow. Two jobs:
+#   1. column_aliases — grounds the operational time-series signals so the file is
+#      seen as a LOAD facility (and a bare "Date" finally resolves — a very common
+#      real-world header the base table missed).
+#   2. nameplate_aliases — SIGNATURE facts: the PRESENCE of a dedicated per-furnace
+#      power channel is evidence of that equipment. pattern/eaf_operational.yaml
+#      turns the EAF channel into an Electric Arc Furnace → Steel Plant.
+# DATA ONLY. Merge law appends these to the frozen base tables (no engine change).
+# Aliases pre-normalised (lower_snake, punctuation stripped) to match _normalise_col.
+id: steel_operational
+kind: recognition
+tier: signal
+column_aliases:
+  hour:
+  - date
+  - day
+  actual_charge:
+  - total_power_consumption_kwh_day
+  - total_power_consumption
+  - power_consumption
+  - energy_consumption
+  - plant_consumption
+  - total_consumption
+  - consumption_kwh
+nameplate_aliases:
+  eaf_power_channel:
+  - power_con._eaf_kwh_day
+  - power_con_eaf_kwh_day
+  - eaf_consumption
+  - eaf_power
+  - eaf_kwh
+  - power_con._eaf
+  lrf_power_channel:
+  - power_con._lrf_kwh_day
+  - power_con_lrf_kwh_day
+  - lrf_consumption
+  - ladle_refining_furnace
+  - power_con._lrf
+  production_channel:
+  - total_production_mt_day
+  - total_production
+  - production_mt
+  - production_tph
+  - tons_per_day
+  specific_energy_channel:
+  - total_power_consumption_kwh_ton
+  - kwh_per_ton
+  - kwh_ton
+  - specific_energy_kwh_ton

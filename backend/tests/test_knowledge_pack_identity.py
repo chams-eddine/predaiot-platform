@@ -10,8 +10,13 @@ import json
 from app.services.ingestion import columns as C
 from app.knowledge import registry as R
 
-# Fingerprints captured from the pre-Phase-4 inline COLUMN_ALIASES/ASSET_META_ALIASES.
-BASELINE_ALIAS_SHA = "54fd2aed1ef0349cae32ba78635d401a4500517695d7ec1a80043e30f6ca7dd2"
+# Fingerprints of the merged COLUMN_ALIASES/ASSET_META_ALIASES. The base tables are
+# frozen; knowledge packs only APPEND aliases (merge law). Re-baselined deliberately
+# when real data drives new recognition — here the steel_operational pack (authored
+# from a Muscat steel plant export) added `date`/`day` + power-consumption aliases.
+# The RESOLUTION_SHA (over the representative HEADERS set) is unchanged: appended
+# aliases don't alter how any of those columns resolve — a behaviour-preserving add.
+BASELINE_ALIAS_SHA = "36209443ae221d677c7f2fc8daf5b943800c53e447f03c38762ed914a2813e2b"
 BASELINE_RESOLUTION_SHA = "8111ba2bc0114f1f165c74e5934211339f160dace42fc52f9ac19efe095d58c2"
 
 # Representative multi-industry header set (exact + fuzzy + Arabic + meta).

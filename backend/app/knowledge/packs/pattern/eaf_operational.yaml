@@ -1,0 +1,13 @@
+# PREDAIOT Knowledge Pack — Industrial Evidence Pattern (Level 2).
+# Recognizing an Electric Arc Furnace from OPERATIONAL data (not nameplate): a
+# dedicated per-furnace power-consumption channel labelled for the EAF is strong
+# evidence the melt shop is an arc furnace. Lower confidence than the full
+# nameplate signature (eaf_high_power, 0.82) because it rests on one channel —
+# No Guess Without Evidence. Recognizing the EAF yields flexible_load + thermal
+# (via the equipment's Capability Map) → the Steel Plant facility label.
+id: eaf_operational
+kind: pattern
+predicates:
+  - { fact: eaf_power_channel, op: present, weight: 1.0 }
+implies:
+  - { concept: electric_arc_furnace, concept_kind: equipment, min_match: 1.0, confidence: 0.7 }

@@ -64,6 +64,32 @@ def test_engineering_file_understood_as_steel_plant():
     assert r["guidance"]["operational_data_required"] is True
 
 
+def test_real_steel_operational_file_recognized():
+    # Regression from real data (Muscat steel plant daily power-consumption export):
+    # date + total power consumption + per-furnace channels → Steel Plant, EAF, and
+    # an honest 'missing_price' readiness (consumption present, no tariff → no audit).
+    df = pd.DataFrame([
+        {"Date": "01-April-2026", "Day of Week": "Wednesday",
+         "Power Con. EAF (KWH/Day)": 365369, "Power Con. LRF (KWH/Day)": 46944,
+         "Power Con. Aux (KWH/Day)": 118637, "Total Power Consumption (KWH/Day)": 530950,
+         "Total Production (MT/Day)": 729, "Total Power Consumption (KWH/Ton)": 728.3},
+        {"Date": "02-April-2026", "Day of Week": "Thursday",
+         "Power Con. EAF (KWH/Day)": 360673, "Power Con. LRF (KWH/Day)": 44400,
+         "Power Con. Aux (KWH/Day)": 131077, "Total Power Consumption (KWH/Day)": 536150,
+         "Total Production (MT/Day)": 765, "Total Power Consumption (KWH/Ton)": 700.8},
+    ])
+    cm = _cm(df.columns)
+    assert cm.get("hour") == "Date"                                  # bare "Date" resolves now
+    assert cm.get("actual_charge") == "Total Power Consumption (KWH/Day)"
+    r = understand_engineering_file(df, cm, list(df.columns),
+                                    input_sha256="x", filename="Muscat_Steel.xlsx", rows_parsed=2)
+    assert r["facility_type"] == "Steel Plant"
+    assert r["facility_profile"]["equipment"][0]["identity"]["value"] == "electric_arc_furnace"
+    assert r["readiness"]["economic_audit"] is False
+    assert r["readiness"]["reason"] == "missing_price"               # precise, not generic
+    assert r["next_step"]["required"] == ["price"]
+
+
 def test_readiness_gate_and_confidences():
     # Nameplate → understood (high) but NOT audit-ready (low), reason surfaced.
     df = _steel_nameplate_df()
