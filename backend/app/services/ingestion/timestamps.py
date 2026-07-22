@@ -168,7 +168,7 @@ def _detect_and_resample(df: pd.DataFrame) -> tuple:
     notes["detected_resolution_sec"] = snapped
     notes["detected_resolution_label"] = {
         60: "1-minute", 300: "5-minute", 900: "15-minute",
-        1800: "30-minute", 3600: "60-minute",
+        1800: "30-minute", 3600: "60-minute", 86400: "daily", 604800: "weekly",
     }[snapped]
 
     span_sec = (ts.iloc[-1] - ts.iloc[0]).total_seconds()

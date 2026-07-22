@@ -45,6 +45,31 @@ def classify(col_map: Dict[str, str]) -> str:
     return "operational" if ("price" in col_map and has_output) else "engineering"
 
 
+def classify_archetype(col_map: Dict[str, str],
+                       time_series: List[Dict[str, Any]]) -> Tuple[Optional[str], str]:
+    """Infer the physics ARCHETYPE from the resolved operational signals, so the
+    engine runs the right track (Part 1: category classification BEFORE calculation).
+    Returns (archetype|None, basis). None = ambiguous → don't override the default.
+
+    A furnace/motor/pump only ever CONSUMES: charge signal present, discharge ~0,
+    no SoC → `load`. This is the fix for the category error that ran the storage
+    (battery) formula on a pure-consumption asset and produced negative captured value.
+    A confidently-recognized explicit asset_type still wins (handled by the caller)."""
+    def _sum(f: str) -> float:
+        return sum(abs(float(ts.get(f) or 0)) for ts in time_series)
+    has_soc = "soc" in col_map
+    dis = _sum("actual_discharge")
+    ch = _sum("actual_charge")
+    has_curt = "curtailment_mw" in col_map
+    if has_soc or (dis > 0 and ch > 0):
+        return "storage", "SoC/bidirectional charge+discharge present"
+    if ch > 0 and dis <= 0:
+        return "load", "consumption-only (charge present, no discharge, no SoC)"
+    if dis > 0 and has_curt:
+        return "intermittent", "generation with curtailment signal, no consumption/SoC"
+    return None, "ambiguous — no decisive signal; default retained"
+
+
 @dataclass
 class Readiness:
     """Operational-Readiness stage — the honest question is 'do we have enough to

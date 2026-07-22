@@ -35,7 +35,7 @@ from app.models import AuditRecord, Decision, EconomicState, TrialLead, User  # 
 from app.schemas import AssetSpecs, AuditRequest, AuditResponse  # noqa: F401
 from app.services.audit_service import process_calculation  # noqa: F401
 from app.services.facility.intake import (  # noqa: F401
-    classify as _classify_upload, understand_engineering_file,
+    classify as _classify_upload, classify_archetype, understand_engineering_file,
 )
 from app.services.ingestion import (  # noqa: F401
     COLUMN_ALIASES, ASSET_META_ALIASES, _normalise_col, _FUZZY_THRESHOLD,
@@ -379,6 +379,9 @@ async def audit_from_file(
         # frozen price feed) — run while "hour" is still a datetime.
         dq_flags.extend(_build_sensor_quality_flags(df, dt_hours, asset.p_max, asset.e_max))
         currency = _detect_currency(list(rename_map.keys()) + list(df.columns))
+        # Provenance: was the currency read from the data, or silently defaulted?
+        # (Part 5 — never present USD for OMR-billed data without disclosure.)
+        currency_source = "detected" if currency else "defaulted"
 
         # Collapse "hour" back to an ordered integer for the audit engine
         if 'hour' in df.columns and pd.api.types.is_datetime64_any_dtype(df['hour']):
@@ -393,8 +396,31 @@ async def audit_from_file(
         ]]
         time_series = sub.astype(object).where(pd.notna(sub), None).to_dict('records')
 
+        # ── Physics-archetype routing (Part 1) — select the right engine track
+        # BEFORE calculation. A pure-consumption asset (furnace/motor/pump) must run
+        # the LOAD track, not the storage/battery formula (which computes "revenue
+        # from discharging" on an asset that only consumes → a nonsensical negative
+        # captured value). An explicit asset_type from the file wins; otherwise infer
+        # from the resolved signals. The engine FORMULAS are unchanged — only which
+        # frozen track runs. This is the root-cause fix for the load category error.
+        if "asset_type" not in asset_kwargs:
+            _arch, _class_basis = classify_archetype(col_map, time_series)
+            if _arch:
+                asset_kwargs["asset_type"] = _arch
+                asset = AssetSpecs(**asset_kwargs)
+        else:
+            _class_basis = f"explicit asset_type={asset.asset_type}"
+        _asset_class = _dispatch_mode(asset.asset_type)
+
         result = process_calculation(asset, time_series, dt_hours=dt_hours,
                                      currency=currency or "USD")
+        result.asset_class = _asset_class
+        result.classification_basis = _class_basis
+        if _asset_class == "load":
+            dq_flags.append(_dq("info", "load_class_routed",
+                                f"Recognized a consumption (load) asset — audited on the load "
+                                f"track (cost-of-timing), not the storage/discharge formula. "
+                                f"Basis: {_class_basis}."))
 
         # ── Phase 4 S6 — Facility Understanding Engine on the ingested data ──
         # Runs the Facts→Patterns→Concepts chain and attaches an evidence-backed
@@ -522,6 +548,24 @@ async def audit_from_file(
                                         "column is typically a simple threshold rule; the MILP evaluates "
                                         "every feasible dispatch trajectory (Ref. Manual Ch 9), so a "
                                         "difference is expected — both are shown for transparency."))
+
+        # ── Validation gates (Part 4) — sanity-check BEFORE surfacing/persisting.
+        # HARD gates (DQ∉[0,1], negative gap) are impossible-by-construction; if one
+        # fires it's a genuine upstream bug (e.g. the load category error) → withhold
+        # the result rather than certify an impossible number. SOFT gates (extreme DQ,
+        # defaulted currency) attach as warnings. Carries currency provenance.
+        from app.services.validation import validate_audit_result
+        result.validation = validate_audit_result(result.dict(), currency_source,
+                                                  asset_class=result.asset_class)
+        if not result.validation["passed"]:
+            return JSONResponse(status_code=422, content=_json_safe({
+                "detail": "The computed audit failed a mathematical-validity check and was "
+                          "withheld (a result that is impossible by construction was produced "
+                          "upstream). No certificate is issued.",
+                "validation": result.validation,
+                "asset_class": result.asset_class,
+                "classification_basis": result.classification_basis,
+            }))
 
         _latest_by_token[lead.token] = result.dict()   # per-tenant cache — no cross-leak
         background.add_task(_bump_audit_count, lead.token)

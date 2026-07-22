@@ -4,8 +4,12 @@
 """
 from __future__ import annotations
 
-# Standard SCADA sampling intervals (seconds) the resampler snaps to.
-_STANDARD_INTERVALS = [60, 300, 900, 1800, 3600]  # 1min, 5min, 15min, 30min, 60min
+# Standard sampling intervals (seconds) the resampler snaps to. Includes DAILY and
+# WEEKLY: real utility/industrial exports (e.g. a steel plant's daily kWh bill data)
+# are not sub-hourly SCADA feeds. Without daily, 91 daily rows snapped to 3600s →
+# dt=1h → "91 steps = 91h" (a 24x time-resolution error).
+_STANDARD_INTERVALS = [60, 300, 900, 1800, 3600, 86400, 604800]
+# 1min, 5min, 15min, 30min, 60min, 1day, 1week
 
 # Column names that carry a comms / link health status in SCADA exports.
 _COMMS_STATUS_ALIASES = {

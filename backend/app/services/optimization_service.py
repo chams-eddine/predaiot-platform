@@ -19,8 +19,16 @@ _DISPATCHABLE_TYPES = {"gas", "oilgas", "coal", "thermal", "chp", "nuclear", "ge
 _LOAD_TYPES         = {"hydrogen", "electrolyzer", "desalination", "desal"}
 
 
+_ARCHETYPES = {"storage", "intermittent", "dispatchable", "load"}
+
+
 def _dispatch_mode(asset_type: Optional[str]) -> str:
     t = (asset_type or "").strip().lower()
+    # Explicit archetype label (set by the FUE from the recognized behavioral
+    # capability, e.g. flexible_load → "load"). First-class so the recognized
+    # physics — not a guessed keyword — selects the track. Router only; the
+    # optimizer formulas are unchanged (frozen engine).
+    if t in _ARCHETYPES:         return t
     if t in _INTERMITTENT_TYPES: return "intermittent"
     if t in _DISPATCHABLE_TYPES: return "dispatchable"
     if t in _LOAD_TYPES:         return "load"

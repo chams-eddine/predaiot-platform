@@ -186,6 +186,14 @@ class AuditResponse(BaseModel):
     # Extended EDA sections
     asset_name: Optional[str] = "Energy Asset"
     asset_type: Optional[str] = "Generic"
+    # Physics-archetype routing (Part 1): which frozen engine track ran and why.
+    # asset_class ∈ storage|intermittent|dispatchable|load. For a consumption asset
+    # this is "load" — audited in cost-of-timing space, not the storage formula.
+    asset_class: Optional[str] = None
+    classification_basis: Optional[str] = None
+    # Part 4 validation gates: {passed, errors, warnings, currency_source}. Hard
+    # gate failures withhold the result; soft gates surface as warnings.
+    validation: Optional[Dict[str, Any]] = None
     audit_period_label: Optional[str] = "24 Hours"
     risk_level: Optional[str] = "Moderate"          # Low | Moderate | Severe
     eda_metrics: Optional[EDAMetrics] = None
