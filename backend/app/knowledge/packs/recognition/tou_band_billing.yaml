@@ -1,0 +1,35 @@
+# PREDAIOT Knowledge Pack — recognition / tier: signal (Phase 2, spec Part 6.2).
+# Recognizes OFFICIAL Time-of-Use band billing columns (Nama CRT bands and common
+# variants). When all four are present, the platform prefers band-level costing
+# (services/tou_bands.analyze_tou_bands) over a flat monthly-average estimate,
+# because it is real billed data, not an assumption.
+# DATA ONLY. nameplate_aliases ground the band columns as Level-1 facts (so they
+# are not flagged "unresolved"); pre-normalised to match _normalise_col.
+id: tou_band_billing
+kind: recognition
+tier: signal
+nameplate_aliases:
+  consumption_off_peak:
+  - off_peak
+  - off_peak_kwh
+  - ofpk
+  - ofpk_units
+  - off_peak_units
+  - offpeak
+  consumption_weekday_peak:
+  - weekday_peak
+  - weekday_peak_kwh
+  - wdpk
+  - wdpk_units
+  - peak
+  - day_peak
+  consumption_night_peak:
+  - night_peak
+  - night_peak_kwh
+  - ntpk
+  - ntpk_units
+  consumption_weekend_peak:
+  - weekend_peak
+  - weekend_peak_kwh
+  - wepk
+  - wepk_units
