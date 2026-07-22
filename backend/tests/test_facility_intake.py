@@ -12,7 +12,7 @@ import pandas as pd
 
 from app.services.ingestion.columns import _resolve_columns_verbose
 from app.services.facility.intake import (
-    classify, extract_nameplate_facts, understand_engineering_file,
+    classify, assess_readiness, extract_nameplate_facts, understand_engineering_file,
 )
 
 
@@ -62,6 +62,32 @@ def test_engineering_file_understood_as_steel_plant():
     assert "flexible_load" in caps and "thermal" in caps
     assert len(r["facility_profile"]["topology"]) > 0          # digital twin generated
     assert r["guidance"]["operational_data_required"] is True
+
+
+def test_readiness_gate_and_confidences():
+    # Nameplate → understood (high) but NOT audit-ready (low), reason surfaced.
+    df = _steel_nameplate_df()
+    r = understand_engineering_file(df, _cm(df.columns), list(df.columns),
+                                    input_sha256="x", filename="f.csv", rows_parsed=2)
+    rd = r["readiness"]
+    assert rd["economic_audit"] is False
+    assert rd["understanding_confidence"] > rd["operational_confidence"]      # #5
+    assert rd["reason"] == "missing_operational_measurements"
+    assert r["next_step"]["upload"] == "operational_timeseries"              # #4
+    assert r["facility_profile"]["understanding_confidence"] > 0
+
+
+def test_readiness_distinguishes_partial_operational_files():
+    # price but no power → NOT a nameplate file; a specific, helpful next step.
+    r = assess_readiness(_cm(["timestamp", "price"]), row_count=24)
+    assert r.economic_audit is False
+    assert r.reason == "missing_power_signal"
+    assert r.next_step["required"] == ["power (actual_discharge / actual_charge)"]
+    # a full operational file is ready, with high operational confidence.
+    ready = assess_readiness(_cm(["timestamp", "price", "bess_discharge_mw", "charge_mw"]),
+                             row_count=24)
+    assert ready.economic_audit is True and ready.reason == "ready"
+    assert ready.operational_confidence >= 0.9
 
 
 def test_engineering_response_has_no_fabricated_economics():

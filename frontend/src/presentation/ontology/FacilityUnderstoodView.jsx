@@ -18,10 +18,31 @@ const Chip = ({ children }) => (
                  fontSize: 12, fontWeight: 600 }}>{children}</span>
 );
 
+// A labelled 0..100% bar — the platform's honesty made visible (No Guess Without
+// Evidence): how sure we are WHAT this is vs. whether we can economically AUDIT it.
+const Meter = ({ label, value, tone }) => {
+  const pct = Math.round((value || 0) * 100);
+  return (
+    <div style={{ flex: 1, minWidth: 200 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+        <span className="mission-kicker" style={{ color: 'var(--pds-text-3)' }}>{label}</span>
+        <span className="mission-num" style={{ color: tone, fontWeight: 700, fontSize: 12 }}>{pct}%</span>
+      </div>
+      <div style={{ height: 6, borderRadius: 4, background: 'var(--pds-border, #1B2536)', overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${pct}%`, background: tone,
+                      boxShadow: `0 0 8px ${tone}`, transition: 'width .5s ease' }} />
+      </div>
+    </div>
+  );
+};
+
 export default function FacilityUnderstoodView({ data, onUploadOperational }) {
   const profile = data?.facility_profile || null;
   const guidance = data?.guidance || {};
+  const readiness = data?.readiness || {};
   const recognized = !!data?.recognized;
+  const uConf = readiness.understanding_confidence ?? profile?.understanding_confidence ?? 0;
+  const oConf = readiness.operational_confidence ?? 0;
   const caps = capabilityLabels(profile);
   const equip = (profile?.equipment || [])
     .map((e) => e?.identity?.value)
@@ -37,6 +58,13 @@ export default function FacilityUnderstoodView({ data, onUploadOperational }) {
         <span style={{ fontSize: 26, fontWeight: 800, color: 'var(--pds-text, #EAF1F8)' }}>
           {data?.asset_name || facilityName(profile)}
         </span>
+      </div>
+
+      {/* Two honest gauges: what it IS vs. whether we can economically AUDIT it. */}
+      <div style={{ display: 'flex', gap: 28, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <Meter label="Understanding confidence" value={uConf} tone={MC.verified} />
+        <Meter label="Operational readiness" value={oConf}
+               tone={readiness.economic_audit ? MC.optimal : 'var(--pds-warn, #F5A623)'} />
       </div>
 
       {/* Digital twin — auto-generated from the ontology topology */}

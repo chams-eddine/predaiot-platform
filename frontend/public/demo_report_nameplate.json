@@ -90,12 +90,27 @@
         "kind": "sink"
       }
     ],
+    "understanding_confidence": 0.82,
     "traceable": true,
     "explanation": "FACILITY UNDERSTANDING \u2014 steel_plant_nameplate\nFacility type: Steel Plant (1.00) \u2190 ontology \u00b7 rule FACILITY-PATTERN  \u27f5 capability=flexible_load, capability=thermal\nIntent: arbitrage (1.00) \u2190 default\nEquipment:\n  Equipment: electric_arc_furnace (0.82) \u2190 pattern \u00b7 rule PATTERN:eaf_high_power  \u27f5 transformer_mva, voltage_primary, rated_power_mw\n      candidates: high_power_furnace (0.54)\n    capability: flexible_load (0.82) \u2190 ontology \u00b7 rule EXHIBITS  \u27f5 equipment=electric_arc_furnace\n    capability: thermal (0.82) \u2190 ontology \u00b7 rule EXHIBITS  \u27f5 equipment=electric_arc_furnace\nUnknowns (ungrounded): Equipment, Voltage Secondary Range (V)"
   },
   "asset_name": "Steel Plant",
   "facility_type": "Steel Plant",
   "recognized": true,
+  "readiness": {
+    "economic_audit": false,
+    "operational_confidence": 0.05,
+    "understanding_confidence": 0.82,
+    "reason": "missing_operational_measurements"
+  },
+  "next_step": {
+    "upload": "operational_timeseries",
+    "required": [
+      "price",
+      "power (actual_discharge / actual_charge)",
+      "timestamp"
+    ]
+  },
   "guidance": {
     "operational_data_required": true,
     "headline": "Facility identified.",
@@ -113,7 +128,7 @@
     "file_size_bytes": 512,
     "rows_parsed": 2,
     "columns_parsed": 5,
-    "uploaded_at_utc": "2026-07-22T08:41:11.575257Z",
+    "uploaded_at_utc": "2026-07-22T09:05:59.666120Z",
     "parser_version": "ingest-1.3",
     "mode": "facility_understanding"
   }

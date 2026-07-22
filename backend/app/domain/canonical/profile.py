@@ -94,6 +94,18 @@ class FacilityProfile:
         """Rule 4 gate: every inference must trace to evidence or an explicit default."""
         return all(inf.is_traceable() for inf in self.all_inferences())
 
+    def understanding_confidence(self) -> float:
+        """A single scalar: HOW SURE the platform is about what this facility is.
+        Grounded in the pattern-derived equipment confidence (the evidence), falling
+        back to the facility-composition confidence. 0.0 when nothing was recognized
+        (Unknown) — No Guess Without Evidence. Distinct from operational readiness."""
+        eq = self.equipment[0].identity if self.equipment else None
+        if eq is not None and eq.value != "Unknown":
+            return round(eq.confidence, 2)
+        if self.facility_type.value != "Unknown":
+            return round(self.facility_type.confidence, 2)
+        return 0.0
+
     def to_dict(self) -> dict:
         """JSON-safe understanding for the API / frontend (structured + explanation).
         Carries the recognition, not the raw time series."""
@@ -112,6 +124,7 @@ class FacilityProfile:
             } for e in self.equipment],
             "unknowns": list(self.unknowns),
             "topology": list(self.topology),
+            "understanding_confidence": self.understanding_confidence(),
             "traceable": self.is_fully_traceable(),
             "explanation": self.explain(),
         }

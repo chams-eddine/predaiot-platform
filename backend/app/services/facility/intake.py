@@ -17,6 +17,7 @@ columns are mapped to Level-1 facts via knowledge (merged_nameplate_aliases), so
 new industry's nameplate is recognized by adding pack data, not code.
 """
 import re
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -37,9 +38,61 @@ _SIGNAL_FIELDS = ("price", "actual_discharge", "actual_charge", "soc",
 def classify(col_map: Dict[str, str]) -> str:
     """operational iff the file carries price AND a power/consumption column; else
     engineering. Deterministic, industry-agnostic — the same rule the audit
-    endpoint used to gate on, now a routing decision instead of a hard failure."""
+    endpoint used to gate on, now a routing decision instead of a hard failure.
+    NB: price/power are KNOWLEDGE-resolved canonical signals (dozens of aliases),
+    not literal column names. See assess_readiness() for the evidence view."""
     has_output = ("actual_discharge" in col_map) or ("actual_charge" in col_map)
     return "operational" if ("price" in col_map and has_output) else "engineering"
+
+
+@dataclass
+class Readiness:
+    """Operational-Readiness stage — the honest question is 'do we have enough to
+    START the economic audit?', not 'is there a column named price?'. `economic_audit`
+    is the hard gate (the frozen engine's required inputs); the confidences are the
+    evidence view; `next_step` tells the caller exactly what to upload next."""
+    economic_audit: bool                 # engine can run (price + power present)
+    operational_confidence: float        # 0..1 evidence for an operational time-series
+    understanding_confidence: float      # 0..1 how sure we are WHAT the facility is
+    reason: str                          # ready | missing_operational_measurements | missing_price | missing_power_signal
+    next_step: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"economic_audit": self.economic_audit,
+                "operational_confidence": self.operational_confidence,
+                "understanding_confidence": self.understanding_confidence,
+                "reason": self.reason}
+
+
+_OPERATIONAL_REQUIRED = ["price", "power (actual_discharge / actual_charge)", "timestamp"]
+
+
+def assess_readiness(col_map: Dict[str, str], row_count: int = 0,
+                     understanding_confidence: float = 0.0) -> Readiness:
+    """Evidence-based readiness. Operational evidence = price + power signal (the
+    engine's contract) + timestamp + continuity; each is a KNOWLEDGE-resolved
+    canonical signal, so this generalizes to any industry without column-name
+    coupling. The economic audit runs iff price AND power are present (unchanged
+    gate → operational audits stay byte-identical)."""
+    has_price = "price" in col_map
+    has_power = ("actual_discharge" in col_map) or ("actual_charge" in col_map)
+    has_time = "hour" in col_map
+    op_conf = round(0.45 * has_price + 0.45 * has_power
+                    + 0.05 * has_time + 0.05 * (row_count > 1), 2)
+    economic_audit = bool(has_price and has_power)
+    if economic_audit:
+        reason, nxt = "ready", {}
+    else:
+        if not has_price and not has_power:
+            reason, missing = "missing_operational_measurements", _OPERATIONAL_REQUIRED
+        elif not has_power:
+            reason, missing = "missing_power_signal", ["power (actual_discharge / actual_charge)"]
+        else:
+            reason, missing = "missing_price", ["price"]
+        nxt = {"upload": "operational_timeseries", "required": missing}
+    return Readiness(economic_audit=economic_audit, operational_confidence=op_conf,
+                     understanding_confidence=round(understanding_confidence or 0.0, 2),
+                     reason=reason, next_step=nxt)
 
 
 def _num(v: Any) -> Any:
@@ -143,19 +196,35 @@ def understand_engineering_file(
                   or (facility_label if facility_label != "Unknown" else None)
                   or stem)
 
+    # Operational-Readiness stage: understood, but can we audit? (evidence view)
+    readiness = assess_readiness(col_map, row_count=rows_parsed or len(df),
+                                 understanding_confidence=pdict["understanding_confidence"])
+
+    # Human copy is DERIVED from the machine-readable reason (single source), so the
+    # frontend can render from `readiness` + `next_step` alone (no extra logic).
+    _msg = {
+        "missing_operational_measurements":
+            "To perform an economic audit, upload operational measurements (price + power + timestamps).",
+        "missing_power_signal":
+            "Add a power / consumption signal (with prices and timestamps) to run the economic audit.",
+        "missing_price":
+            "Add a market-price column (with power and timestamps) to run the economic audit.",
+    }.get(readiness.reason, "Upload operational measurements to run the economic audit.")
+
     return {
         "mode": "facility_understanding",
         "facility_profile": pdict,
         "asset_name": asset_name,
         "facility_type": facility_label,          # convenience mirror
         "recognized": recognized,
+        "readiness": readiness.to_dict(),
+        "next_step": readiness.next_step,
         "guidance": {
             "operational_data_required": True,
             "headline": ("Facility identified." if recognized
                          else "File received — facility not yet recognized."),
-            "message": ("To perform an economic audit, upload operational "
-                        "measurements (price + power + timestamps)."),
-            "required": ["price", "power (actual_discharge / actual_charge)", "timestamp"],
+            "message": _msg,
+            "required": readiness.next_step.get("required", _OPERATIONAL_REQUIRED),
         },
         "audit_manifest": {
             "manifest_version": "1.0",
