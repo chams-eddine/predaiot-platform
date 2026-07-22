@@ -1,0 +1,120 @@
+{
+  "mode": "facility_understanding",
+  "facility_profile": {
+    "facility_type": {
+      "value": "Steel Plant",
+      "confidence": 1.0,
+      "source": "ontology",
+      "rule": "FACILITY-PATTERN",
+      "evidence": [
+        "capability=flexible_load",
+        "capability=thermal"
+      ],
+      "alternatives": []
+    },
+    "intent": {
+      "value": "arbitrage",
+      "confidence": 1.0,
+      "source": "default",
+      "rule": null,
+      "evidence": [],
+      "alternatives": []
+    },
+    "equipment": [
+      {
+        "identity": {
+          "value": "electric_arc_furnace",
+          "confidence": 0.82,
+          "source": "pattern",
+          "rule": "PATTERN:eaf_high_power",
+          "evidence": [
+            "transformer_mva",
+            "voltage_primary",
+            "rated_power_mw"
+          ],
+          "alternatives": [
+            {
+              "value": "high_power_furnace",
+              "confidence": 0.54
+            }
+          ]
+        },
+        "capabilities": [
+          {
+            "value": "flexible_load",
+            "confidence": 0.82,
+            "source": "ontology",
+            "rule": "EXHIBITS",
+            "evidence": [
+              "equipment=electric_arc_furnace"
+            ],
+            "alternatives": []
+          },
+          {
+            "value": "thermal",
+            "confidence": 0.82,
+            "source": "ontology",
+            "rule": "EXHIBITS",
+            "evidence": [
+              "equipment=electric_arc_furnace"
+            ],
+            "alternatives": []
+          }
+        ],
+        "signals": {}
+      }
+    ],
+    "unknowns": [
+      "Equipment",
+      "Voltage Secondary Range (V)"
+    ],
+    "topology": [
+      {
+        "id": "grid",
+        "label": "Grid",
+        "kind": "source"
+      },
+      {
+        "id": "transformer",
+        "label": "Transformer",
+        "kind": "node"
+      },
+      {
+        "id": "electric_arc_furnace",
+        "label": "Electric Arc Furnace",
+        "kind": "equipment"
+      },
+      {
+        "id": "process",
+        "label": "Process",
+        "kind": "sink"
+      }
+    ],
+    "traceable": true,
+    "explanation": "FACILITY UNDERSTANDING \u2014 steel_plant_nameplate\nFacility type: Steel Plant (1.00) \u2190 ontology \u00b7 rule FACILITY-PATTERN  \u27f5 capability=flexible_load, capability=thermal\nIntent: arbitrage (1.00) \u2190 default\nEquipment:\n  Equipment: electric_arc_furnace (0.82) \u2190 pattern \u00b7 rule PATTERN:eaf_high_power  \u27f5 transformer_mva, voltage_primary, rated_power_mw\n      candidates: high_power_furnace (0.54)\n    capability: flexible_load (0.82) \u2190 ontology \u00b7 rule EXHIBITS  \u27f5 equipment=electric_arc_furnace\n    capability: thermal (0.82) \u2190 ontology \u00b7 rule EXHIBITS  \u27f5 equipment=electric_arc_furnace\nUnknowns (ungrounded): Equipment, Voltage Secondary Range (V)"
+  },
+  "asset_name": "Steel Plant",
+  "facility_type": "Steel Plant",
+  "recognized": true,
+  "guidance": {
+    "operational_data_required": true,
+    "headline": "Facility identified.",
+    "message": "To perform an economic audit, upload operational measurements (price + power + timestamps).",
+    "required": [
+      "price",
+      "power (actual_discharge / actual_charge)",
+      "timestamp"
+    ]
+  },
+  "audit_manifest": {
+    "manifest_version": "1.0",
+    "input_sha256": "demo-nameplate-sha",
+    "original_filename": "steel_plant_nameplate.csv",
+    "file_size_bytes": 512,
+    "rows_parsed": 2,
+    "columns_parsed": 5,
+    "uploaded_at_utc": "2026-07-22T08:41:11.575257Z",
+    "parser_version": "ingest-1.3",
+    "mode": "facility_understanding"
+  }
+}

@@ -1,0 +1,34 @@
+# PREDAIOT Knowledge Pack — recognition / tier: signal.
+# Header -> Level-1 FACT aliases for a Facility Definition / nameplate file (no
+# operational time-series). These are the electrical nameplate facts the existing
+# Evidence Patterns already reason over (see pattern/eaf_high_power.yaml):
+# transformer MVA, primary voltage, rated power. Feeding them lets the FUE
+# recognize the facility from an engineering export alone.
+# DATA ONLY — no behavior, no industry, no column_aliases (audit tables untouched).
+# Aliases are pre-normalised (lower_snake, punctuation stripped) to match
+# ingestion._normalise_col output exactly.
+id: nameplate_electrical
+kind: recognition
+tier: signal
+nameplate_aliases:
+  rated_power_mw:
+  - rated_mw
+  - rated_power_mw
+  - rated_power
+  - rating_mw
+  - rated_capacity_mw
+  - nameplate_mw
+  - mw_rated
+  transformer_mva:
+  - transformer_mva
+  - xfmr_mva
+  - transformer_rating_mva
+  - transformer_capacity_mva
+  - transformer_size_mva
+  voltage_primary:
+  - voltage_primary_v
+  - voltage_primary
+  - primary_voltage_v
+  - primary_voltage
+  - hv_voltage_v
+  - primary_v

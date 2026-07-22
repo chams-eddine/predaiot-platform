@@ -28,11 +28,17 @@ from app.services.ingestion._primitives import _normalise_col  # noqa: F401
 # Phase 4 (Layer 4): the header->canonical alias tables now live in Knowledge
 # Packs (packs/*/pack.yaml), assembled by the registry. Byte-identical to the
 # former inline monolith at S1 (tests/test_knowledge_pack_identity.py).
-from app.knowledge.registry import merged_column_aliases, merged_asset_meta_aliases  # noqa: E402
+from app.knowledge.registry import (  # noqa: E402
+    merged_column_aliases, merged_asset_meta_aliases, merged_nameplate_aliases,
+)
 
 
 COLUMN_ALIASES = merged_column_aliases()
 ASSET_META_ALIASES = merged_asset_meta_aliases()
+# Header -> Level-1 fact table for nameplate/engineering files (understand-first
+# upload). Not part of operational column resolution, so it does NOT affect the
+# knowledge-identity gate.
+NAMEPLATE_ALIASES = merged_nameplate_aliases()
 
 _FUZZY_THRESHOLD = 80  # rapidfuzz token_sort_ratio out of 100
 

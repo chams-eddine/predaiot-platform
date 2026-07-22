@@ -25,6 +25,7 @@ import EconomicHealthOrb from './motion/EconomicHealthOrb';
 import PredictiveTimeline from './motion/PredictiveTimeline';
 import MissionControl from './motion/MissionControl';
 import DigitalTwinRenderer from './presentation/ontology/DigitalTwinRenderer';
+import FacilityUnderstoodView from './presentation/ontology/FacilityUnderstoodView';
 import { hasCapability } from './presentation/ontology/TerminologyResolver';
 // Mission API facade (single import for the Mission-Control composition layer).
 import { MissionMeter } from './design/mission';
@@ -1755,6 +1756,10 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
   // "An audit is loaded" = the decision log has rows. NOT dq_score > 0 —
   // an honest DQ of 0.0 (destructive dispatch) is a real, displayable audit.
   const hasData     = log.length > 0;
+  // Understand-first: a nameplate/engineering upload produced a recognized
+  // facility but no operational data — render the Facility Understood view, not
+  // the audit dashboard (and never the generic welcome empty-state).
+  const understood  = data.mode === 'facility_understanding';
 
   const navItems = [
     { id: 'exec',      label: 'Executive Summary',           tag: '01' },
@@ -2108,7 +2113,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {/* Welcome / empty state — only shown when on a data-dependent section
               with no audit loaded. Skipped for live/appendix/govern which work
               independently of audit data. */}
-          {!hasData && !showUpload && !['live', 'appendix', 'govern', 'history', 'realtime'].includes(activeSection) && (
+          {!hasData && !understood && !showUpload && !['live', 'appendix', 'govern', 'history', 'realtime'].includes(activeSection) && (
             <div style={{ textAlign: 'center', padding: '70px 40px' }}>
               <div style={{ color: DS.text, fontSize: 20, fontWeight: 700, marginBottom: 6 }}>Economic Decision Audit™</div>
               <div style={{ color: DS.dim, fontSize: 11, letterSpacing: '0.1em', marginBottom: 20 }}>
@@ -2142,7 +2147,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   OR EXPLORE A LIVE DEMO — SAME ENGINE, DIFFERENT FACILITY
                 </div>
                 <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
-                  {[['', 'Battery Storage'], ['steel', 'Steel Plant'], ['solar', 'Solar Farm']].map(([fx, lbl]) => (
+                  {[['', 'Battery Storage'], ['steel', 'Steel Plant'], ['solar', 'Solar Farm'], ['nameplate', 'Nameplate File']].map(([fx, lbl]) => (
                     <button key={lbl} onClick={() => runDemo(fx)} disabled={loading}
                       style={{ background: 'var(--pdm-panel)', border: `1px solid ${DS.border}`,
                                color: DS.text, borderRadius: 999, padding: '7px 16px',
@@ -2157,6 +2162,17 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                 its twin, terminology and report automatically. Instant, no sign-up.
               </div>
             </div>
+          )}
+
+          {/* ══ Facility Understood — understand-first upload ═══════════ */}
+          {/* A nameplate/engineering file was recognized but carries no
+              operational data. Render the recognized facility (twin, equipment,
+              capabilities) + guidance requesting operational data. No audit,
+              no fabricated economics (Principle 1/9; No-Fabrication). */}
+          {understood && (
+            <Workspace>
+              <FacilityUnderstoodView data={data} onUploadOperational={() => setShowUpload(true)} />
+            </Workspace>
           )}
 
           {/* ══ S01: Executive Summary — SPEC-EX on the Workspace ══════ */}

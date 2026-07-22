@@ -127,6 +127,10 @@ class RecognitionPack(_Base):
     # transitionally; S4 redistributes header aliases to their owning equipment packs).
     column_aliases: Dict[str, List[str]] = {}
     asset_meta_aliases: Dict[str, List[str]] = {}
+    # header -> Level-1 FACT alias tables. Lets a Facility Definition / nameplate file
+    # (Rated MW, Transformer MVA, Voltage Primary …) feed the Evidence Patterns without
+    # any operational time-series. DATA ONLY; no engine behavior.
+    nameplate_aliases: Dict[str, List[str]] = {}
     # tier == "facility" (S4): a named composition label — NO behavior.
     display_name: Optional[str] = None
     typical_capabilities: List[str] = []

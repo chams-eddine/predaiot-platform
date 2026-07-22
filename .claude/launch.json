@@ -6,6 +6,12 @@
       "runtimeExecutable": "C:/Users/user/projects/predaiot-platform/.venv-twin/Scripts/python.exe",
       "runtimeArgs": ["-m", "uvicorn", "main:app", "--app-dir", "backend", "--port", "8000"],
       "port": 8000
+    },
+    {
+      "name": "predaiot-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
+      "port": 5173
     }
   ]
 }

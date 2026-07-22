@@ -81,3 +81,10 @@ def merged_column_aliases() -> Dict[str, List[str]]:
 def merged_asset_meta_aliases() -> Dict[str, List[str]]:
     """ASSET_META_ALIASES assembled from signal-recognition packs."""
     return _merge("asset_meta_aliases")
+
+
+@lru_cache(maxsize=1)
+def merged_nameplate_aliases() -> Dict[str, List[str]]:
+    """NAMEPLATE_ALIASES (header -> Level-1 fact) from signal-recognition + equipment packs.
+    Feeds the Facility Understanding Engine from a nameplate file (no time-series)."""
+    return _merge("nameplate_aliases")

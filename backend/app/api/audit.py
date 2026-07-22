@@ -34,6 +34,9 @@ from app.core.versions import (  # noqa: F401
 from app.models import AuditRecord, Decision, EconomicState, TrialLead, User  # noqa: F401
 from app.schemas import AssetSpecs, AuditRequest, AuditResponse  # noqa: F401
 from app.services.audit_service import process_calculation  # noqa: F401
+from app.services.facility.intake import (  # noqa: F401
+    classify as _classify_upload, understand_engineering_file,
+)
 from app.services.ingestion import (  # noqa: F401
     COLUMN_ALIASES, ASSET_META_ALIASES, _normalise_col, _FUZZY_THRESHOLD,
     _resolve_columns_verbose, _resolve_columns, _detect_and_apply_units,
@@ -264,21 +267,33 @@ async def audit_from_file(
         col_info = _resolve_columns_verbose(list(df.columns))
         col_map = col_info["resolved"]
 
-        # Check required fields resolved. Load-class assets (electrolyzers,
-        # desalination) report CONSUMPTION, not output — actual_charge alone
-        # is a valid audit input for them (the engine falls back internally).
-        has_output = ("actual_discharge" in col_map) or ("actual_charge" in col_map)
-        if "price" not in col_map or not has_output:
-            missing = [r for r in ("price",) if r not in col_map]
-            if not has_output:
-                missing.append("actual_discharge (or a consumption column like actual_charge)")
-            return JSONResponse(status_code=400, content={
-                "detail": (
-                    f"Could not find required column(s): {missing}. "
-                    f"Your file has columns: {list(df.columns)}. "
-                    f"Use /api/v1/audit/inspect to see the full mapping attempt."
+        # ── File classification (understand-first, Principle 1/9) ───────────
+        # A file WITHOUT operational time-series (price + power/consumption) is a
+        # Facility Definition / nameplate export, NOT an error. Run the Facility
+        # Understanding Engine only and return the recognized facility (topology,
+        # equipment, capabilities) + guidance requesting operational data. The
+        # economic engine runs ONLY on operational files (Immutable Engine Rule).
+        # Load-class assets (electrolyzers, desalination) report CONSUMPTION, not
+        # output — actual_charge alone is a valid operational input (engine falls
+        # back internally), so the classifier accepts either power column.
+        if _classify_upload(col_map) == "engineering":
+            input_sha256 = _hashlib.sha256(contents).hexdigest()
+            try:
+                payload = understand_engineering_file(
+                    df=df, col_map=col_map, raw_columns=raw_columns,
+                    input_sha256=input_sha256, filename=file.filename,
+                    file_size_bytes=len(contents),
+                    rows_parsed=int(raw_shape[0]), columns_parsed=int(raw_shape[1]),
                 )
-            })
+            except Exception as _fe:
+                return JSONResponse(status_code=422, content={
+                    "detail": (
+                        f"This file has neither operational data (price + power) nor a "
+                        f"recognizable facility definition ({_fe}). "
+                        f"Your file has columns: {list(df.columns)}. "
+                        f"Use /api/v1/audit/inspect to see the full mapping attempt."
+                    )})
+            return JSONResponse(content=_json_safe(payload))
 
         # Rename resolved columns to internal names
         rename_map = {v: k for k, v in col_map.items() if v in df.columns}
@@ -617,6 +632,9 @@ async def inspect_file(file: UploadFile = File(...)):
                     "fallback": _MISSING_FIELD_FALLBACKS.get(f, "safe default applied."),
                 })
 
+        # Classification preview: operational → economic audit; engineering →
+        # facility understanding only (nameplate file, no time-series).
+        file_kind = _classify_upload(col_map)
         return {
             "file_columns":         list(df.columns),
             "rows":                 len(df),
@@ -630,8 +648,9 @@ async def inspect_file(file: UploadFile = File(...)):
             "data_quality":         dq_flags,
             "currency":             currency,
             "field_warnings":       field_warnings,
-            "will_succeed":         "price" in col_map
-                                    and ("actual_discharge" in col_map or "actual_charge" in col_map),
+            "file_kind":            file_kind,   # "operational" | "engineering"
+            "will_succeed":         file_kind == "operational",
+            "will_understand":      file_kind == "engineering",
             "sample_row":           df.iloc[0].to_dict() if len(df) > 0 else {},
         }
     except Exception as e:
