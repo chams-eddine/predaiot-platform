@@ -247,6 +247,13 @@ class MemberCreateRequest(BaseModel):
 class MemberRoleRequest(BaseModel):
     role: str
 
+class FacilityMemberRequest(BaseModel):
+    # Identify the org member by email (preferred) or user_id; role is a
+    # facility-scoped role (auditor/operator/executive/viewer).
+    email: Optional[str] = None
+    user_id: Optional[int] = None
+    role: str
+
 class DecisionTransitionRequest(BaseModel):
     to_state: str
     note: Optional[str] = None

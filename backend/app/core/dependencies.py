@@ -11,6 +11,7 @@ from fastapi import Header, HTTPException, Depends
 
 from app.core.config import SessionLocal, CONSULTATION_BOOKING_URL
 from app.core.security import _decode_jwt
+from app.core import authz
 from app.models import User, TrialLead
 
 
@@ -90,6 +91,18 @@ def require_role(*roles: str):
         if user.role != "owner" and user.role not in roles:
             raise HTTPException(status_code=403, detail={"code": "forbidden",
                                 "message": f"Requires role: {', '.join(roles)}."})
+        return user
+    return _dep
+
+def require_facility_access(action: str):
+    """Facility-scoped RBAC (Org → Facility → Role). Enforces `action` on the
+    path's `facility_id` for the signed-in user: org owner/admin bypass (their own
+    org); everyone else needs a FacilityMembership whose role grants `action`.
+    Returns the User so handlers can read org_id/id."""
+    def _dep(facility_id: int, user: "User" = Depends(require_user)) -> "User":
+        if not authz.can(user, facility_id, action):
+            raise HTTPException(status_code=403, detail={"code": "forbidden",
+                                "message": "You do not have access to this facility."})
         return user
     return _dep
 

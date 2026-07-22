@@ -12,6 +12,7 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.config import SessionLocal
+from app.core import authz
 from app.core.dependencies import require_role, require_user
 from app.repositories.security_log import _security_log
 from app.core.security import _ROLES, _hash_password
@@ -49,10 +50,17 @@ async def create_asset(req: AssetCreateRequest,
 
 @router.get("/api/v1/assets")
 async def list_assets(user: User = Depends(require_user)):
+    """Org assets, scoped to the caller's accessible facilities (org owner/admin
+    see all; other users see only facilities they're a member of)."""
     db = SessionLocal()
     try:
-        rows = (db.query(Asset).filter(Asset.org_id == user.org_id)
-                .order_by(Asset.created_at.desc()).all())
+        q = db.query(Asset).filter(Asset.org_id == user.org_id)
+        ids = authz.accessible_facility_ids(user, db)
+        if ids is not authz.ALL:
+            if not ids:
+                return {"assets": []}
+            q = q.filter(Asset.id.in_(ids))
+        rows = q.order_by(Asset.created_at.desc()).all()
         return {"assets": [_asset_dict(a) for a in rows]}
     finally:
         db.close()

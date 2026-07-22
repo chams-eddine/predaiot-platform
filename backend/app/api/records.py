@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse  # noqa: F401
 
 import eda_metrics  # noqa: F401
 from app.core.config import SessionLocal  # noqa: F401
+from app.core import authz  # noqa: F401
 from app.core.dependencies import require_user, require_role, require_trial_or_user  # noqa: F401
 from app.models import (  # noqa: F401
     AuditRecord, EconomicState, User, TrialLead, Decision, DecisionEvent,
@@ -22,13 +23,25 @@ from app.models import (  # noqa: F401
 router = APIRouter()
 
 
+def _can_see(ids, asset_id) -> bool:
+    """Facility-scope a history row: org superusers (ALL) see everything; other
+    users see only records linked to a facility they can access. Records with no
+    facility link (asset_id is None) are visible to org superusers only."""
+    return ids is authz.ALL or (asset_id is not None and asset_id in ids)
+
+
 @router.get("/api/v1/audits")
 async def list_audits(user: User = Depends(require_user)):
     """Org-scoped audit history — newest first, headline Economic State only."""
     db = SessionLocal()
     try:
-        rows = (db.query(AuditRecord).filter(AuditRecord.org_id == user.org_id)
-                .order_by(AuditRecord.created_at.desc()).limit(100).all())
+        q = db.query(AuditRecord).filter(AuditRecord.org_id == user.org_id)
+        ids = authz.accessible_facility_ids(user, db)
+        if ids is not authz.ALL:
+            if not ids:
+                return {"audits": []}
+            q = q.filter(AuditRecord.asset_id.in_(ids))
+        rows = q.order_by(AuditRecord.created_at.desc()).limit(100).all()
         return {"audits": [{
             "id": r.id, "created_at": r.created_at.isoformat() + "Z",
             "asset_name": r.asset_name, "asset_type": r.asset_type,
@@ -53,7 +66,7 @@ async def get_audit(audit_id: int, user: User = Depends(require_user)):
         r = (db.query(AuditRecord)
              .filter(AuditRecord.id == audit_id, AuditRecord.org_id == user.org_id)
              .first())
-        if r is None:
+        if r is None or not _can_see(authz.accessible_facility_ids(user, db), r.asset_id):
             raise HTTPException(status_code=404, detail={"code": "audit_not_found",
                                 "message": "No such audit in your organization."})
         return json.loads(r.result_json)
@@ -74,7 +87,7 @@ async def audit_economic_state(audit_id: int, user: User = Depends(require_user)
         r = (db.query(AuditRecord)
              .filter(AuditRecord.id == audit_id, AuditRecord.org_id == user.org_id)
              .first())
-        if r is None:
+        if r is None or not _can_see(authz.accessible_facility_ids(user, db), r.asset_id):
             raise HTTPException(status_code=404, detail={"code": "audit_not_found",
                                 "message": "No such audit in your organization."})
         audit = json.loads(r.result_json)
@@ -90,8 +103,13 @@ async def list_economic_states(user: User = Depends(require_user)):
     """Org-scoped Economic State register (EDA-ES-1.0), newest first."""
     db = SessionLocal()
     try:
-        rows = (db.query(EconomicState).filter(EconomicState.org_id == user.org_id)
-                .order_by(EconomicState.created_at.desc()).limit(100).all())
+        q = db.query(EconomicState).filter(EconomicState.org_id == user.org_id)
+        ids = authz.accessible_facility_ids(user, db)
+        if ids is not authz.ALL:
+            if not ids:
+                return {"economic_states": []}
+            q = q.filter(EconomicState.asset_id.in_(ids))
+        rows = q.order_by(EconomicState.created_at.desc()).limit(100).all()
         return {"economic_states": [{
             "id": s.id, "audit_id": s.audit_id, "version": s.version,
             "currency": s.currency, "window_start": s.window_start, "window_end": s.window_end,
@@ -119,7 +137,7 @@ async def audit_decisions(audit_id: int, user: User = Depends(require_user)):
         r = (db.query(AuditRecord)
              .filter(AuditRecord.id == audit_id, AuditRecord.org_id == user.org_id)
              .first())
-        if r is None:
+        if r is None or not _can_see(authz.accessible_facility_ids(user, db), r.asset_id):
             raise HTTPException(status_code=404, detail={"code": "audit_not_found",
                                 "message": "No such audit in your organization."})
         audit = json.loads(r.result_json)

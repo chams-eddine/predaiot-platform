@@ -6,7 +6,7 @@ byte-identical, so create_all() yields the same schema. Base lives here now.
 from datetime import datetime  # noqa: F401
 import hashlib as _hashlib  # noqa: F401
 
-from sqlalchemy import Column, Integer, Float, String, DateTime, Boolean  # noqa: F401
+from sqlalchemy import Column, Integer, Float, String, DateTime, Boolean, UniqueConstraint  # noqa: F401
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -86,6 +86,26 @@ class Asset(Base):
     currency = Column(String, nullable=True)
     specs_json = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class FacilityMembership(Base):
+    """
+    Facility-scoped RBAC (Org → Facility → Role). A user's role FOR ONE facility
+    (facility_id == assets.id — a facility IS an asset row today). Absence of a
+    row = no access for that user (org owner/admin bypass this and see every
+    facility in their org). Authz lives at the API boundary only; the economic
+    engine never sees users, roles or memberships.
+    role ∈ {auditor, operator, executive, viewer} (see app/core/authz.py).
+    """
+    __tablename__ = "facility_memberships"
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, index=True, nullable=False)
+    facility_id = Column(Integer, index=True, nullable=False)   # → assets.id
+    user_id = Column(Integer, index=True, nullable=False)
+    role = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    __table_args__ = (UniqueConstraint("user_id", "facility_id",
+                                       name="uq_facility_member"),)
 
 
 class AuditRecord(Base):

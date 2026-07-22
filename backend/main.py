@@ -130,6 +130,7 @@ from app.api.health import router as health_router  # noqa: E402
 from app.api.legacy import router as legacy_router  # noqa: E402
 from app.api.auth import router as auth_router  # noqa: E402
 from app.api.tenancy import router as tenancy_router  # noqa: E402
+from app.api.facilities import router as facilities_router  # noqa: E402
 from app.api.records import router as records_router  # noqa: E402
 from app.api.decisions import router as decisions_router  # noqa: E402
 from app.api.live import router as live_router  # noqa: E402
@@ -139,6 +140,7 @@ app.include_router(health_router)
 app.include_router(legacy_router)
 app.include_router(auth_router)
 app.include_router(tenancy_router)
+app.include_router(facilities_router)
 app.include_router(records_router)
 app.include_router(decisions_router)
 app.include_router(live_router)
