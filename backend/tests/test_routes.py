@@ -60,7 +60,6 @@ FROZEN = {
     ("POST", "/api/v1/audit/pdf"),
     ("POST", "/api/v1/auth/login"),
     ("POST", "/api/v1/auth/register"),
-    ("POST", "/api/v1/certificate"),
     ("POST", "/api/v1/facilities/{facility_id}/members"),
     ("POST", "/api/v1/decisions/{decision_id}/outcome"),
     ("POST", "/api/v1/decisions/{decision_id}/transition"),

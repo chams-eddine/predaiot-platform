@@ -15,7 +15,6 @@ from app.core.config import SessionLocal  # noqa: F401
 from app.core.dependencies import require_trial_or_user  # noqa: F401
 from app.core.state import _latest_by_token  # noqa: F401
 from app.models import CertificateRecord, TrialLead  # noqa: F401
-from app.schemas import AuditResponse  # noqa: F401
 import app.services.certificate_service as _certsvc  # noqa: F401
 from app.services.certificate_service import (  # noqa: F401
     _CERT_KEY_ENV, _cert_signing_key, _build_certificate,
@@ -34,12 +33,6 @@ async def get_certificate_for_latest(lead: TrialLead = Depends(require_trial_or_
     if not data or data.get("dq_score") is None:
         return JSONResponse(status_code=404, content={"detail": "No audit has been run yet."})
     return _build_certificate(data)
-
-
-@router.post("/api/v1/certificate")
-async def generate_certificate_for_audit(data: AuditResponse):
-    """Generate a certificate for a provided audit result."""
-    return _build_certificate(data.dict())
 
 
 @router.get("/api/v1/metrics/registry")
