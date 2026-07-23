@@ -627,7 +627,8 @@ async def audit_from_file(
 
 
 @router.post("/api/v1/audit/inspect")
-async def inspect_file(file: UploadFile = File(...)):
+@limiter.limit("20/minute")
+async def inspect_file(request: Request, file: UploadFile = File(...)):
     """
     Pre-audit preview per Coverage Tasks 1.6. Returns everything the engine
     would apply if the operator hits "run audit," without spending CPU on MILP.
@@ -815,10 +816,18 @@ async def get_latest_audit_pdf(lead: TrialLead = Depends(require_trial_or_user))
 # NEW: Claude AI Enhancement Proxy
 # ==========================================
 @router.post("/api/v1/ai-enhance")
-async def ai_enhance(request: Dict[str, Any] = Body(...)):
+@limiter.limit("10/minute")
+async def ai_enhance(
+    request: Request,   # noqa: ARG001 — used by rate limiter
+    payload: Dict[str, Any] = Body(...),
+    lead: TrialLead = Depends(require_trial_or_user),
+):
     """
     Proxy endpoint for Claude AI enhanced commentary.
     Requires ANTHROPIC_API_KEY environment variable.
+
+    Gated (trial or user) + rate-limited: this endpoint spends real money on
+    the Anthropic API, so it must never be an open, unthrottled proxy.
 
     Add to your Render / Railway env vars:
       ANTHROPIC_API_KEY = sk-ant-...
@@ -832,9 +841,9 @@ async def ai_enhance(request: Dict[str, Any] = Body(...)):
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
         msg = client.messages.create(
-            model=request.get("model", "claude-sonnet-4-6"),
-            max_tokens=request.get("max_tokens", 1000),
-            messages=request.get("messages", []),
+            model=payload.get("model", "claude-sonnet-4-6"),
+            max_tokens=payload.get("max_tokens", 1000),
+            messages=payload.get("messages", []),
         )
         return {"content": [{"type": "text", "text": msg.content[0].text}]}
     except Exception as e:
