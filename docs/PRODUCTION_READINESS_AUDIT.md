@@ -317,12 +317,41 @@ Verification only (no code change). Objective evidence:
   lead) — offered to owner as: he runs it in the live UI, or authorizes a throwaway
   trial token.
 
-## Remaining critical risks (populated as found)
+### FIX #3 — `security(prod-readiness #3)` · commit `c64f457` · DEPLOYED & VERIFIED 2026-07-23
+Closes Gate-Review **H3** (auth secret fail-open).
+- **Root cause (corrected from initial Gate note):** a missing `PREDAIOT_AUTH_SECRET`
+  did not sign with `""` — it fell back to `sha256("predaiot-dev-" + abspath(__file__))`.
+  On the fixed container image that path is constant → the fallback secret is publicly
+  **derivable** → forgeable JWTs if the env var ever went missing.
+- **Change:** `security.py` now resolves the secret via `_resolve_auth_secret(environ)`
+  which **fails closed** — if no explicit secret AND a Postgres `DATABASE_URL` is set, it
+  raises at startup instead of using the derivable fallback. Dev/test keeps the fallback.
+  Gated on PRESENCE only (never length) so a set-but-short secret can never crash a deploy.
+- **Evidence — local:** 3 new deterministic tests (prod-without-secret raises;
+  dev-without-secret falls back; explicit secret authoritative). Full suite **208 passed**;
+  `arch_graph` **violations=0**.
+- **Evidence — prod (`c64f457` live):** app boots healthy WITH the guard —
+  `/health/db` `auth_secret_configured: true`, `status: connected`, HTTP 200; `/version`
+  200. Guard doesn't trip (secret is set) → zero regression. ✅
 
-- **H4** DB backup/DR — **CLEARED** 2026-07-23: owner confirmed automated backups are
-  ON for the managed Postgres. No longer a blocker.
-- **H3** auth-secret fail-open (`security.py:17`) — queued (latent; prod secret is set).
-- **M2** `POST /api/share` in-memory share links — queued.
-- **M3** hybrid migration strategy — queued.
-- **SCOPE** Only Steel authored — non-steel pilot would need Knowledge-Pack authoring
-  (a feature, not a fix). Owner to confirm pilot industry = Steel.
+---
+
+## Status snapshot (2026-07-23)
+
+**Pilot target = Steel (owner-confirmed).** The Steel-only pack reality is acceptable for
+the pilot; non-steel would need Knowledge-Pack authoring (a feature, deferred).
+
+| Gate item | State |
+|---|---|
+| H1 unauth cert-mint | ✅ FIXED (Fix #2, `0e40643`) |
+| H2 unauth paid-LLM | ✅ FIXED (Fix #1, `f280960`) |
+| H3 auth-secret fail-open | ✅ FIXED (Fix #3, `c64f457`) |
+| H4 DB backup/DR | ✅ CLEARED (owner-confirmed backups ON) |
+| M1 unauth inspect throttle | ✅ FIXED (Fix #1) |
+| Parity (items 3/5) + Live/RT | ✅ VERIFIED |
+| Item 6 Muscat live full-run | ⏳ owner runs in UI; I verify the number |
+| M2 `/api/share` in-memory | ⬜ queued |
+| M3 hybrid migrations | ⬜ queued |
+| M4 two-number (Daily/TOU) UX | ⬜ queued (product) |
+| M5 critical-path coverage | ⬜ queued (measure engine/economics/validation) |
+| L1 silent excepts · L2 audit.py size · L3 SQL f-strings | ⬜ low |
