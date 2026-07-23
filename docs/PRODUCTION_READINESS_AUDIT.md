@@ -271,8 +271,25 @@ Closes Gate-Review **H2** and **M1** (the unauthenticated endpoint surface, part
 - **Residual (deferred to later fixes in this cluster):** `POST /api/v1/certificate`
   (H1, unauth cert-mint) and `POST /api/share` (M2, in-memory) still open — next.
 
+### FIX #2 — `security(prod-readiness #2)` · commit `0e40643` · DEPLOYED & VERIFIED 2026-07-23
+Closes Gate-Review **H1** (unauthenticated certificate minting).
+- **Proof it was dead code:** frontend only GETs (`App.jsx:3096`); no internal caller;
+  no test POSTs to it. The endpoint ran client-supplied numbers through
+  `_register_certificate`, which Ed25519-**signs** + **persists** a `CertificateRecord`
+  that the public `/certificate/verify/{id}` reports as `VERIFIED`.
+- **Change:** deleted `POST /api/v1/certificate` + its dead `AuditResponse` import +
+  removed from the frozen route inventory. Legit `GET /api/v1/certificate` stays —
+  auth-gated + token-scoped to the caller's own latest audit (no manual numbers path).
+- **Evidence — local:** full suite **205 passed**; `arch_graph` **violations=0**.
+- **Evidence — prod (`0e40643` live):**
+  - `POST /api/v1/certificate` → **HTTP 405 Method Not Allowed** (minter removed). ✅
+  - `GET /api/v1/certificate` no-token → **401**; bogus-token → **401** (token-scoped). ✅
+  - No regression: `/certificate/verify/{id}` 404-for-unknown, `/metrics/registry` 200,
+    `/health/db` 200, `/version` 200. ✅
+
 ## Remaining critical risks (populated as found)
 
-- **H1** `POST /api/v1/certificate` unauth cert-mint — NEXT fix (Fix #2).
-- **H3** auth-secret fail-open — queued.
-- **H4** DB backup/DR — needs owner config confirmation (#3).
+- **H4** DB backup/DR — needs owner confirmation of the managed-PG plan/backups (config #3).
+- **H3** auth-secret fail-open (`security.py:17`) — queued (latent; prod secret is set).
+- **M2** `POST /api/share` in-memory share links — queued.
+- **M3** hybrid migration strategy — queued.
