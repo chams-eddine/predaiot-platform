@@ -287,9 +287,42 @@ Closes Gate-Review **H1** (unauthenticated certificate minting).
   - No regression: `/certificate/verify/{id}` 404-for-unknown, `/metrics/registry` 200,
     `/health/db` 200, `/version` 200. ✅
 
+### PARITY VERIFICATION (owner items 3-6) — 2026-07-23, prod `0e40643`
+Verification only (no code change). Objective evidence:
+- **Item 3 · Live/code parity — ✅.** prod `/version` git_commit == `origin/main`
+  (local HEAD ahead only by this doc). Frontend is rebuilt from source in the
+  Docker multi-stage image, so it cannot drift; confirmed the prod bundle
+  (`/assets/index-DSCreY_K.js`) contains the latest `Maximum Economic Opportunity`
+  labels (×2). **Prod = the dev branch.**
+- **Item 4 · Assets / Facilities / Knowledge Packs — ✅ with a scope finding.**
+  15 packs are bundled in the image (`Dockerfile` `COPY backend/`) and LOAD in
+  prod: a live `/audit/inspect` of steel data resolved `consumption_kwh→actual_charge`,
+  `timestamp→hour`, and auto-corrected `530950 kW → MW`. **HONEST FINDING: Steel is
+  the ONLY authored industry pack.** Recognition packs = steel, steel_operational,
+  nameplate_electrical (generic), tou_band_billing (generic), legacy_signal_aliases
+  (generic); patterns = battery/solar/EAF (for Live). **No Cement / Water / Mining /
+  Food recognition packs exist.** The universal engine WOULD audit such data as a
+  generic LOAD, but without industry-specific recognition. → For the Muscat **Steel**
+  pilot this is exactly right; a non-steel client needs pack authoring first (that is
+  a *feature* via the Knowledge-Engineering workflow — out of the current
+  no-new-features scope). Decision surfaced to owner.
+- **Item 5 · Real-Time paths — ✅.** All live endpoints wired + properly gated in
+  prod: `GET /live/state` 401, `POST /live/ingest` 401, `GET /reconciliations` 401
+  (unauth), `GET /reconciliations/verify` 200 (public by design).
+- **Item 6 · Muscat Steel e2e — ✅ (engine parity) / authed full-run pending owner.**
+  Prod recognizes the real Muscat signal (inspect proof above). Engine is frozen +
+  deterministic at `0e40643`, the commit where `test_muscat_reference` (94,597 /
+  DQ 0.91 / ALP 378,389) passes in the 205-green suite → prod produces the same
+  numbers. A full authed report-run on prod needs a token (would create a funnel
+  lead) — offered to owner as: he runs it in the live UI, or authorizes a throwaway
+  trial token.
+
 ## Remaining critical risks (populated as found)
 
-- **H4** DB backup/DR — needs owner confirmation of the managed-PG plan/backups (config #3).
+- **H4** DB backup/DR — **CLEARED** 2026-07-23: owner confirmed automated backups are
+  ON for the managed Postgres. No longer a blocker.
 - **H3** auth-secret fail-open (`security.py:17`) — queued (latent; prod secret is set).
 - **M2** `POST /api/share` in-memory share links — queued.
 - **M3** hybrid migration strategy — queued.
+- **SCOPE** Only Steel authored — non-steel pilot would need Knowledge-Pack authoring
+  (a feature, not a fix). Owner to confirm pilot industry = Steel.
