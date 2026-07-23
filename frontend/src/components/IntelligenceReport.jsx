@@ -23,7 +23,7 @@ export default function IntelligenceReport({ data, m, captureRate, aiText, aiLoa
   const facts = [
     { l: 'Risk band', v: (data.risk_level || '—'), c: riskColor(data.risk_level), strong: true },
     { l: 'Ceiling capture', v: fmtPct(captureRate), c: PDS.text2 },
-    recoverable != null && { l: 'Recoverable execution gap', v: fmtMoney(Math.abs(recoverable), currency), c: PDS.recover },
+    recoverable != null && { l: 'Recoverable Opportunity', v: fmtMoney(Math.abs(recoverable), currency), c: PDS.recover },
     m && m.dispatch_accuracy != null && { l: 'Dispatch accuracy', v: `${m.dispatch_accuracy.toFixed(1)}%`, c: PDS.text2 },
     m && m.forecast_utilization_index != null && { l: 'Forecast coverage', v: `${m.forecast_utilization_index.toFixed(0)}%`, c: PDS.text2 },
   ].filter(Boolean);

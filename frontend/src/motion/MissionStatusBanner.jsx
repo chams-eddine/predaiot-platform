@@ -49,7 +49,7 @@ export default function MissionStatusBanner({ data, certificate }) {
       {/* audit_manifest.solver (constant from the engine) */}
       <Badge label="SOLVER" value={solver} />
       {/* total_gap_usd + currency */}
-      <Badge label="GAP" value={gap != null ? `${Math.abs(gap).toLocaleString('en-US', { maximumFractionDigits: 0 })} ${cur}` : '—'} tone="leak" />
+      <Badge label="TOTAL GAP" value={gap != null ? `${Math.abs(gap).toLocaleString('en-US', { maximumFractionDigits: 0 })} ${cur}` : '—'} tone="leak" />
       {/* data_quality_index.grade + audit_confidence.grade */}
       <Badge label="DQI" value={(data.data_quality_index || {}).grade || '—'} />
       <Badge label="CONFIDENCE" value={(data.audit_confidence || {}).grade || '—'} />

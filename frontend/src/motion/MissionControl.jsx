@@ -160,11 +160,11 @@ export default function MissionControl({ data, log = [], certificate }) {
         {/* ── Primary readout — the Bloomberg big-figure row ─────────── */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
                       gap: 12, marginBottom: 16 }}>
-          <Cell label="Economic Gap · Ceiling" tag="TOTAL">
-            <MissionMetric label="Value surrendered" tone="leak" size={30}
-              value={money0(gap, cur)} sub="vs perfect-foresight optimum" />
+          <Cell label="Total Gap · vs Theoretical Optimum" tag="TOTAL">
+            <MissionMetric label="Total economic gap" tone="leak" size={30}
+              value={money0(gap, cur)} sub="vs perfect-foresight optimum (ceiling)" />
           </Cell>
-          <Cell label="Recoverable" tag="CH 8.2">
+          <Cell label="Recoverable Opportunity" tag="CH 8.2">
             <MissionMetric label="With day-ahead forecast" tone="warning" size={30}
               value={money0(recoverable, cur)} sub="execution-gap slice" />
           </Cell>

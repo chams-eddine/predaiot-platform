@@ -386,7 +386,7 @@ function VerdictDial({ ecfPct, riskLevel }) {
 function AllocationBar({ captured, recoverable, forecastGap, leakage, ceiling, currency }) {
   const segs = [];
   if (captured != null) segs.push({ k: 'Protected (captured)', v: Math.max(0, captured), c: PDS.recover });
-  if (recoverable != null) segs.push({ k: 'Recoverable execution gap', v: Math.abs(recoverable), c: PDS.loss });
+  if (recoverable != null) segs.push({ k: 'Recoverable Opportunity', v: Math.abs(recoverable), c: PDS.loss });
   if (forecastGap != null && forecastGap > 0) segs.push({ k: 'Forecast-unreachable', v: forecastGap, c: PDS.text3 });
   if (segs.length < 2 && leakage != null && captured != null) {
     segs.length = 0;
