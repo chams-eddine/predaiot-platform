@@ -14,13 +14,33 @@ from typing import Optional
 import bcrypt as _bcrypt
 import jwt as _pyjwt
 
-_AUTH_SECRET = os.environ.get("PREDAIOT_AUTH_SECRET", "")
-if not _AUTH_SECRET:
-    # Dev fallback: deterministic per-machine secret. Production MUST set
-    # PREDAIOT_AUTH_SECRET (startup log warns; tokens don't survive redeploys
-    # of ephemeral filesystems otherwise).
-    _AUTH_SECRET = _hashlib.sha256(f"predaiot-dev-{os.path.abspath(__file__)}".encode()).hexdigest()
+def _resolve_auth_secret(environ=None) -> str:
+    """Resolve the JWT signing secret, FAIL-CLOSED in production.
+
+    If PREDAIOT_AUTH_SECRET is set, it is authoritative. If it is missing:
+      - In production (a Postgres DATABASE_URL is configured) we REFUSE to start.
+        The old behaviour derived a secret from this file's absolute path, which
+        on a fixed container image (`/app/app/core/security.py`) is publicly
+        derivable — i.e. anyone could forge tokens. Failing closed is mandatory.
+      - In dev/test (SQLite / no Postgres) we keep a deterministic per-machine
+        fallback so local work and the test suite run without extra setup.
+    """
+    environ = os.environ if environ is None else environ
+    secret = environ.get("PREDAIOT_AUTH_SECRET", "")
+    if secret:
+        return secret
+    is_production = "postgres" in environ.get("DATABASE_URL", "").lower()
+    if is_production:
+        raise RuntimeError(
+            "PREDAIOT_AUTH_SECRET is not set but a production (Postgres) database "
+            "is configured. Refusing to start with a derivable dev secret — set "
+            "PREDAIOT_AUTH_SECRET in the environment."
+        )
     print("[startup] WARNING: PREDAIOT_AUTH_SECRET not set — using dev-only derived secret.")
+    return _hashlib.sha256(f"predaiot-dev-{os.path.abspath(__file__)}".encode()).hexdigest()
+
+
+_AUTH_SECRET = _resolve_auth_secret()
 
 _JWT_TTL_HOURS = int(os.environ.get("PREDAIOT_JWT_TTL_HOURS", "24"))
 _ROLES = ("owner", "admin", "asset_manager", "operator", "finance", "viewer")
