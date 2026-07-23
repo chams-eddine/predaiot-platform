@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional  # noqa: F401
 
 import pandas as pd  # noqa: F401
 from fastapi import (  # noqa: F401
-    APIRouter, BackgroundTasks, Body, Depends, File, HTTPException, Request, UploadFile,
+    APIRouter, BackgroundTasks, Body, Depends, File, Form, HTTPException, Request, UploadFile,
 )
 from fastapi.responses import JSONResponse, Response  # noqa: F401
 
@@ -242,6 +242,7 @@ async def audit_from_file(
     request: Request,   # noqa: ARG001 — used by rate limiter
     background: BackgroundTasks,
     file: UploadFile = File(...),
+    currency: Optional[str] = Form(None),   # operator-declared billing currency (e.g. OMR)
     lead: TrialLead = Depends(require_audit_runner),
 ):
     """
@@ -393,10 +394,19 @@ async def audit_from_file(
         # Read-only sensor plausibility checks (comms dropouts, SoC physics,
         # frozen price feed) — run while "hour" is still a datetime.
         dq_flags.extend(_build_sensor_quality_flags(df, dt_hours, asset.p_max, asset.e_max))
-        currency = _detect_currency(list(rename_map.keys()) + list(df.columns))
-        # Provenance: was the currency read from the data, or silently defaulted?
+        # Currency resolution — precedence: detected-in-data > operator-declared
+        # (upload field) > defaulted. The operator declaration lets an OMR-billed
+        # facility be labelled correctly when the file carries no currency hint, so
+        # the platform never silently presents USD for non-USD data.
+        _detected_ccy = _detect_currency(list(rename_map.keys()) + list(df.columns))
+        _declared_ccy = (currency or "").strip().upper() or None
+        if _declared_ccy and not (len(_declared_ccy) == 3 and _declared_ccy.isalpha()):
+            _declared_ccy = None  # ignore malformed codes; fall through to disclosure
+        currency = _detected_ccy or _declared_ccy
+        # Provenance: read from data, declared by the operator, or defaulted to USD.
         # (Part 5 — never present USD for OMR-billed data without disclosure.)
-        currency_source = "detected" if currency else "defaulted"
+        currency_source = ("detected" if _detected_ccy
+                           else "declared" if _declared_ccy else "defaulted")
 
         # Collapse "hour" back to an ordered integer for the audit engine
         if 'hour' in df.columns and pd.api.types.is_datetime64_any_dtype(df['hour']):

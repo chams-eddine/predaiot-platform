@@ -1247,6 +1247,7 @@ export default function App() {
   const [notice, setNotice]               = useState(null);   // SPEC-IX: quiet confirmations, not alert()
   const [uploading, setUploading]         = useState(false);
   const [uploadingName, setUploadingName] = useState('');   // shown in AuditProgress
+  const [auditCurrency, setAuditCurrency] = useState('');   // operator-declared billing currency (blank = auto-detect)
   const [activeSection, setActiveSection] = useState('exec');
   const [showMethodology, setShowMethodology] = useState(false);
 
@@ -1561,6 +1562,8 @@ export default function App() {
     setShowUpload(false);
     const fd = new FormData();
     fd.append('file', file);
+    // Declared billing currency (blank = let the backend detect / disclose).
+    if (auditCurrency) fd.append('currency', auditCurrency);
     try {
       const r = await axios.post('/api/v1/audit/file', fd);
       setData(r.data);
@@ -1996,6 +1999,23 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
       {/* ── FILE UPLOAD PANEL ───────────────────────────────────── */}
       {showUpload && (
         <div style={{ borderBottom: `1px solid ${DS.border}`, background: DS.bgRaised }}>
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, padding: '12px 28px 0' }}>
+            <span style={{ fontSize: 11, letterSpacing: '0.1em', fontWeight: 700, color: DS.sub }}>BILLING CURRENCY</span>
+            <select value={auditCurrency} onChange={(e) => setAuditCurrency(e.target.value)}
+              aria-label="Billing currency"
+              style={{ background: DS.bgRaised, color: DS.text, border: `1px solid ${DS.border}`,
+                       borderRadius: 8, padding: '5px 10px', fontSize: 12 }}>
+              <option value="">Auto-detect from file</option>
+              <option value="OMR">OMR — Omani Rial</option>
+              <option value="USD">USD — US Dollar</option>
+              <option value="AED">AED — UAE Dirham</option>
+              <option value="SAR">SAR — Saudi Riyal</option>
+              <option value="KWD">KWD — Kuwaiti Dinar</option>
+              <option value="EUR">EUR — Euro</option>
+              <option value="GBP">GBP — British Pound</option>
+            </select>
+            <span style={{ fontSize: 11, color: DS.dim }}>Declare it so figures are never shown in the wrong currency.</span>
+          </div>
           <FileUploadZone onFile={handleFile} loading={uploading} />
         </div>
       )}
