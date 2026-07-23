@@ -358,6 +358,21 @@ truthful + CI-guarded; do NOT change the working prod boot.
   the CI drift test catches Alembic-vs-models drift but not additive-dict staleness.
   Acceptable under Option B (didn't touch the boot); revisit if we flip to Alembic-only.
 
+### FIX M2 — `chore(prod-readiness M2)` · commit `b779e1c` · DEPLOYED & VERIFIED 2026-07-23
+Closes Gate-Review **M2** (`/api/share`). Owner decision after Phase-1 evidence: remove entirely.
+- **Evidence it was dead/non-pilot:** referenced in exactly ONE frontend menu item; no tests
+  (only the frozen inventory); no docs (both grep hits false positives); no internal dependency;
+  does not touch cert/report/audit; broken (in-memory → dies on restart) + unauth.
+- **Removed:** `POST /api/share` + `GET /share/{token}` (legacy.py), `shared_audits` state +
+  dead imports (uuid/JSONResponse/AuditResponse), frontend `handleShare` + shareLink banner +
+  the "Share report link" menu item, both routes from the frozen inventory, 2 stale breadcrumbs.
+  No replacement feature added.
+- **Evidence — local:** full suite **211 passed**; `arch_graph` **violations=0**; frontend
+  builds clean (bundle no longer references `/api/share`).
+- **Evidence — prod (`b779e1c` live):** `POST /api/share` → 405, `GET /share/{token}` → 404
+  (gone); pilot flow intact (`audit/file`/`certificate`/`audit/pdf` → 401 gated); siblings
+  untouched (`/api/latest` 401, `/api/historical` 200); health/db + version 200. ✅
+
 ## Status snapshot (2026-07-23)
 
 **Pilot target = Steel (owner-confirmed).** The Steel-only pack reality is acceptable for
@@ -373,7 +388,8 @@ the pilot; non-steel would need Knowledge-Pack authoring (a feature, deferred).
 | Parity (items 3/5) + Live/RT | ✅ VERIFIED |
 | Item 6 Muscat live full-run | ⏳ owner runs in UI; I verify the number |
 | M3 migration discipline | ✅ FIXED (M3, `31577d3`) |
-| M2 `/api/share` in-memory | ⬜ NEXT |
+| M2 `/api/share` dead feature | ✅ REMOVED (M2, `b779e1c`) |
+| **Muscat Steel Live E2E** (commercial proof) | ⏳ NEXT — owner-priority |
 | M4 two-number (Daily/TOU) UX | ⬜ queued (product) |
 | M5 critical-path coverage | ⬜ queued (measure engine/economics/validation) |
 | L1 silent excepts · L2 audit.py size · L3 SQL f-strings | ⬜ low |
