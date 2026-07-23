@@ -1194,15 +1194,27 @@ function IngestionNotesBanner({ notes, onDismiss }) {
         </div>
       )}
 
-      {currency && currency !== 'USD' && (
+      {currency && currency !== 'USD' && currency !== 'UNKNOWN' && (
         <div style={{ marginTop: 8 }}>
           <div style={{ color: DS.warning, fontSize: 10, letterSpacing: '0.1em', fontWeight: 700, marginBottom: 4 }}>
             CURRENCY
           </div>
           <div style={{ color: DS.text, fontSize: 11, paddingLeft: 12, lineHeight: 1.5 }}>
-            • Column names indicate this file is denominated in{' '}
+            • This audit is denominated in{' '}
             <span style={{ color: DS.cyan, fontWeight: 700 }}>{currency}</span> — all monetary
-            figures in this audit are {currency}, not USD.
+            figures are {currency}, not USD.
+          </div>
+        </div>
+      )}
+      {currency === 'UNKNOWN' && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{ color: DS.warning, fontSize: 10, letterSpacing: '0.1em', fontWeight: 700, marginBottom: 4 }}>
+            CURRENCY NOT DECLARED
+          </div>
+          <div style={{ color: DS.text, fontSize: 11, paddingLeft: 12, lineHeight: 1.5 }}>
+            • The billing currency could not be detected and was not declared — figures are shown
+            without an assumed currency (never defaulted to USD). Declare it on the upload panel
+            or in the facility settings before quoting.
           </div>
         </div>
       )}

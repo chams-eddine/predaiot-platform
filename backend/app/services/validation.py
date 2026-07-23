@@ -57,11 +57,11 @@ def validate_audit_result(d: Dict[str, Any], currency_source: str = "detected",
         warnings.append(f"Actual exceeds the modeled optimum (raw DQ={float(dq_raw):.2f}) — "
                         f"the column mapping or asset specs likely don't match this asset.")
 
-    # Gate 5 (soft) — currency must not be silently defaulted.
-    if currency_source == "defaulted":
-        warnings.append("Source currency could not be detected; defaulted to USD. Confirm the "
-                        "reporting currency before quoting — never present a USD figure for "
-                        "OMR-billed data without an explicit, cited conversion.")
+    # Gate 5 (soft) — currency must never be silently assumed (No-Fabrication).
+    if currency_source in ("defaulted", "unknown"):
+        warnings.append("Billing currency could not be determined from the data and was not "
+                        "declared; it is reported as UNKNOWN, not assumed. Declare the billing "
+                        "currency (upload selector or facility setting) before quoting figures.")
 
     return {"passed": len(errors) == 0, "errors": errors,
             "warnings": warnings, "currency_source": currency_source}

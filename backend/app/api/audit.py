@@ -394,19 +394,23 @@ async def audit_from_file(
         # Read-only sensor plausibility checks (comms dropouts, SoC physics,
         # frozen price feed) — run while "hour" is still a datetime.
         dq_flags.extend(_build_sensor_quality_flags(df, dt_hours, asset.p_max, asset.e_max))
-        # Currency resolution — precedence: detected-in-data > operator-declared
-        # (upload field) > defaulted. The operator declaration lets an OMR-billed
-        # facility be labelled correctly when the file carries no currency hint, so
-        # the platform never silently presents USD for non-USD data.
+        # Currency resolution — No-Fabrication precedence (owner-ratified):
+        #   data-detected  >  [bill — added with the TOU path]  >  facility
+        #   (Asset.currency)  >  organization  >  operator-declared  >  UNKNOWN.
+        # We NEVER silently assume USD. Absence of objective evidence is reported
+        # as UNKNOWN — an undeclared currency is an undeclared value, not USD.
+        # (Facility/org are hooks: Organization has no currency column yet, and this
+        # upload flow does not bind a pre-registered Asset — they slot in when the
+        # audit is tied to a facility/org that declares a currency.)
         _detected_ccy = _detect_currency(list(rename_map.keys()) + list(df.columns))
         _declared_ccy = (currency or "").strip().upper() or None
         if _declared_ccy and not (len(_declared_ccy) == 3 and _declared_ccy.isalpha()):
-            _declared_ccy = None  # ignore malformed codes; fall through to disclosure
+            _declared_ccy = None  # ignore malformed codes; fall through to UNKNOWN
         currency = _detected_ccy or _declared_ccy
-        # Provenance: read from data, declared by the operator, or defaulted to USD.
-        # (Part 5 — never present USD for OMR-billed data without disclosure.)
         currency_source = ("detected" if _detected_ccy
-                           else "declared" if _declared_ccy else "defaulted")
+                           else "declared" if _declared_ccy else "unknown")
+        if not currency:
+            currency = "UNKNOWN"  # No-Fabrication: declare it unknown, never default USD
 
         # Collapse "hour" back to an ordered integer for the audit engine
         if 'hour' in df.columns and pd.api.types.is_datetime64_any_dtype(df['hour']):
