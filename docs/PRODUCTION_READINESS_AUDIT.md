@@ -336,6 +336,28 @@ Closes Gate-Review **H3** (auth secret fail-open).
 
 ---
 
+### FIX M3 — `chore(prod-readiness M3)` · commit `31577d3` · DEPLOYED & VERIFIED 2026-07-23
+Closes Gate-Review **M3** (migration discipline). Option B (owner-chosen): make Alembic
+truthful + CI-guarded; do NOT change the working prod boot.
+- **Proven drift:** `alembic upgrade head` built **10 of 18** tables — `0001_baseline` was
+  empty and the core tables (users, organizations, assets, certificate_registry,
+  trial_leads, facility_memberships, api_access_log, audit_logs) + 2 additive columns were
+  only ever created by `create_all()`. Alembic was decorative.
+- **Change:** NEW revision `0011_reconcile_models` — idempotent, additive, NON-destructive
+  (`create_all` fills missing tables + inspector-guarded `add_column`; downgrade is a
+  deliberate no-op). NEW `tests/test_migration_discipline.py` — permanent CI drift guard
+  (fresh `alembic upgrade head` MUST equal the models) + upgrade-path + non-destructive
+  assertions. **Prod boot unchanged** (zero risk to live DB).
+- **Evidence — local:** empirical re-check `alembic head` now = **18/18 tables == models,
+  DRIFT: none**; full suite **211 passed**; `arch_graph` **violations=0**.
+- **Evidence — prod (`31577d3` live):** boots healthy; `/health/db` `status: connected`,
+  `persistent: true`, **`alembic_version: 0011_reconcile_models`** (advanced from 0010);
+  **data intact & unchanged** — users 22 / orgs 16 / assets 5 / certs 15 / audits 17. ✅
+- **Residual (honest):** the `_apply_additive_migrations` dict is still hand-maintained;
+  a future column on an *existing* table must be added there (or via a real migration) —
+  the CI drift test catches Alembic-vs-models drift but not additive-dict staleness.
+  Acceptable under Option B (didn't touch the boot); revisit if we flip to Alembic-only.
+
 ## Status snapshot (2026-07-23)
 
 **Pilot target = Steel (owner-confirmed).** The Steel-only pack reality is acceptable for
@@ -350,8 +372,8 @@ the pilot; non-steel would need Knowledge-Pack authoring (a feature, deferred).
 | M1 unauth inspect throttle | ✅ FIXED (Fix #1) |
 | Parity (items 3/5) + Live/RT | ✅ VERIFIED |
 | Item 6 Muscat live full-run | ⏳ owner runs in UI; I verify the number |
-| M2 `/api/share` in-memory | ⬜ queued |
-| M3 hybrid migrations | ⬜ queued |
+| M3 migration discipline | ✅ FIXED (M3, `31577d3`) |
+| M2 `/api/share` in-memory | ⬜ NEXT |
 | M4 two-number (Daily/TOU) UX | ⬜ queued (product) |
 | M5 critical-path coverage | ⬜ queued (measure engine/economics/validation) |
 | L1 silent excepts · L2 audit.py size · L3 SQL f-strings | ⬜ low |
