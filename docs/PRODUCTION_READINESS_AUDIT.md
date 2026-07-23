@@ -373,6 +373,32 @@ Closes Gate-Review **M2** (`/api/share`). Owner decision after Phase-1 evidence:
   (gone); pilot flow intact (`audit/file`/`certificate`/`audit/pdf` → 401 gated); siblings
   untouched (`/api/latest` 401, `/api/historical` 200); health/db + version 200. ✅
 
+### FIX — Currency correctness (Commercial Phase 1) · commit `05bc250` · DEPLOYED & VERIFIED 2026-07-23
+The Muscat E2E pre-check (running the real file through the deployed engine) exposed two
+things: (a) the operational upload runs the DAILY path → **210,826, not the 94,597 TOU
+reference** (TOU isn't wired — see Phase 2 below); (b) the `price` column has no currency
+hint, so the audit **silently labelled OMR figures as USD**.
+- **Change (correctness, not a feature):** `/api/v1/audit/file` gains an optional `currency`
+  form field. Precedence detected-in-data > operator-declared > defaulted; `currency_source`
+  records which. Frontend adds a "Billing currency" selector on the upload panel. **Numbers
+  unchanged** — only the unit + provenance. Verified on the real Muscat file: declared OMR →
+  currency OMR (gap 210,826.4, DQ 0.7996); no declaration → USD/defaulted (identical figures).
+- **Evidence:** full suite **211 passed**; arch **0**; prod `05bc250` boots healthy, frontend
+  bundle carries the selector, pilot flow gated, health/db + version 200. ✅
+
+### OWNER-RATIFIED PLAN (2026-07-23) — Commercial audit completion, then live demo
+1. **Phase 1 — Currency correctness.** ✅ DONE (above).
+2. **Phase 2 — Commercial TOU Audit Completion (NOT a new feature).** Expose the ALREADY-
+   validated TOU engine (`services/tou_bands.analyze_tou_bands`, reproduces Muscat 94,597 /
+   0.91 / 378,389) through the production upload → report flow. NO new math/optimization/
+   algorithms — only wire the existing engine: client uploads operational data + Nama bill /
+   TOU tariff → existing preprocessing merges → existing TOU engine → existing report/PDF/cert.
+   Acceptance: Muscat reproduces ≈ 94,597 OMR recoverable · DQ ≈ 0.91 · annual ≈ 378,389 OMR.
+   (This supersedes the old "TD-003 = feature" framing.)
+3. **Phase 3 — Muscat Steel Live E2E demo.** Only after Phase 2: the primary commercial number
+   is the validated **TOU** result (94,597 OMR); the Daily analysis stays auxiliary. The client
+   must never see two competing numbers without a clear explanation.
+
 ## Status snapshot (2026-07-23)
 
 **Pilot target = Steel (owner-confirmed).** The Steel-only pack reality is acceptable for
