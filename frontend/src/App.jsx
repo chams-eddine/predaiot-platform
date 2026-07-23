@@ -2199,12 +2199,12 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {/* ══ S02: Economic Value Flow ════════════════════════════ */}
           {hasData && activeSection === 'flow' && (() => {
             const stages = [
-              { label: 'Theoretical Optimum (benchmark)', value: fmtMoney(data.edv_optimal_total, data.currency), color: PDS.warn, desc: 'Perfect-foresight MILP benchmark — a ceiling, not an achievable operating target' },
+              { label: 'Maximum Theoretical Savings', value: fmtMoney(data.edv_optimal_total, data.currency), color: PDS.warn, desc: 'Perfect-foresight upper bound — the most that is theoretically recoverable, NOT an achievable operating target' },
               ...(data.gap_attribution ? [
                 { label: 'Forecast-Unreachable Gap', value: `−${fmtMoney(data.gap_attribution.forecast_gap, data.currency)}`, color: PDS.text3, desc: 'Reachable only with perfect price foresight (Ch 8.2) — not operator-attributable' },
                 { label: 'Recoverable Opportunity', value: `−${fmtMoney(data.gap_attribution.execution_gap, data.currency)}`, color: PDS.loss, desc: 'Achievable with the day-ahead forecast available at decision time' },
               ] : [
-                { label: 'Total Gap (vs Theoretical Optimum)', value: `−${fmtMoney(data.total_gap_usd, data.currency)}`, color: PDS.loss, desc: 'Total gap to the theoretical optimum; the recoverable portion needs a forecast column to split out' },
+                { label: 'Total Gap (vs Maximum Theoretical Savings)', value: `−${fmtMoney(data.total_gap_usd, data.currency)}`, color: PDS.loss, desc: 'Total gap to the theoretical optimum; the recoverable portion needs a forecast column to split out' },
               ]),
               { label: 'Captured Value', value: fmtMoney(data.edv_actual_total, data.currency), color: PDS.recover, desc: 'EDV of the dispatch actually executed (Σ edv_actual_step from the ledger)' },
             ];
@@ -2427,8 +2427,8 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
             const gap = data.gap_attribution ? data.gap_attribution.execution_gap : data.total_gap_usd;
             const money = [
               { label: 'Captured value', value: fmtMoney(data.edv_actual_total, data.currency), color: PDS.recover },
-              { label: 'Theoretical optimum (benchmark)', value: fmtMoney(data.edv_optimal_total, data.currency), color: PDS.warn },
-              { label: data.gap_attribution ? 'Recoverable Opportunity' : 'Total Gap (vs Theoretical Optimum)', value: `−${fmtMoney(gap, data.currency)}`, color: PDS.loss },
+              { label: 'Maximum Theoretical Savings', value: fmtMoney(data.edv_optimal_total, data.currency), color: PDS.warn },
+              { label: data.gap_attribution ? 'Recoverable Opportunity' : 'Total Gap (vs Maximum Theoretical Savings)', value: `−${fmtMoney(gap, data.currency)}`, color: PDS.loss },
             ];
             const lead = (
               <>Against a perfect-foresight optimum of{' '}
@@ -2482,8 +2482,8 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
           {/* ══ S06: EDA Metrics ════════════════════════════════════ */}
           {hasData && activeSection === 'metrics' && (() => {
             const metrics = m ? [
-              { label: 'Economic Decision Efficiency (EDE)', value: fmtPct(m.economic_decision_efficiency), note: 'EDV captured ÷ EDV ceiling × 100 (Ch 4.2 domain rules)', color: qualColor(m.economic_decision_efficiency), pct: m.economic_decision_efficiency },
-              { label: 'Economic Leakage Ratio (ELR)', value: fmtPct(m.economic_leakage_ratio), note: '100 − EDE', color: m.economic_leakage_ratio <= 30 ? DS.optimal : m.economic_leakage_ratio <= 60 ? DS.warning : DS.loss, pct: m.economic_leakage_ratio },
+              { label: 'Decision Efficiency', value: fmtPct(m.economic_decision_efficiency), note: 'EDE · value captured ÷ maximum theoretical savings × 100 (Ch 4.2 domain rules)', color: qualColor(m.economic_decision_efficiency), pct: m.economic_decision_efficiency },
+              { label: 'Savings Leakage', value: fmtPct(m.economic_leakage_ratio), note: 'ELR · 100 − Decision Efficiency', color: m.economic_leakage_ratio <= 30 ? DS.optimal : m.economic_leakage_ratio <= 60 ? DS.warning : DS.loss, pct: m.economic_leakage_ratio },
               { label: 'Dispatch Accuracy', value: fmtPct(m.dispatch_accuracy), note: 'Steps classified correct ÷ total × 100', color: qualColor(m.dispatch_accuracy), pct: m.dispatch_accuracy },
               { label: 'Forecast Utilization Index', value: fmtPct(m.forecast_utilization_index), note: 'Steps with a forecast value ÷ total × 100', color: qualColor(m.forecast_utilization_index), pct: m.forecast_utilization_index },
               ...(m.override_rate_pct != null ? [{ label: 'Override Rate', value: fmtPct(m.override_rate_pct), note: 'Override-flagged steps ÷ total × 100', color: DS.blue, pct: m.override_rate_pct }] : []),
@@ -2559,7 +2559,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                 {data.eda_metrics?.economic_leakage_ratio != null && (
                   <div style={{ maxWidth: 560, marginBottom: 'var(--ws-zone-gap)' }}>
                     <MissionMeter
-                      label="Economic Leakage Ratio"
+                      label="Savings Leakage (ELR)"
                       value={data.eda_metrics.economic_leakage_ratio} max={100}
                       tone="leak" decimals={1}
                       sublabel="share of achievable value leaked (100 − EDE)" />
@@ -2576,7 +2576,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                     </Panel>
                   )}
                   <Panel pad={PDS.s5}>
-                    <div className="pds-kicker" style={{ marginBottom: 8 }}>Total Gap (vs Theoretical Optimum)</div>
+                    <div className="pds-kicker" style={{ marginBottom: 8 }}>Total Gap (vs Maximum Theoretical Savings)</div>
                     <div className="pds-num" style={{ fontSize: 34, fontWeight: 800, color: exec != null ? PDS.warn : PDS.loss, lineHeight: 1 }}>{fmtMoney(data.total_gap_usd, data.currency)}</div>
                     <div style={{ fontSize: 11, color: PDS.text3, marginTop: 8 }}>vs the perfect-foresight upper bound{data.gap_attribution ? '' : ' — a forecast column isolates the recoverable portion'}</div>
                   </Panel>
@@ -3185,7 +3185,7 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                           background: `${qualColor(certificate.dq_score)}06`,
                         }}>
                           <div style={{ color: qualColor(certificate.dq_score), fontSize: 40, fontWeight: 900, fontFamily: DS.mono, lineHeight: 1 }}>{certificate.dq_score}</div>
-                          <div style={{ color: DS.sub, fontSize: 10, marginTop: 6, letterSpacing: '0.12em' }}>DQ / ECF · /100</div>
+                          <div style={{ color: DS.sub, fontSize: 10, marginTop: 6, letterSpacing: '0.12em' }}>Decision Quality (DQ) / ECF · /100</div>
                         </div>
                         <div style={{ color: DS.dim, fontSize: 10, letterSpacing: '0.12em' }}>RISK BAND (DQ THRESHOLDS)</div>
                         <div style={{ color: riskColor(certificate.risk_level), fontFamily: DS.mono, fontSize: 18, fontWeight: 800 }}>{(certificate.risk_level || '—').toUpperCase()}</div>
@@ -3209,13 +3209,13 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                         { label: 'Asset Name',          v: certificate.asset_name,           c: DS.text },
                         { label: 'Asset Type',           v: certificate.asset_type,           c: DS.cyan },
                         { label: 'Audit Period',         v: certificate.audit_period,         c: DS.sub },
-                        { label: 'Theoretical Optimum (Upper Bound)', v: fmtMoney(certificate.economic_potential, certificate.currency), c: DS.warning },
+                        { label: 'Maximum Theoretical Savings (Upper Bound)', v: fmtMoney(certificate.economic_potential, certificate.currency), c: DS.warning },
                         { label: 'Captured Value',       v: fmtMoney(certificate.captured_value, certificate.currency),     c: DS.optimal },
-                        { label: 'Total Gap (vs Theoretical Optimum)', v: fmtMoney(certificate.theoretical_ceiling_gap ?? certificate.destroyed_value, certificate.currency),    c: DS.loss },
+                        { label: 'Total Gap (vs Maximum Theoretical Savings)', v: fmtMoney(certificate.theoretical_ceiling_gap ?? certificate.destroyed_value, certificate.currency),    c: DS.loss },
                         ...(certificate.recoverable_execution_gap != null
                           ? [{ label: 'Recoverable Opportunity', v: fmtMoney(certificate.recoverable_execution_gap, certificate.currency), c: DS.loss }]
                           : []),
-                        { label: 'DQ / ECF',             v: `${certificate.dq_score} / 100`,  c: qualColor(certificate.dq_score) },
+                        { label: 'Decision Quality (DQ) / ECF', v: `${certificate.dq_score} / 100`,  c: qualColor(certificate.dq_score) },
                         { label: 'Data Quality Grade', v: certificate.data_quality_index ? `${certificate.data_quality_index.value_pct}% / ${certificate.data_quality_grade}` : (certificate.data_quality_grade || 'N/A'), c: _gradeColor(certificate.data_quality_grade) },
                         { label: 'Audit Confidence Grade', v: certificate.audit_confidence ? (certificate.audit_confidence.value_pct != null ? `${certificate.audit_confidence.value_pct}% / ${certificate.confidence_grade}` : certificate.confidence_grade) : (certificate.confidence_grade || 'N/A'), c: _gradeColor(certificate.confidence_grade) },
                         { label: 'Annual Total Gap (Linear Est.)', v: fmtMoney(certificate.annual_leakage, certificate.currency), c: DS.orange },
