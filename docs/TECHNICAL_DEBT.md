@@ -6,6 +6,33 @@ without an explicit decision to schedule it.
 
 ---
 
+## TD-002 — LOAD report uses generation-framed language (Captured / Destroyed / Revenue)
+
+- **Type:** Reporting Debt (NOT a bug). **Status:** ACCEPTED — deferred (owner-ratified 2026-07-23).
+- **Now:** the executive report headlines are archetype-neutral but still lean generation
+  ("Captured Value", "Destroyed Value", "Revenue destroyed"). For a LOAD there is no
+  revenue — the natural framing is cost/opportunity (Actual Cost → Theoretical Opportunity
+  → Recoverable Opportunity). The terminology relabel (commit cc2ca62) removed the bare
+  "Gap" ambiguity and standardised Theoretical Optimum / Recoverable Opportunity, but did
+  NOT reframe the whole load report into cost space.
+- **Resolve later:** archetype-aware report framing — for loads, present Financial Impact
+  in cost/opportunity terms and drop revenue words. Touches frontend + PDF. Do before a
+  load-facility client demo where the daily report (not the TOU reference) is shown.
+
+## TD-003 — TOU band audit is a verified function, not a live endpoint
+
+- **Type:** Feature gap (NOT a bug). **Status:** ACCEPTED — deferred (owner-ratified 2026-07-23).
+- **Now:** `services/tou_bands.analyze_tou_bands` reproduces the Muscat manual reference
+  (Gap 94,510 / DQ 0.91 / ALP 378,041) and is the official client reference, but it is only
+  reachable via the verification script / regression test — NOT wired to an /audit endpoint
+  or the Executive Report. The DAILY path (/audit/file) is live and internally consistent.
+- **Resolve later:** wire a TOU-band file → /audit route + Executive Report so a client can
+  run the reference report end-to-end (upload Nama band data → 94,597 report). This IS a
+  feature; schedule it after the stability pass / before the paid pilot's TOU demo.
+- **Boundary until then:** Daily Audit = daily consumption files → consistent day-level
+  result; TOU Audit = the reference (band data → manual figures). The two modes are distinct
+  and must not be conflated. See [[predaiot-load-audit-fix]].
+
 ## TD-001 — Live decision core is storage-oriented (single core for all asset classes)
 
 - **Type:** Architecture Debt (NOT a bug).
