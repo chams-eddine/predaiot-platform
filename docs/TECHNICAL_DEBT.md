@@ -29,6 +29,17 @@ without an explicit decision to schedule it.
 - **Resolve later:** wire a TOU-band file → /audit route + Executive Report so a client can
   run the reference report end-to-end (upload Nama band data → 94,597 report). This IS a
   feature; schedule it after the stability pass / before the paid pilot's TOU demo.
+- **Bundled deliverable — "Show Calculation" panel (owner-requested 2026-07-23):** ship a
+  one-click plain-language calc trace WITH this TOU endpoint (they answer the same "how did
+  you get 94,597?" question). No formulas, no acronyms — just the chain, every value already
+  produced by `analyze_tou_bands` / `TouBandResult`:
+  Actual Cost (bill, incl. non-energy) → Optimal Cost (best TOU dispatch of the same kWh) →
+  Maximum Economic Opportunity / ceiling → × Flexibility Factor (declared, per-facility) →
+  Recoverable Opportunity → × annualization_factor → Annual. Reference (Muscat, from
+  `tests/test_muscat_reference.py`): 1,051,080 → 836,284 → 214,796 → ×0.44 → 94,597 → ×4 →
+  378,389 OMR/yr; with NO declared flexibility the Recoverable + Annual rows are withheld
+  (No-Fabrication). Deferred to the TOU endpoint, NOT built now (pre-Pilot no-features
+  boundary). See [[predaiot-load-audit-fix]].
 - **Boundary until then:** Daily Audit = daily consumption files → consistent day-level
   result; TOU Audit = the reference (band data → manual figures). The two modes are distinct
   and must not be conflated. See [[predaiot-load-audit-fix]].

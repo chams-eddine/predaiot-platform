@@ -162,7 +162,7 @@ export default function MissionControl({ data, log = [], certificate }) {
                       gap: 12, marginBottom: 16 }}>
           <Cell label="Total Economic Gap" tag="TOTAL">
             <MissionMetric label="Total economic gap" tone="leak" size={30}
-              value={money0(gap, cur)} sub="vs maximum theoretical savings (ceiling)" />
+              value={money0(gap, cur)} sub="vs maximum economic opportunity (ceiling)" />
           </Cell>
           <Cell label="Recoverable Opportunity" tag="CH 8.2">
             <MissionMetric label="With day-ahead forecast" tone="warning" size={30}
@@ -170,7 +170,7 @@ export default function MissionControl({ data, log = [], certificate }) {
           </Cell>
           {eda.economic_decision_efficiency != null && (
             <Cell label="Decision Efficiency" tag="EDE">
-              <MissionMeter label="of maximum theoretical" tone="optimal" decimals={1}
+              <MissionMeter label="of max economic opportunity" tone="optimal" decimals={1}
                 value={eda.economic_decision_efficiency} max={100} showPct
                 sublabel={`${optimal}/${n} intervals at optimum`} />
             </Cell>

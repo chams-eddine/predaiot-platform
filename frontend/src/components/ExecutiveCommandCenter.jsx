@@ -415,7 +415,7 @@ function AllocationBar({ captured, recoverable, forecastGap, leakage, ceiling, c
       {/* Benchmark caption on its own quiet line — never fights the legend. */}
       {ceiling != null && (
         <div style={{ fontSize: 10, color: PDS.text3, opacity: 0.85, marginTop: 7, textAlign: 'right' }}>
-          Maximum theoretical savings <span className="pds-num">{fmtMoney(ceiling, currency)}</span> — perfect-foresight upper bound, not an achievable target
+          Maximum economic opportunity (theoretical) <span className="pds-num">{fmtMoney(ceiling, currency)}</span> — upper technical benchmark, not an achievable target
         </div>
       )}
     </div>
