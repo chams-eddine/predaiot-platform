@@ -36,10 +36,12 @@ from app.schemas import AssetSpecs, AuditRequest, AuditResponse  # noqa: F401
 from app.services.audit_service import process_calculation  # noqa: F401
 from app.services.facility.intake import (  # noqa: F401
     classify as _classify_upload, classify_archetype, understand_engineering_file,
+    extract_nameplate_facts,
 )
 from app.services.ingestion import (  # noqa: F401
     COLUMN_ALIASES, ASSET_META_ALIASES, _normalise_col, _FUZZY_THRESHOLD,
     _resolve_columns_verbose, _resolve_columns, _detect_and_apply_units,
+    _energy_unit_fields, _apply_energy_to_power,
     _detect_excel_serial_timestamps, _TIMESTAMP_FORMAT_ATTEMPTS, _parse_timestamps,
     _fill_ts_bounds, _detect_and_resample, _dq, _order_and_dedupe_timestamps,
     _coerce_numeric_columns, _build_sensor_quality_flags, _collect_data_quality_counts,
@@ -338,8 +340,16 @@ async def audit_from_file(
         df, coerce_flags = _coerce_numeric_columns(df)
         dq_flags.extend(coerce_flags)
 
-        # Unit auto-detection (kW→MW, $/kWh→$/MWh)
-        df, unit_corrections = _detect_and_apply_units(df)
+        # Energy-per-period detection: a power column whose SOURCE header carries an
+        # energy unit (e.g. "Total Power Consumption (KWH/Day)") is ENERGY, not power,
+        # and must be divided by the step duration to become average MW. Detect it
+        # from the header now, and tell the magnitude heuristic to SKIP these fields
+        # so they are not also ÷1000'd (double conversion). Conversion happens once
+        # dt_hours is known, just below.
+        energy_fields = _energy_unit_fields(col_map)
+
+        # Unit auto-detection (kW→MW, $/kWh→$/MWh) — skips energy-per-period fields.
+        df, unit_corrections = _detect_and_apply_units(df, skip_fields=set(energy_fields))
 
         # Time-resolution auto-detect + optional resample (only when hour is a
         # real datetime, so this is a no-op for CSV/JSON without a timestamp).
@@ -350,6 +360,11 @@ async def audit_from_file(
         res_sec = resolution_notes.get("detected_resolution_sec")
         dt_hours = (res_sec / 3600.0) if res_sec else 1.0
         resolution_notes["dt_hours_used"] = round(dt_hours, 6)
+
+        # kWh/day → MW (etc.): now that the step duration is known, convert the
+        # energy-per-period power columns to average power so the engine sees MW.
+        df, energy_corrections = _apply_energy_to_power(df, energy_fields, dt_hours)
+        unit_corrections = list(unit_corrections) + energy_corrections
 
         # Asset specs from meta-columns — first NON-NULL value, because real
         # SCADA exports fill metadata on row 1 only (or on a random row after
@@ -431,9 +446,15 @@ async def audit_from_file(
             from app.services.facility import understand as _understand
             _signal_fields = ("price", "actual_discharge", "actual_charge", "soc",
                               "grid_demand", "curtailment_mw", "forecast_price")
+            # Same signature-fact recognition the ENGINEERING pipeline uses: extract
+            # nameplate/equipment-channel facts (e.g. a dedicated EAF power column) so
+            # the audit path recognizes the facility (Steel Plant · Electric Arc
+            # Furnace), not just the archetype. Read from the pre-mutation snapshot,
+            # which still holds the original un-renamed headers.
+            _np_facts, _ = extract_nameplate_facts(dq_snapshot)
             _profile = _understand(
                 signal_map={k: v for k, v in col_map.items() if k in _signal_fields},
-                specs=asset.dict(), time_series=time_series,
+                specs=asset.dict(), time_series=time_series, metadata=_np_facts,
                 extra_columns=[c for c in raw_columns if c not in col_map.values()],
                 currency=currency or "USD", dt_hours=dt_hours,
                 facility_id=(asset.asset_name or "facility"),

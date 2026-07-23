@@ -164,14 +164,24 @@ def _run_optimizer_load(asset: AssetSpecs, time_series_list: list) -> dict:
     if total_needed <= 0 or n == 0:
         return optimal
 
-    # Ascending-price greedy fill: cheapest hour first, run at p_max until the
-    # daily energy target is met, then partial-fill the boundary step.
+    # Ascending-price greedy fill: cheapest hour first, run at the per-step cap
+    # until the total energy target is met, then partial-fill the boundary step.
+    #
+    # ENERGY CONSERVATION (Σ_optimal = Σ_actual): the audit asks WHEN to consume
+    # the SAME total, so the optimal must deliver exactly the observed total. The
+    # per-step cap is the plant's capacity (p_max); if that is unset or smaller
+    # than the observed data can require (e.g. a units mismatch, or the default
+    # 50 MW against a larger real load), fall back to the observed PEAK so the fill
+    # can always meet the total. A demonstrated peak is a valid cap — the plant
+    # provably ran at it. Without this, Σ_optimal < Σ_actual and the gap/DQ/EDE
+    # become mutually inconsistent (actual "beats" a capped optimal).
+    cap = max(asset.p_max, max(consumption) if consumption else 0.0)
     order = sorted(range(n), key=lambda i: prices[i])
     remaining = total_needed
     for i in order:
         if remaining <= 0:
             break
-        take = min(asset.p_max, remaining)
+        take = min(cap, remaining)
         optimal[i] = take
         remaining -= take
     return optimal

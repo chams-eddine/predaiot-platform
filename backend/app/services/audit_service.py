@@ -220,6 +220,14 @@ def process_calculation(asset: AssetSpecs, time_series_list: list, save_to_db: b
     annual_factor = (8760.0 / span_hours_eda) if span_hours_eda > 0 else 365.0
     eda_metrics  = _build_eda_metrics(decision_log, total_edv_opt, total_edv_act, asset.asset_type,
                                       dt_hours=dt_hours)
+    # Coherence for the LOAD archetype: report ONE efficiency. EDE (savings-vs-peak,
+    # EDV_act/EDV_opt) and DQ (cost, C_opt/C_act) are different ratios for a load; the
+    # audit headlines the COST ratio (the hand-validated Muscat definition). Align
+    # EDE/ELR to DQ so Gap, DQ, EDE, ELR and the recommendation all tell one story.
+    # Generation (storage/intermittent/dispatchable) EDE is unchanged.
+    if is_load:
+        eda_metrics.economic_decision_efficiency = round(dq_score * 100, 2)
+        eda_metrics.economic_leakage_ratio = round((1.0 - dq_score) * 100, 2)
     root_causes  = _build_root_causes(decision_log, total_gap, total_edv_opt)
     opportunities = _build_opportunities(total_gap, asset.asset_type, decision_log,
                                          annual_factor=annual_factor, currency=currency)

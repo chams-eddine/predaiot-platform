@@ -31,7 +31,7 @@ _CURRENCY_HINTS = [
     ("usd", "USD"),
 ]
 
-def _detect_and_apply_units(df: pd.DataFrame) -> tuple:
+def _detect_and_apply_units(df: pd.DataFrame, skip_fields=None) -> tuple:
     """
     Heuristic unit correction per Coverage Tasks 1.5.
 
@@ -42,9 +42,15 @@ def _detect_and_apply_units(df: pd.DataFrame) -> tuple:
     to surface in the inspect response so the operator can confirm or override.
     """
     corrections = []
+    skip_fields = skip_fields or set()
 
     for col, label in (("actual_discharge", "actual_discharge"),
                        ("actual_charge",    "actual_charge")):
+        # Columns handled deterministically elsewhere (energy-per-period → MW via the
+        # header unit + dt) must NOT also be magnitude-guessed here — that would
+        # double-convert (e.g. a kWh/day column ÷1000 here, then ÷dt later).
+        if col in skip_fields:
+            continue
         if col in df.columns:
             series = pd.to_numeric(df[col], errors="coerce")
             m = series.abs().max()
@@ -61,6 +67,49 @@ def _detect_and_apply_units(df: pd.DataFrame) -> tuple:
             df["price"] = series * 1000.0
             corrections.append(f"price looked like $/kWh (max {m:.3f}); converted to $/MWh.")
 
+    return df, corrections
+
+
+_POWER_FIELDS = ("actual_charge", "actual_discharge")
+
+
+def _energy_unit_fields(col_map: Dict[str, str]) -> Dict[str, tuple]:
+    """Power fields whose SOURCE header carries an ENERGY unit (kWh/MWh) — e.g. a
+    steel plant's 'Total Power Consumption (KWH/Day)'. These are ENERGY-per-period,
+    not power, so they must be divided by the step duration to become average MW.
+    Returns {field: (energy→MWh factor, original_header)}. Deterministic (reads the
+    header unit); no magnitude guessing."""
+    out: Dict[str, tuple] = {}
+    for field in _POWER_FIELDS:
+        hdr = col_map.get(field)
+        if not hdr:
+            continue
+        n = _normalise_col(str(hdr))
+        if "mwh" in n:
+            out[field] = (1.0, hdr)
+        elif "kwh" in n:
+            out[field] = (0.001, hdr)     # kWh → MWh
+    return out
+
+
+def _apply_energy_to_power(df: pd.DataFrame, energy_fields: Dict[str, tuple],
+                           dt_hours: float) -> tuple:
+    """Convert energy-per-step columns to AVERAGE POWER: power_MW = energy_MWh / dt.
+    (e.g. 530,950 kWh/day at a 24h step → 530.95 MWh / 24h ≈ 22.1 MW.) Runs AFTER
+    the step duration is known; the magnitude heuristic must SKIP these fields so
+    they are not also ÷1000'd. Emits a correction note per field."""
+    corrections: List[str] = []
+    if not energy_fields or not dt_hours or dt_hours <= 0:
+        return df, corrections
+    for field, (to_mwh, hdr) in energy_fields.items():
+        if field not in df.columns:
+            continue
+        series = pd.to_numeric(df[field], errors="coerce")
+        df[field] = series * to_mwh / dt_hours
+        unit = "MWh" if to_mwh == 1.0 else "kWh"
+        corrections.append(
+            f"{field} read as {unit} energy-per-step from '{hdr}'; converted to "
+            f"average power (MW = {unit}{'÷1000' if to_mwh != 1.0 else ''} ÷ {round(dt_hours, 3)}h step).")
     return df, corrections
 
 def _coerce_numeric_columns(df: pd.DataFrame) -> tuple:
