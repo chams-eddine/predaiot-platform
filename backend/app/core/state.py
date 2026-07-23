@@ -34,7 +34,3 @@ _EMPTY_LATEST = {
     "edv_optimal_total": 0, "edv_actual_total": 0,
     "dq_score": 0, "total_gap_usd": 0, "decision_log": [],
 }
-
-# Share-link cache: /api/share writes an audit under a share token, /share/{token}
-# reads it back. In-process (same D7 seam).
-shared_audits = {}

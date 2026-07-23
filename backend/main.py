@@ -267,7 +267,7 @@ async def init_database_tables():
 # (any caller could see whichever audit ran most recently). Now indexed by
 # lead.token so /api/latest, /api/v1/certificate, /api/v1/audit/pdf/latest
 # only return the caller's own data.
-# _latest_by_token / _EMPTY_LATEST / shared_audits → app/core/state.py (step 6 prep;
+# _latest_by_token / _EMPTY_LATEST → app/core/state.py (step 6 prep;
 # the D7 in-process state seam). Imported back above.
 
 # ==========================================
@@ -341,7 +341,7 @@ from app.services.telemetry_service import _live_decision_core  # noqa: E402
 # ---- Audit endpoints (gated by trial token) --------------------------------
 # -> app/api/audit.py (Router Extraction, step 6).
 
-# /api/historical, /api/share, /share/{token}, /api/latest → app/api/legacy.py
+# /api/historical, /api/latest → app/api/legacy.py
 # (Router Extraction, step 6). mqtt/status stays with the MQTT bridge below.
 
 # ==========================================

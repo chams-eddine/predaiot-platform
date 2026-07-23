@@ -1247,7 +1247,6 @@ export default function App() {
   const [notice, setNotice]               = useState(null);   // SPEC-IX: quiet confirmations, not alert()
   const [uploading, setUploading]         = useState(false);
   const [uploadingName, setUploadingName] = useState('');   // shown in AuditProgress
-  const [shareLink, setShareLink]         = useState('');
   const [activeSection, setActiveSection] = useState('exec');
   const [showMethodology, setShowMethodology] = useState(false);
 
@@ -1581,22 +1580,6 @@ export default function App() {
   };
 
   // ── Share ──────────────────────────────────────────────────────────
-  const handleShare = async () => {
-    if (!(data.decision_log || []).length) {
-      setActionError('Run an audit before sharing — there is no report to share yet.');
-      return;
-    }
-    try {
-      const r = await axios.post('/api/share', data);
-      const url = window.location.origin + r.data.share_url;
-      setShareLink(url);
-      navigator.clipboard?.writeText(url);
-      setNotice('Share link copied to clipboard.');
-    } catch (_) {
-      setActionError('The share link could not be created. Check your connection and try again.');
-    }
-  };
-
   // ── Download branded PDF (letterhead overlay) ──────────────────────
   const [pdfLoading, setPdfLoading] = useState(false);
   const downloadPdf = async () => {
@@ -1906,7 +1889,6 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
                   {[
                     { label: pdfLoading ? 'Preparing PDF…' : 'Download PDF report', fn: downloadPdf, off: pdfLoading || !hasData },
                     { label: 'Download ledger CSV', fn: downloadLedger, off: !hasData },
-                    { label: 'Share report link', fn: handleShare, off: !hasData },
                     { label: 'Methodology', fn: () => setShowMethodology(true), off: false },
                   ].map((m) => (
                     <button key={m.label} role="menuitem" disabled={m.off}
@@ -1983,12 +1965,6 @@ Keep total length under 480 words. Use precise, formal audit language — no hed
         </div>
       </header>
 
-      {shareLink && (
-        <div style={{ background: `${DS.warning}10`, borderBottom: `1px solid ${DS.warning}30`, padding: '8px 28px', fontSize: 11, color: DS.warning }}>
-          <span style={{ letterSpacing: '0.1em', fontWeight: 700, marginRight: 8 }}>SHARE LINK</span>
-          <span className="pds-num">{shareLink}</span>
-        </div>
-      )}
       {/* SPEC-IX error surface — institutional candor: what failed + the
           recovery path, recoverable in place, dismissible. */}
       {actionError && (
